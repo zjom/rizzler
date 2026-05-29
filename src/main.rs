@@ -29,6 +29,7 @@ pub struct State<T: Write> {
     quit: bool,
     w: T,
     size: (u16, u16),
+    cursor_pos: (u16, u16),
 }
 
 impl<T: Write> State<T> {
@@ -169,6 +170,7 @@ fn main() -> io::Result<()> {
         command_buf: String::new(),
         w: stdout,
         size: terminal::size()?,
+        cursor_pos: cursor::position()?,
     };
 
     loop {

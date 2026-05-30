@@ -23,7 +23,7 @@ impl KeymapRegistry {
             prev_mode: None,
         }
     }
-    pub fn resolve(&mut self, mode: EditingMode, key: KeyEvent) -> Option<Action> {
+    pub fn resolve(&mut self, mode: EditingMode, key: KeyEvent) -> Option<Vec<Rc<Action>>> {
         // Continue an in-progress sequence only if the mode is unchanged;
         // otherwise restart from this mode's root keymap. `take()` clears
         // any stale sequence either way.
@@ -44,16 +44,17 @@ impl KeymapRegistry {
             Some(WalkOutcome::Miss) | None => None,
         };
 
-        user_action.or_else(|| {
+        // TODO: update the rest of the data structures to work with a seq of actions
+        user_action.map(|a| vec![a]).or_else(|| {
             self.defaults.get(&mode).and_then(|d| match walk(d, key) {
-                WalkOutcome::Action(a) => Some(a),
+                WalkOutcome::Action(a) => Some(vec![a]),
                 _ => None,
             })
         })
     }
 
     /// Bind a key sequence in `mode` to `action`.
-    pub fn set(&mut self, mode: EditingMode, keys: &[KeyEvent], action: Action) {
+    pub fn set(&mut self, mode: EditingMode, keys: &[KeyEvent], action: Rc<Action>) {
         self.cur = None; // editing invalidates any partial sequence
         let root = self
             .children
@@ -64,7 +65,7 @@ impl KeymapRegistry {
 
     /// Remove the binding at `keys` in `mode`, returning the removed action if
     /// it was a leaf. Drops the mode entirely if its root becomes empty.
-    pub fn remove(&mut self, mode: EditingMode, keys: &[KeyEvent]) -> Option<Action> {
+    pub fn remove(&mut self, mode: EditingMode, keys: &[KeyEvent]) -> Option<Rc<Action>> {
         self.cur = None;
         let root = self.children.get_mut(&mode)?;
         let removed = Trie::remove_path(root, keys);

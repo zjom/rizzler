@@ -1,7 +1,8 @@
 use ropey::{Rope, RopeSlice, iter::Lines};
 use std::{
     io::{self},
-    path::PathBuf,
+    path::Path,
+    rc::Rc,
     str::FromStr,
 };
 
@@ -12,7 +13,7 @@ pub struct Buffer {
     pub(crate) buf: Rope,
     pub(crate) cursor_pos: Position<u16>,
     pub(crate) file_pos: Position<usize>,
-    pub(crate) fs_path: Option<PathBuf>,
+    pub(crate) fs_path: Option<Rc<Path>>,
 }
 
 impl Buffer {
@@ -32,8 +33,7 @@ impl Buffer {
     /// Creates a new buffer with `fs_path` set to `path`.
     /// Attempts to read from path, if fails, creates empty buffer
     /// Never fails.
-    pub fn with_path(path: impl Into<PathBuf>) -> Self {
-        let path = path.into();
+    pub fn with_path(path: Rc<Path>) -> Self {
         let mut buf = std::fs::File::open(&path)
             .and_then(Buffer::from_reader)
             .unwrap_or_default();
@@ -49,10 +49,7 @@ impl Buffer {
     /// 2. [Self::fs_path]
     ///
     /// Noop if both are None (returns Ok)
-    pub fn write<P>(&mut self, path: Option<P>) -> io::Result<()>
-    where
-        P: Into<PathBuf>,
-    {
+    pub fn write(&mut self, path: Option<Rc<Path>>) -> io::Result<()> {
         let resolved = path.map(Into::into).or_else(|| self.fs_path.take());
 
         if let Some(path) = resolved {

@@ -11,7 +11,7 @@ pub enum Trie {
         /// an action from the captured char. Terminal — does not descend.
         on_char: Option<fn(char) -> Action>,
     },
-    Leaf(Action),
+    Leaf(Rc<Action>),
 }
 impl Trie {
     pub fn empty() -> Trie {
@@ -24,7 +24,7 @@ impl Trie {
     /// Bind `keys` to `action` under this node, creating intermediate nodes
     /// as needed. A conflicting binding on the same path is overwritten
     /// (last write wins).
-    pub fn insert_path(node: &mut Rc<Trie>, keys: &[KeyEvent], action: Action) {
+    pub fn insert_path(node: &mut Rc<Trie>, keys: &[KeyEvent], action: Rc<Action>) {
         match keys {
             [] => {
                 // End of the path: this slot becomes the action.
@@ -49,7 +49,7 @@ impl Trie {
     /// Remove the binding at `keys`. Returns the action if the path pointed at
     /// a leaf (if it pointed at an intermediate node, the whole subtree is
     /// removed and `None` is returned). Empty intermediate nodes are pruned.
-    pub fn remove_path(node: &mut Rc<Trie>, keys: &[KeyEvent]) -> Option<Action> {
+    pub fn remove_path(node: &mut Rc<Trie>, keys: &[KeyEvent]) -> Option<Rc<Action>> {
         match keys {
             [] => None, // can't remove the root through this API
             [last] => {
@@ -82,7 +82,7 @@ impl Trie {
 }
 
 pub enum WalkOutcome {
-    Action(Action),
+    Action(Rc<Action>),
     Descend(Rc<Trie>),
     Miss,
 }
@@ -101,7 +101,7 @@ pub fn walk(trie: &Trie, key: KeyEvent) -> WalkOutcome {
                     Trie::Node { .. } => WalkOutcome::Descend(next.clone()),
                 }
             } else if let (Some(f), KeyCode::Char(c)) = (on_char, key.code) {
-                WalkOutcome::Action(f(c))
+                WalkOutcome::Action(f(c).into())
             } else {
                 WalkOutcome::Miss
             }

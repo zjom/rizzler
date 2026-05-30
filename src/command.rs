@@ -1,3 +1,5 @@
+use std::{path::PathBuf, str::FromStr};
+
 use crate::action::Action;
 
 /// Maps a typed `:command` string to an [`Action`]. Implement this trait to
@@ -24,11 +26,11 @@ impl CommandRegistry for DefaultCommands {
                 if args.len() != 2 {
                     return Action::Noop;
                 }
-                Action::BufEdit(args[1].into())
+                Action::BufEdit(PathBuf::from_str(args[1]).unwrap().into())
             }
             "write" | "w" => {
                 if args.len() == 2 {
-                    return Action::BufWrite(Some(args[1].into()));
+                    return Action::BufWrite(Some(PathBuf::from_str(args[1]).unwrap().into()));
                 }
                 Action::BufWrite(None)
             }

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 pub fn defaults() -> HashMap<EditingMode, Rc<Trie>> {
-    let leaf = |a: Action| Rc::new(Trie::Leaf(a));
+    let leaf = |a: Action| Rc::new(Trie::Leaf(Rc::new(a)));
     let k = KeyEvent::from_code;
 
     let mv_down = leaf(Action::MoveCursor(0, 1));

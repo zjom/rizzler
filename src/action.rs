@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
@@ -25,22 +26,32 @@ pub enum Action {
 
     BufCreate {
         set_active: bool,
-        path: Option<PathBuf>,
+        path: Option<Rc<Path>>,
     },
-    BufEdit(PathBuf),
+    BufEdit(Rc<Path>),
     BufDelete,
     BufNext,
     BufPrev,
-    BufWrite(Option<PathBuf>),
+    BufWrite(Option<Rc<Path>>),
 
     KeymapSet {
         mode: EditingMode,
         lhs: Vec<KeyEvent>,
-        rhs: Box<Action>,
+        rhs: Rc<Action>,
     },
 
     KeymapRemove {
         mode: EditingMode,
         lhs: Vec<KeyEvent>,
     },
+}
+
+pub enum MoveKind {
+    LineStart,
+    LineEnd,
+    FileStart,
+    FileEnd,
+    WordStart,
+    WordEnd,
+    Char,
 }

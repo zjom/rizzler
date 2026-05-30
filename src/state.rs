@@ -1,6 +1,7 @@
+use std::rc::Rc;
 use std::{
     io::{self, Write},
-    path::PathBuf,
+    path::Path,
 };
 
 use crossterm::{cursor::SetCursorStyle, event::KeyEvent, execute};
@@ -70,50 +71,52 @@ impl<W: Write> State<W> {
 
     pub fn handle_key_event(&mut self, event: KeyEvent) -> io::Result<()> {
         if let Some(action) = self.keymap.resolve(self.mode, event.into()) {
-            self.apply(action)?;
+            self.apply(&action)?;
         }
         self.bufs[self.bufno].clamp_cursor();
         self.render()
     }
 
-    pub fn apply(&mut self, action: Action) -> io::Result<()> {
-        match action {
-            Action::Noop => {}
-            Action::Quit => self.quit = true,
-            Action::SetMode(m) => self.set_mode(m)?,
-            Action::InsertChar(c) => self.bufs[self.bufno].insert_char(c),
-            Action::InsertNewline => self.bufs[self.bufno].insert_char('\n'),
-            Action::DeleteChar => self.bufs[self.bufno].delete_char(),
-            Action::MoveCursor(dx, dy) => self.bufs[self.bufno].move_cursor(dx, dy),
-            Action::CommandPush(c) => self.command_buf.push(c),
-            Action::CommandPop => {
-                self.command_buf.pop();
-            }
-            Action::CommandSubmit => {
-                let next = self.commands.parse(&self.command_buf);
-                self.command_buf.clear();
-                self.set_mode(EditingMode::Normal)?;
-                self.apply(next)?;
-            }
-            Action::CommandCancel => {
-                self.command_buf.clear();
-                self.set_mode(EditingMode::Normal)?;
-            }
-            Action::BufCreate { path, set_active } => {
-                self.create_buf(set_active, path)?;
-            }
-            Action::BufDelete => self.delete_buf(self.bufno),
-            Action::BufNext => self.next_buffer(),
-            Action::BufPrev => self.previous_buffer(),
-            Action::BufEdit(path) => {
-                self.edit_buf(path)?;
-            }
-            Action::BufWrite(path) => self.write_buf(path)?,
-            Action::KeymapSet { mode, lhs, rhs } => {
-                self.keymap.set(mode, &lhs, *rhs);
-            }
-            Action::KeymapRemove { mode, lhs } => {
-                self.keymap.remove(mode, &lhs);
+    pub fn apply(&mut self, actions: &[Rc<Action>]) -> io::Result<()> {
+        for action in actions {
+            match action.as_ref() {
+                Action::Noop => {}
+                Action::Quit => self.quit = true,
+                Action::SetMode(m) => self.set_mode(*m)?,
+                Action::InsertChar(c) => self.bufs[self.bufno].insert_char(*c),
+                Action::InsertNewline => self.bufs[self.bufno].insert_char('\n'),
+                Action::DeleteChar => self.bufs[self.bufno].delete_char(),
+                Action::MoveCursor(dx, dy) => self.bufs[self.bufno].move_cursor(*dx, *dy),
+                Action::CommandPush(c) => self.command_buf.push(*c),
+                Action::CommandPop => {
+                    self.command_buf.pop();
+                }
+                Action::CommandSubmit => {
+                    let next = self.commands.parse(&self.command_buf);
+                    self.command_buf.clear();
+                    self.set_mode(EditingMode::Normal)?;
+                    self.apply(&[Rc::new(next)])?;
+                }
+                Action::CommandCancel => {
+                    self.command_buf.clear();
+                    self.set_mode(EditingMode::Normal)?;
+                }
+                Action::BufCreate { path, set_active } => {
+                    self.create_buf(*set_active, path.clone())?;
+                }
+                Action::BufDelete => self.delete_buf(self.bufno),
+                Action::BufNext => self.next_buffer(),
+                Action::BufPrev => self.previous_buffer(),
+                Action::BufEdit(path) => {
+                    self.edit_buf(path.clone())?;
+                }
+                Action::BufWrite(path) => self.write_buf(path.clone())?,
+                Action::KeymapSet { mode, lhs, rhs } => {
+                    self.keymap.set(*mode, lhs, rhs.clone());
+                }
+                Action::KeymapRemove { mode, lhs } => {
+                    self.keymap.remove(*mode, lhs);
+                }
             }
         }
         Ok(())
@@ -128,14 +131,14 @@ impl<W: Write> State<W> {
         execute!(self.w, style)
     }
 
-    fn create_buf(&mut self, set_active: bool, path: Option<PathBuf>) -> io::Result<usize> {
+    fn create_buf(&mut self, set_active: bool, path: Option<Rc<Path>>) -> io::Result<usize> {
         let buf = match path {
             Some(ref p) => self
                 .bufs
                 .iter()
                 .find(|b| b.fs_path == path)
                 .cloned()
-                .unwrap_or_else(|| Buffer::with_path(p)),
+                .unwrap_or_else(|| Buffer::with_path(p.clone())),
             None => Buffer::new(),
         };
 
@@ -147,7 +150,7 @@ impl<W: Write> State<W> {
         Ok(bufno)
     }
 
-    fn edit_buf(&mut self, path: PathBuf) -> io::Result<usize> {
+    fn edit_buf(&mut self, path: Rc<Path>) -> io::Result<usize> {
         let idx = self
             .bufs
             .iter()
@@ -165,7 +168,7 @@ impl<W: Write> State<W> {
         }
     }
 
-    fn write_buf(&mut self, path: Option<PathBuf>) -> io::Result<()> {
+    fn write_buf(&mut self, path: Option<Rc<Path>>) -> io::Result<()> {
         self.bufs[self.bufno].write(path)
     }
 

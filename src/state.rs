@@ -86,7 +86,7 @@ impl<W: Write> State<W> {
                 Action::InsertChar(c) => self.bufs[self.bufno].insert_char(*c),
                 Action::InsertNewline => self.bufs[self.bufno].insert_char('\n'),
                 Action::DeleteChar => self.bufs[self.bufno].delete_char(),
-                Action::MoveCursor(dx, dy) => self.bufs[self.bufno].move_cursor(*dx, *dy),
+                Action::MoveCursor(m) => self.bufs[self.bufno].move_cursor(*m),
                 Action::CommandPush(c) => self.command_buf.push(*c),
                 Action::CommandPop => {
                     self.command_buf.pop();

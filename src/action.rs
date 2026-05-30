@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::path::Path;
 use std::rc::Rc;
 
@@ -17,7 +18,7 @@ pub enum Action {
     InsertChar(char),
     InsertNewline,
     DeleteChar,
-    MoveCursor(i16, i16),
+    MoveCursor(MoveKind),
 
     CommandPush(char),
     CommandPop,
@@ -46,6 +47,7 @@ pub enum Action {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum MoveKind {
     LineStart,
     LineEnd,
@@ -53,5 +55,7 @@ pub enum MoveKind {
     FileEnd,
     WordStart,
     WordEnd,
-    Char,
+    Relative(i16, i16),     // up, down, left, right of cursor
+    Absolute(usize, usize), // position in file
+    LineNum(usize),
 }

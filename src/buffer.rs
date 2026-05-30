@@ -6,7 +6,7 @@ use std::{
     str::FromStr,
 };
 
-use crate::position::Position;
+use crate::{action::MoveKind, position::Position};
 
 #[derive(Debug, Clone, Default)]
 pub struct Buffer {
@@ -50,7 +50,7 @@ impl Buffer {
     ///
     /// Noop if both are None (returns Ok)
     pub fn write(&mut self, path: Option<Rc<Path>>) -> io::Result<()> {
-        let resolved = path.map(Into::into).or_else(|| self.fs_path.take());
+        let resolved = path.or_else(|| self.fs_path.take());
 
         if let Some(path) = resolved {
             let f = std::fs::OpenOptions::new()
@@ -112,9 +112,15 @@ impl Buffer {
         _ = self.buf.try_remove(cidx - 1..cidx);
     }
 
-    pub fn move_cursor(&mut self, dx: i16, dy: i16) {
-        self.cursor_pos.col = self.cursor_pos.col.saturating_add_signed(dx);
-        self.cursor_pos.row = self.cursor_pos.row.saturating_add_signed(dy);
+    pub fn move_cursor(&mut self, m: MoveKind) {
+        use MoveKind as MK;
+        match m {
+            MK::Relative(dx, dy) => {
+                self.cursor_pos.col = self.cursor_pos.col.saturating_add_signed(dx);
+                self.cursor_pos.row = self.cursor_pos.row.saturating_add_signed(dy);
+            }
+            _ => todo!(),
+        }
     }
 
     pub fn clamp_cursor(&mut self) {

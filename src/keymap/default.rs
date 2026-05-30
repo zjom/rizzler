@@ -1,3 +1,4 @@
+use crate::action::MoveKind;
 use crate::keymap::{KeyCode, KeyEvent, trie::Trie};
 use crate::{action::Action, mode::EditingMode};
 use std::collections::HashMap;
@@ -7,10 +8,10 @@ pub fn defaults() -> HashMap<EditingMode, Rc<Trie>> {
     let leaf = |a: Action| Rc::new(Trie::Leaf(Rc::new(a)));
     let k = KeyEvent::from_code;
 
-    let mv_down = leaf(Action::MoveCursor(0, 1));
-    let mv_up = leaf(Action::MoveCursor(0, -1));
-    let mv_left = leaf(Action::MoveCursor(-1, 0));
-    let mv_right = leaf(Action::MoveCursor(1, 0));
+    let mv_down = leaf(Action::MoveCursor(MoveKind::Relative(0, 1)));
+    let mv_up = leaf(Action::MoveCursor(MoveKind::Relative(0, -1)));
+    let mv_left = leaf(Action::MoveCursor(MoveKind::Relative(-1, 0)));
+    let mv_right = leaf(Action::MoveCursor(MoveKind::Relative(1, 0)));
 
     HashMap::from([
         (

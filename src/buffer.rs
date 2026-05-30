@@ -14,6 +14,10 @@ pub struct Buffer {
     pub(crate) cursor_pos: Position<u16>,
     pub(crate) file_pos: Position<usize>,
     pub(crate) fs_path: Option<Rc<Path>>,
+    /// Visible viewport size in cells. When `viewport.row > 0`, cursor
+    /// movement scrolls `file_pos` to keep the cursor in view. Default zero
+    /// means "no viewport" — scrolling is a no-op (useful in tests).
+    pub(crate) viewport: Position<u16>,
 }
 
 impl Buffer {
@@ -24,9 +28,7 @@ impl Buffer {
     pub fn from_reader(r: impl io::Read) -> io::Result<Self> {
         Ok(Self {
             buf: Rope::from_reader(r)?,
-            cursor_pos: Position::default(),
-            file_pos: Position::default(),
-            fs_path: None,
+            ..Self::default()
         })
     }
 
@@ -116,8 +118,29 @@ impl Buffer {
         use MoveKind as MK;
         match m {
             MK::Relative(Position { col: dx, row: dy }) => {
-                self.cursor_pos.col = self.cursor_pos.col.saturating_add_signed(dx);
-                self.cursor_pos.row = self.cursor_pos.row.saturating_add_signed(dy);
+                // Compute the absolute target. We can't use saturating_add_signed
+                // on cursor_pos directly because clamping to u16::0 would erase
+                // any "wanted to scroll up by N" overshoot; clamp_cursor then
+                // could never observe the up-scroll intent.
+                let abs_row = (self.cursor_pos.row as isize)
+                    .saturating_add(self.file_pos.row as isize)
+                    .saturating_add(dy as isize)
+                    .max(0) as usize;
+                let abs_col = (self.cursor_pos.col as isize)
+                    .saturating_add(self.file_pos.col as isize)
+                    .saturating_add(dx as isize)
+                    .max(0) as usize;
+
+                // Up/left scrolling lives here; down/right scrolling is left
+                // to clamp_cursor, which also knows the viewport bounds.
+                if abs_row < self.file_pos.row {
+                    self.file_pos.row = abs_row;
+                }
+                self.cursor_pos.row = (abs_row - self.file_pos.row) as u16;
+                if abs_col < self.file_pos.col {
+                    self.file_pos.col = abs_col;
+                }
+                self.cursor_pos.col = (abs_col - self.file_pos.col) as u16;
             }
             MK::LineStart => {
                 self.cursor_pos.col = 0;
@@ -182,6 +205,18 @@ impl Buffer {
     pub fn clamp_cursor(&mut self) {
         let last_line = self.buf.len_lines().saturating_sub(1);
         let abs_row = (self.cursor_pos.row as usize + self.file_pos.row).min(last_line);
+
+        // Scroll vertically so the cursor stays inside the viewport. Skipped
+        // when viewport.row is 0 (e.g. tests without a known terminal size)
+        // so pre-scroll behaviour is preserved.
+        if self.viewport.row > 0 {
+            let vh = self.viewport.row as usize;
+            if abs_row < self.file_pos.row {
+                self.file_pos.row = abs_row;
+            } else if abs_row >= self.file_pos.row + vh {
+                self.file_pos.row = abs_row + 1 - vh;
+            }
+        }
         self.cursor_pos.row = abs_row.saturating_sub(self.file_pos.row) as u16;
 
         let line = self.buf.line(abs_row);
@@ -212,9 +247,7 @@ impl FromStr for Buffer {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self {
             buf: Rope::from_str(s),
-            cursor_pos: Position::default(),
-            file_pos: Position::default(),
-            fs_path: None,
+            ..Self::default()
         })
     }
 }
@@ -492,5 +525,69 @@ mod tests {
         s.clamp_cursor();
         assert_eq!(s.cursor_pos.row, 0);
         assert_eq!(s.cursor_pos.col, 3); // past 'c', not on '\n'
+    }
+
+    // ---- vertical scrolling -------------------------------------------
+
+    #[test]
+    fn move_down_within_viewport_does_not_scroll() {
+        let mut s = mk("a\nb\nc\nd\ne");
+        s.viewport.row = 3;
+        s.move_cursor(MoveKind::Relative(Position::new(0, 2)));
+        assert_eq!(s.cursor_pos.row, 2);
+        assert_eq!(s.file_pos.row, 0);
+    }
+
+    #[test]
+    fn move_down_past_viewport_scrolls_file_pos() {
+        let mut s = mk("a\nb\nc\nd\ne");
+        s.viewport.row = 3;
+        s.move_cursor(MoveKind::Relative(Position::new(0, 4)));
+        // Absolute row 4 should sit at the last visible viewport row.
+        assert_eq!(s.cursor_pos.row, 2);
+        assert_eq!(s.file_pos.row, 2);
+        assert_eq!(cur_row(&s), 4);
+    }
+
+    #[test]
+    fn move_up_past_viewport_scrolls_file_pos() {
+        let mut s = mk("a\nb\nc\nd\ne");
+        s.viewport.row = 2;
+        s.file_pos.row = 3;
+        s.cursor_pos = Position::<u16>::new(0, 0); // cursor at abs row 3
+        s.move_cursor(MoveKind::Relative(Position::new(0, -1))); // → abs row 2
+        assert_eq!(s.file_pos.row, 2);
+        assert_eq!(s.cursor_pos.row, 0);
+    }
+
+    #[test]
+    fn file_end_scrolls_to_bottom() {
+        let mut s = mk("a\nb\nc\nd\ne"); // 5 lines, last_line = 4
+        s.viewport.row = 2;
+        s.move_cursor(MoveKind::FileEnd);
+        // Cursor on abs row 4, viewport size 2 → top row is 3.
+        assert_eq!(s.file_pos.row, 3);
+        assert_eq!(s.cursor_pos.row, 1);
+    }
+
+    #[test]
+    fn file_start_resets_scroll() {
+        let mut s = mk("a\nb\nc\nd\ne");
+        s.viewport.row = 2;
+        s.file_pos.row = 3;
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.move_cursor(MoveKind::FileStart);
+        assert_eq!(s.file_pos.row, 0);
+        assert_eq!(s.cursor_pos.row, 0);
+    }
+
+    #[test]
+    fn relative_up_clamps_at_top_when_already_at_origin() {
+        // Cursor at top of file, no scroll possible — stays put.
+        let mut s = mk("a\nb\nc");
+        s.viewport.row = 2;
+        s.move_cursor(MoveKind::Relative(Position::new(0, -5)));
+        assert_eq!(s.file_pos.row, 0);
+        assert_eq!(s.cursor_pos.row, 0);
     }
 }

@@ -10,9 +10,14 @@ use crate::{
     command::{CommandRegistry, DefaultCommands},
     keymap::KeymapRegistry,
     mode::EditingMode,
+    position::Position,
     render::{CursorStyle, Renderer, StateSnapshot},
     render_ratatui::RatatuiRenderer,
 };
+
+/// The status line takes one row at the bottom. Subtract it from the
+/// terminal height to get the editor view's visible row count.
+const STATUS_LINE_ROWS: u16 = 1;
 
 /// Bundle of plugin points injected into [`State`]. Swap any field to
 /// customise the editor without touching `State`'s internals.
@@ -48,7 +53,7 @@ impl State {
     }
 
     pub fn with_config(config: Config) -> io::Result<Self> {
-        Ok(Self {
+        let mut state = Self {
             bufs: vec![Buffer::new()],
             bufno: 0,
             mode: EditingMode::Normal,
@@ -58,7 +63,20 @@ impl State {
             commands: config.commands,
             renderer: config.renderer,
             keyevent: None,
-        })
+        };
+        state.refresh_viewport();
+        Ok(state)
+    }
+
+    /// Update the active buffer's viewport size from the current terminal
+    /// dimensions. Called before clamp_cursor so scrolling reacts to resizes
+    /// between key events. Silently ignores terminal::size errors so tests
+    /// without a real TTY still work.
+    fn refresh_viewport(&mut self) {
+        if let Ok((cols, rows)) = crossterm::terminal::size() {
+            self.bufs[self.bufno].viewport =
+                Position::new(cols, rows.saturating_sub(STATUS_LINE_ROWS));
+        }
     }
 
     pub fn quit_requested(&self) -> bool {
@@ -70,6 +88,10 @@ impl State {
         if let Some(action) = self.keymap.resolve(self.mode, event.into()) {
             self.apply(&action)?;
         }
+        // Refresh after apply: BufCreate/BufEdit may have switched the
+        // active buffer, and we want clamp_cursor to scroll using the
+        // viewport of the buffer that's about to be drawn.
+        self.refresh_viewport();
         self.bufs[self.bufno].clamp_cursor();
         self.render()
     }

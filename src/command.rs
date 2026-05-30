@@ -26,6 +26,12 @@ impl CommandRegistry for DefaultCommands {
                 }
                 Action::BufEdit(args[1].into())
             }
+            "write" | "w" => {
+                if args.len() == 2 {
+                    return Action::BufWrite(Some(args[1].into()));
+                }
+                Action::BufWrite(None)
+            }
             _ => Action::Noop,
         }
     }

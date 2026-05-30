@@ -31,7 +31,7 @@ pub enum Action {
     BufDelete,
     BufNext,
     BufPrev,
-    BufWrite,
+    BufWrite(Option<PathBuf>),
 
     KeymapSet {
         mode: EditingMode,

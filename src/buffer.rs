@@ -1,5 +1,9 @@
 use ropey::{Rope, RopeSlice, iter::Lines};
-use std::{io, path::PathBuf, str::FromStr};
+use std::{
+    io::{self},
+    path::PathBuf,
+    str::FromStr,
+};
 
 use crate::position::Position;
 
@@ -35,6 +39,34 @@ impl Buffer {
             .unwrap_or_default();
         buf.fs_path = Some(path);
         buf
+    }
+
+    /// Writes the contents of the buffer to disk.
+    ///
+    /// Sets [Self::fs_path] to whichever path was sucessful.
+    /// Priority:
+    /// 1. `path` arg
+    /// 2. [Self::fs_path]
+    ///
+    /// Noop if both are None (returns Ok)
+    pub fn write<P>(&mut self, path: Option<P>) -> io::Result<()>
+    where
+        P: Into<PathBuf>,
+    {
+        let resolved = path.map(Into::into).or_else(|| self.fs_path.take());
+
+        if let Some(path) = resolved {
+            let f = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&path)?;
+
+            self.buf.write_to(f)?;
+            self.fs_path = Some(path)
+        }
+
+        Ok(())
     }
     pub fn cursor_pos(&self) -> Position<u16> {
         self.cursor_pos

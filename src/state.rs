@@ -108,7 +108,7 @@ impl<W: Write> State<W> {
             Action::BufEdit(path) => {
                 self.edit_buf(path)?;
             }
-            Action::BufWrite => todo!(),
+            Action::BufWrite(path) => self.write_buf(path)?,
             Action::KeymapSet { mode, lhs, rhs } => {
                 self.keymap.set(mode, &lhs, *rhs);
             }
@@ -163,6 +163,10 @@ impl<W: Write> State<W> {
                 Ok(self.bufno)
             }
         }
+    }
+
+    fn write_buf(&mut self, path: Option<PathBuf>) -> io::Result<()> {
+        self.bufs[self.bufno].write(path)
     }
 
     fn delete_buf(&mut self, bufno: usize) {

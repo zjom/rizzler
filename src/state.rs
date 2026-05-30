@@ -134,8 +134,8 @@ impl<W: Write> State<W> {
                 .bufs
                 .iter()
                 .find(|b| b.fs_path == path)
-                .map(|b| Ok(b.clone()))
-                .unwrap_or_else(|| Buffer::from_file(p))?,
+                .cloned()
+                .unwrap_or_else(|| Buffer::with_path(p)),
             None => Buffer::new(),
         };
 
@@ -158,7 +158,7 @@ impl<W: Write> State<W> {
                 Ok(self.bufno)
             }
             None => {
-                self.bufs.push(Buffer::from_file(path)?);
+                self.bufs.push(Buffer::with_path(path));
                 self.bufno = self.bufs.len() - 1;
                 Ok(self.bufno)
             }

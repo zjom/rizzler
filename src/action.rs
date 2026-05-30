@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;

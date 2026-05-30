@@ -1,9 +1,5 @@
 use ropey::{Rope, RopeSlice, iter::Lines};
-use std::{
-    io,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::{io, path::PathBuf, str::FromStr};
 
 use crate::position::Position;
 
@@ -29,12 +25,16 @@ impl Buffer {
         })
     }
 
-    pub fn from_file(path: impl Into<PathBuf>) -> io::Result<Self> {
+    /// Creates a new buffer with `fs_path` set to `path`.
+    /// Attempts to read from path, if fails, creates empty buffer
+    /// Never fails.
+    pub fn with_path(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
-        let f = std::fs::File::open(&path)?;
-        let mut buf = Buffer::from_reader(f)?;
+        let mut buf = std::fs::File::open(&path)
+            .and_then(Buffer::from_reader)
+            .unwrap_or_default();
         buf.fs_path = Some(path);
-        Ok(buf)
+        buf
     }
     pub fn cursor_pos(&self) -> Position<u16> {
         self.cursor_pos

@@ -9,6 +9,14 @@ pub struct KeyEvent {
     pub code: KeyCode,
     pub modifiers: KeyModifiers,
 }
+impl KeyEvent {
+    pub const fn from_code(code: KeyCode) -> Self {
+        Self {
+            code,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+}
 impl From<crossterm::event::KeyEvent> for KeyEvent {
     fn from(value: crossterm::event::KeyEvent) -> Self {
         Self {
@@ -20,18 +28,18 @@ impl From<crossterm::event::KeyEvent> for KeyEvent {
 
 pub struct KeymapRegistry {
     children: HashMap<EditingMode, Rc<Trie>>,
+    defaults: HashMap<EditingMode, Rc<Trie>>,
     cur: Option<Rc<Trie>>,
     prev_mode: Option<EditingMode>,
-    default_km: DefaultKeymap,
 }
 
 impl KeymapRegistry {
     pub fn new() -> Self {
         Self {
             children: HashMap::new(),
+            defaults: build_defaults(),
             cur: None,
             prev_mode: None,
-            default_km: DefaultKeymap,
         }
     }
     pub fn resolve(&mut self, mode: EditingMode, key: KeyEvent) -> Option<Action> {
@@ -43,26 +51,24 @@ impl KeymapRegistry {
 
         let start = match self.cur.take() {
             Some(cur) if continuing => Some(cur),
-            _ => self.children.get(&mode).map(Rc::clone),
+            _ => self.children.get(&mode).cloned(),
         };
 
-        let user_action = match start.as_deref() {
-            // A mode root that is itself a leaf maps every key to one action.
-            Some(Trie::Leaf(action)) => Some(action.clone()),
-            Some(Trie::Node { .. }) => match start.as_ref().unwrap().child(key) {
-                Some(next) => match next.as_ref() {
-                    Trie::Leaf(action) => Some(action.clone()),
-                    Trie::Node { .. } => {
-                        self.cur = Some(next);
-                        return None; // mid-sequence; defaults must not preempt
-                    }
-                },
-                None => None,
-            },
-            None => None,
+        let user_action = match start.as_deref().map(|t| walk(t, key)) {
+            Some(WalkOutcome::Action(a)) => Some(a),
+            Some(WalkOutcome::Descend(n)) => {
+                self.cur = Some(n);
+                return None; // mid-sequence; defaults must not preempt
+            }
+            Some(WalkOutcome::Miss) | None => None,
         };
 
-        user_action.or_else(|| self.default_km.resolve(mode, key))
+        user_action.or_else(|| {
+            self.defaults.get(&mode).and_then(|d| match walk(d, key) {
+                WalkOutcome::Action(a) => Some(a),
+                _ => None,
+            })
+        })
     }
 
     /// Bind a key sequence in `mode` to `action`.
@@ -81,7 +87,7 @@ impl KeymapRegistry {
         self.cur = None;
         let root = self.children.get_mut(&mode)?;
         let removed = Trie::remove_path(root, keys);
-        if matches!(root.as_ref(), Trie::Node { children } if children.is_empty()) {
+        if matches!(root.as_ref(), Trie::Node { children, on_char: None } if children.is_empty()) {
             self.children.remove(&mode);
         }
         removed
@@ -98,22 +104,17 @@ impl Default for KeymapRegistry {
 pub enum Trie {
     Node {
         children: HashMap<KeyEvent, Rc<Trie>>,
+        /// Catches any `KeyCode::Char(_)` not bound in `children`, producing
+        /// an action from the captured char. Terminal — does not descend.
+        on_char: Option<fn(char) -> Action>,
     },
     Leaf(Action),
 }
 impl Trie {
-    /// Descend one level by `key`. Returns the child keymap, or `None`
-    /// if this is a leaf or the key isn't bound.
-    fn child(&self, key: KeyEvent) -> Option<Rc<Trie>> {
-        match self {
-            Trie::Leaf(_) => None,
-            Trie::Node { children } => children.get(&key).cloned(),
-        }
-    }
-
     fn empty() -> Trie {
         Trie::Node {
             children: HashMap::new(),
+            on_char: None,
         }
     }
 
@@ -132,7 +133,7 @@ impl Trie {
                 if !matches!(km, Trie::Node { .. }) {
                     *km = Trie::empty();
                 }
-                if let Trie::Node { children } = km {
+                if let Trie::Node { children, .. } = km {
                     let child = children
                         .entry(*first)
                         .or_insert_with(|| Rc::new(Trie::empty()));
@@ -149,7 +150,7 @@ impl Trie {
         match keys {
             [] => None, // can't remove the root through this API
             [last] => {
-                let Trie::Node { children } = Rc::make_mut(node) else {
+                let Trie::Node { children, .. } = Rc::make_mut(node) else {
                     return None;
                 };
                 match children.remove(last)?.as_ref() {
@@ -158,14 +159,16 @@ impl Trie {
                 }
             }
             [first, rest @ ..] => {
-                let Trie::Node { children } = Rc::make_mut(node) else {
+                let Trie::Node { children, .. } = Rc::make_mut(node) else {
                     return None;
                 };
                 let child = children.get_mut(first)?;
                 let removed = Trie::remove_path(child, rest);
                 // Prune the child if removing left it as an empty node.
-                let prune =
-                    matches!(child.as_ref(), Trie::Node { children } if children.is_empty());
+                let prune = matches!(
+                    child.as_ref(),
+                    Trie::Node { children, on_char: None } if children.is_empty()
+                );
                 if prune {
                     children.remove(first);
                 }
@@ -175,34 +178,89 @@ impl Trie {
     }
 }
 
-pub struct DefaultKeymap;
-impl DefaultKeymap {
-    fn resolve(&mut self, mode: EditingMode, key: KeyEvent) -> Option<Action> {
-        match mode {
-            EditingMode::Command => match key.code {
-                KeyCode::Enter => Some(Action::CommandSubmit),
-                KeyCode::Char(c) => Some(Action::CommandPush(c)),
-                KeyCode::Backspace => Some(Action::CommandPop),
-                KeyCode::Esc => Some(Action::CommandCancel),
-                _ => None,
-            },
-            EditingMode::Insert => match key.code {
-                KeyCode::Enter => Some(Action::InsertNewline),
-                KeyCode::Char(c) => Some(Action::InsertChar(c)),
-                KeyCode::Backspace => Some(Action::DeleteChar),
-                KeyCode::Esc => Some(Action::SetMode(EditingMode::Normal)),
-                _ => None,
-            },
-            EditingMode::Normal => match key.code {
-                KeyCode::Char(':') => Some(Action::SetMode(EditingMode::Command)),
-                KeyCode::Char('i') => Some(Action::SetMode(EditingMode::Insert)),
-                KeyCode::Char('j') | KeyCode::Down => Some(Action::MoveCursor(0, 1)),
-                KeyCode::Char('k') | KeyCode::Up => Some(Action::MoveCursor(0, -1)),
-                KeyCode::Char('h') | KeyCode::Left => Some(Action::MoveCursor(-1, 0)),
-                KeyCode::Char('l') | KeyCode::Right => Some(Action::MoveCursor(1, 0)),
-                _ => None,
-            },
-            EditingMode::Visual => None,
+enum WalkOutcome {
+    Action(Action),
+    Descend(Rc<Trie>),
+    Miss,
+}
+
+/// Resolve one key against `trie`. Returns either the matched action, the
+/// next subtree to wait on, or a miss. A `Trie::Leaf` root maps every key to
+/// the same action; otherwise we look up `key` directly, then fall back to
+/// the node's `on_char` wildcard if `key` is a printable char.
+fn walk(trie: &Trie, key: KeyEvent) -> WalkOutcome {
+    match trie {
+        Trie::Leaf(a) => WalkOutcome::Action(a.clone()),
+        Trie::Node { children, on_char } => {
+            if let Some(next) = children.get(&key) {
+                match next.as_ref() {
+                    Trie::Leaf(a) => WalkOutcome::Action(a.clone()),
+                    Trie::Node { .. } => WalkOutcome::Descend(next.clone()),
+                }
+            } else if let (Some(f), KeyCode::Char(c)) = (on_char, key.code) {
+                WalkOutcome::Action(f(c))
+            } else {
+                WalkOutcome::Miss
+            }
         }
     }
+}
+
+fn build_defaults() -> HashMap<EditingMode, Rc<Trie>> {
+    let leaf = |a: Action| Rc::new(Trie::Leaf(a));
+    let k = KeyEvent::from_code;
+
+    let mv_down = leaf(Action::MoveCursor(0, 1));
+    let mv_up = leaf(Action::MoveCursor(0, -1));
+    let mv_left = leaf(Action::MoveCursor(-1, 0));
+    let mv_right = leaf(Action::MoveCursor(1, 0));
+
+    HashMap::from([
+        (
+            EditingMode::Command,
+            Rc::new(Trie::Node {
+                children: HashMap::from([
+                    (k(KeyCode::Enter), leaf(Action::CommandSubmit)),
+                    (k(KeyCode::Backspace), leaf(Action::CommandPop)),
+                    (k(KeyCode::Esc), leaf(Action::CommandCancel)),
+                ]),
+                on_char: Some(Action::CommandPush),
+            }),
+        ),
+        (
+            EditingMode::Insert,
+            Rc::new(Trie::Node {
+                children: HashMap::from([
+                    (k(KeyCode::Enter), leaf(Action::InsertNewline)),
+                    (k(KeyCode::Backspace), leaf(Action::DeleteChar)),
+                    (k(KeyCode::Esc), leaf(Action::SetMode(EditingMode::Normal))),
+                ]),
+                on_char: Some(Action::InsertChar),
+            }),
+        ),
+        (
+            EditingMode::Normal,
+            Rc::new(Trie::Node {
+                children: HashMap::from([
+                    (
+                        k(KeyCode::Char(':')),
+                        leaf(Action::SetMode(EditingMode::Command)),
+                    ),
+                    (
+                        k(KeyCode::Char('i')),
+                        leaf(Action::SetMode(EditingMode::Insert)),
+                    ),
+                    (k(KeyCode::Char('j')), mv_down.clone()),
+                    (k(KeyCode::Down), mv_down),
+                    (k(KeyCode::Char('k')), mv_up.clone()),
+                    (k(KeyCode::Up), mv_up),
+                    (k(KeyCode::Char('h')), mv_left.clone()),
+                    (k(KeyCode::Left), mv_left),
+                    (k(KeyCode::Char('l')), mv_right.clone()),
+                    (k(KeyCode::Right), mv_right),
+                ]),
+                on_char: None,
+            }),
+        ),
+    ])
 }

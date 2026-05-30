@@ -229,7 +229,6 @@ impl<T: Write> State<T> {
 }
 
 fn main() -> io::Result<()> {
-    let stdout = io::stdout();
     execute!(
         io::stdout(),
         EnterAlternateScreen,
@@ -246,7 +245,7 @@ fn main() -> io::Result<()> {
         mode: EditingMode::Normal,
         quit: false,
         command_buf: String::new(),
-        w: stdout,
+        w: io::stdout(),
         size: Position::<u16>::new(cols, rows),
         cursor_pos: Position::<u16>::new(0, 0),
         file_pos: Position::<usize>::new(0, 0),

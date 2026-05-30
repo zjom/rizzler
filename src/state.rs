@@ -1,4 +1,7 @@
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    path::PathBuf,
+};
 
 use crossterm::{cursor::SetCursorStyle, event::KeyEvent, execute};
 
@@ -96,10 +99,16 @@ impl<W: Write> State<W> {
                 self.command_buf.clear();
                 self.set_mode(EditingMode::Normal)?;
             }
-            Action::BufCreate => self.create_buf(),
+            Action::BufCreate { path, set_active } => {
+                self.create_buf(set_active, path)?;
+            }
             Action::BufDelete => self.delete_buf(self.bufno),
             Action::BufNext => self.next_buffer(),
             Action::BufPrev => self.previous_buffer(),
+            Action::BufEdit(path) => {
+                self.edit_buf(path)?;
+            }
+            Action::BufWrite => todo!(),
             Action::KeymapSet { mode, lhs, rhs } => {
                 self.keymap.set(mode, &lhs, *rhs);
             }
@@ -119,9 +128,41 @@ impl<W: Write> State<W> {
         execute!(self.w, style)
     }
 
-    fn create_buf(&mut self) {
-        self.bufs.push(Buffer::new());
-        self.bufno = self.bufs.len() - 1;
+    fn create_buf(&mut self, set_active: bool, path: Option<PathBuf>) -> io::Result<usize> {
+        let buf = match path {
+            Some(ref p) => self
+                .bufs
+                .iter()
+                .find(|b| b.fs_path == path)
+                .map(|b| Ok(b.clone()))
+                .unwrap_or_else(|| Buffer::from_file(p))?,
+            None => Buffer::new(),
+        };
+
+        self.bufs.push(buf);
+        let bufno = self.bufs.len() - 1;
+        if set_active {
+            self.bufno = bufno;
+        }
+        Ok(bufno)
+    }
+
+    fn edit_buf(&mut self, path: PathBuf) -> io::Result<usize> {
+        let idx = self
+            .bufs
+            .iter()
+            .position(|b| b.fs_path.as_ref() == Some(&path));
+        match idx {
+            Some(idx) => {
+                self.bufno = idx - 1;
+                Ok(self.bufno)
+            }
+            None => {
+                self.bufs.push(Buffer::from_file(path)?);
+                self.bufno = self.bufs.len() - 1;
+                Ok(self.bufno)
+            }
+        }
     }
 
     fn delete_buf(&mut self, bufno: usize) {

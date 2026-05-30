@@ -1,3 +1,6 @@
+use std::path::PathBuf;
+use std::str::FromStr;
+
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
 
@@ -21,10 +24,15 @@ pub enum Action {
     CommandSubmit,
     CommandCancel,
 
-    BufCreate,
+    BufCreate {
+        set_active: bool,
+        path: Option<PathBuf>,
+    },
+    BufEdit(PathBuf),
     BufDelete,
     BufNext,
     BufPrev,
+    BufWrite,
 
     KeymapSet {
         mode: EditingMode,

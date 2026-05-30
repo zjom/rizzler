@@ -1,5 +1,9 @@
 use ropey::{Rope, RopeSlice, iter::Lines};
-use std::{io, str::FromStr};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use crate::position::Position;
 
@@ -8,6 +12,7 @@ pub struct Buffer {
     pub(crate) buf: Rope,
     pub(crate) cursor_pos: Position<u16>,
     pub(crate) file_pos: Position<usize>,
+    pub(crate) fs_path: Option<PathBuf>,
 }
 
 impl Buffer {
@@ -20,9 +25,20 @@ impl Buffer {
             buf: Rope::from_reader(r)?,
             cursor_pos: Position::default(),
             file_pos: Position::default(),
+            fs_path: None,
         })
     }
 
+    pub fn from_file(path: impl Into<PathBuf>) -> io::Result<Self> {
+        let path = path.into();
+        let f = std::fs::File::open(&path)?;
+        let mut buf = Buffer::from_reader(f)?;
+        buf.fs_path = Some(path);
+        Ok(buf)
+    }
+    pub fn fs_path(&self) -> Option<&Path> {
+        self.fs_path.as_ref().map(|p| p.as_ref())
+    }
     pub fn cursor_pos(&self) -> Position<u16> {
         self.cursor_pos
     }
@@ -110,6 +126,7 @@ impl FromStr for Buffer {
             buf: Rope::from_str(s),
             cursor_pos: Position::default(),
             file_pos: Position::default(),
+            fs_path: None,
         })
     }
 }

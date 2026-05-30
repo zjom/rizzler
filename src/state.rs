@@ -6,7 +6,7 @@ use crate::{
     action::Action,
     buffer::Buffer,
     command::{CommandRegistry, DefaultCommands},
-    keymap::{DefaultKeymap, Keymap},
+    keymap::KeymapRegistry,
     mode::EditingMode,
     position::Position,
     render::{DefaultRenderer, Renderer, StateSnapshot},
@@ -15,7 +15,6 @@ use crate::{
 /// Bundle of plugin points injected into [`State`]. Swap any field to
 /// customise the editor without touching `State`'s internals.
 pub struct Config {
-    pub keymap: Box<dyn Keymap>,
     pub commands: Box<dyn CommandRegistry>,
     pub renderer: Box<dyn Renderer>,
 }
@@ -23,7 +22,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            keymap: Box::new(DefaultKeymap),
             commands: Box::new(DefaultCommands),
             renderer: Box::new(DefaultRenderer),
         }
@@ -38,7 +36,7 @@ pub struct State<W: Write> {
     quit: bool,
     w: W,
     size: Position<u16>,
-    keymap: Box<dyn Keymap>,
+    keymap: KeymapRegistry,
     commands: Box<dyn CommandRegistry>,
     renderer: Box<dyn Renderer>,
 }
@@ -57,7 +55,7 @@ impl<W: Write> State<W> {
             quit: false,
             w,
             size: Position::new(cols, rows),
-            keymap: config.keymap,
+            keymap: KeymapRegistry::new(),
             commands: config.commands,
             renderer: config.renderer,
         })
@@ -68,8 +66,9 @@ impl<W: Write> State<W> {
     }
 
     pub fn handle_key_event(&mut self, event: KeyEvent) -> io::Result<()> {
-        let action = self.keymap.resolve(self.mode, event);
-        self.apply(action)?;
+        if let Some(action) = self.keymap.resolve(self.mode, event.into()) {
+            self.apply(action)?;
+        }
         self.bufs[self.bufno].clamp_cursor();
         self.render()
     }
@@ -101,6 +100,12 @@ impl<W: Write> State<W> {
             Action::BufDelete => self.delete_buf(self.bufno),
             Action::BufNext => self.next_buffer(),
             Action::BufPrev => self.previous_buffer(),
+            Action::KeymapSet { mode, lhs, rhs } => {
+                self.keymap.set(mode, &lhs, *rhs);
+            }
+            Action::KeymapRemove { mode, lhs } => {
+                self.keymap.remove(mode, &lhs);
+            }
         }
         Ok(())
     }

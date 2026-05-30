@@ -21,7 +21,7 @@ fn main() -> io::Result<()> {
     let _guard = TerminalGuard::new()?;
     let (cols, rows) = size()?;
     let mut state = State::new(io::stdout(), cols, rows)?;
-
+    state.render()?; // initial render
     loop {
         if state.quit_requested() {
             break;

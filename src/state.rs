@@ -156,7 +156,7 @@ impl<W: Write> State<W> {
         self.bufno += 1;
     }
 
-    fn render(&mut self) -> io::Result<()> {
+    pub fn render(&mut self) -> io::Result<()> {
         // Destructure so the immutable borrow of buffer/mode/command_buf and
         // the mutable borrow of `w` can coexist (renderer needs both).
         let Self {

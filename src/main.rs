@@ -5,22 +5,19 @@ mod keymap;
 mod mode;
 mod position;
 mod render;
+mod render_ratatui;
 mod state;
 mod terminal;
 
 use std::{io, time::Duration};
 
-use crossterm::{
-    event::{self, Event},
-    terminal::size,
-};
+use crossterm::event::{self, Event};
 
 use crate::{state::State, terminal::TerminalGuard};
 
 fn main() -> io::Result<()> {
     let _guard = TerminalGuard::new()?;
-    let (cols, rows) = size()?;
-    let mut state = State::new(io::stdout(), cols, rows)?;
+    let mut state = State::new()?;
     state.render()?; // initial render
     loop {
         if state.quit_requested() {

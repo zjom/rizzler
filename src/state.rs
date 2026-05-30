@@ -1,10 +1,8 @@
+use std::io;
+use std::path::Path;
 use std::rc::Rc;
-use std::{
-    io::{self, Write},
-    path::Path,
-};
 
-use crossterm::{cursor::SetCursorStyle, event::KeyEvent, execute};
+use crossterm::event::KeyEvent;
 
 use crate::{
     action::Action,
@@ -12,8 +10,8 @@ use crate::{
     command::{CommandRegistry, DefaultCommands},
     keymap::KeymapRegistry,
     mode::EditingMode,
-    position::Position,
-    render::{DefaultRenderer, Renderer, StateSnapshot},
+    render::{CursorStyle, Renderer, StateSnapshot},
+    render_ratatui::RatatuiRenderer,
 };
 
 /// Bundle of plugin points injected into [`State`]. Swap any field to
@@ -23,43 +21,39 @@ pub struct Config {
     pub renderer: Box<dyn Renderer>,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
+impl Config {
+    pub fn new() -> io::Result<Self> {
+        Ok(Self {
             commands: Box::new(DefaultCommands),
-            renderer: Box::new(DefaultRenderer),
-        }
+            renderer: Box::new(RatatuiRenderer::new()?),
+        })
     }
 }
 
-pub struct State<W: Write> {
+pub struct State {
     bufs: Vec<Buffer>,
     bufno: usize,
     mode: EditingMode,
     command_buf: String,
     quit: bool,
-    w: W,
-    size: Position<u16>,
     keymap: KeymapRegistry,
     commands: Box<dyn CommandRegistry>,
     renderer: Box<dyn Renderer>,
     keyevent: Option<KeyEvent>,
 }
 
-impl<W: Write> State<W> {
-    pub fn new(w: W, cols: u16, rows: u16) -> io::Result<Self> {
-        Self::with_config(w, cols, rows, Config::default())
+impl State {
+    pub fn new() -> io::Result<Self> {
+        Self::with_config(Config::new()?)
     }
 
-    pub fn with_config(w: W, cols: u16, rows: u16, config: Config) -> io::Result<Self> {
+    pub fn with_config(config: Config) -> io::Result<Self> {
         Ok(Self {
             bufs: vec![Buffer::new()],
             bufno: 0,
             mode: EditingMode::Normal,
             command_buf: String::new(),
             quit: false,
-            w,
-            size: Position::new(cols, rows),
             keymap: KeymapRegistry::new(),
             commands: config.commands,
             renderer: config.renderer,
@@ -85,7 +79,7 @@ impl<W: Write> State<W> {
             match action.as_ref() {
                 Action::Noop => {}
                 Action::Quit => self.quit = true,
-                Action::SetMode(m) => self.set_mode(*m)?,
+                Action::SetMode(m) => self.mode = *m,
                 Action::InsertChar(c) => self.bufs[self.bufno].insert_char(*c),
                 Action::InsertNewline => self.bufs[self.bufno].insert_char('\n'),
                 Action::DeleteChar => self.bufs[self.bufno].delete_char(),
@@ -97,12 +91,12 @@ impl<W: Write> State<W> {
                 Action::CommandSubmit => {
                     let next = self.commands.parse(&self.command_buf);
                     self.command_buf.clear();
-                    self.set_mode(EditingMode::Normal)?;
+                    self.mode = EditingMode::Normal;
                     self.apply(&[Rc::new(next)])?;
                 }
                 Action::CommandCancel => {
                     self.command_buf.clear();
-                    self.set_mode(EditingMode::Normal)?;
+                    self.mode = EditingMode::Normal;
                 }
                 Action::BufCreate { path, set_active } => {
                     self.create_buf(*set_active, path.clone())?;
@@ -123,15 +117,6 @@ impl<W: Write> State<W> {
             }
         }
         Ok(())
-    }
-
-    fn set_mode(&mut self, mode: EditingMode) -> io::Result<()> {
-        self.mode = mode;
-        let style = match mode {
-            EditingMode::Insert => SetCursorStyle::SteadyBar,
-            _ => SetCursorStyle::SteadyBlock,
-        };
-        execute!(self.w, style)
     }
 
     fn create_buf(&mut self, set_active: bool, path: Option<Rc<Path>>) -> io::Result<usize> {
@@ -213,27 +198,18 @@ impl<W: Write> State<W> {
     }
 
     pub fn render(&mut self) -> io::Result<()> {
-        // Destructure so the immutable borrow of buffer/mode/command_buf and
-        // the mutable borrow of `w` can coexist (renderer needs both).
-        let Self {
-            bufs,
-            mode,
-            command_buf,
-            bufno,
-            size,
-            w,
-            renderer,
-            ..
-        } = self;
         let snap = StateSnapshot {
-            buffer: &bufs[*bufno],
-            mode: *mode,
-            command_buf: command_buf.as_str(),
-            bufno: *bufno,
-            size: *size,
+            buffer: &self.bufs[self.bufno],
+            mode: self.mode,
+            command_buf: self.command_buf.as_str(),
+            bufno: self.bufno,
             keyevent: self.keyevent.map(|e| e.into()),
+            cursor_style: match self.mode {
+                EditingMode::Insert => CursorStyle::Bar,
+                _ => CursorStyle::Block,
+            },
         };
-        renderer.render(w, snap)
+        self.renderer.render(snap)
     }
 }
 
@@ -241,9 +217,25 @@ impl<W: Write> State<W> {
 mod tests {
     use super::*;
 
+    /// A renderer that does nothing — used in tests that don't want to touch a terminal.
+    struct NullRenderer;
+    impl Renderer for NullRenderer {
+        fn render(&mut self, _snap: StateSnapshot<'_>) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn test_state() -> State {
+        State::with_config(Config {
+            commands: Box::new(DefaultCommands),
+            renderer: Box::new(NullRenderer),
+        })
+        .unwrap()
+    }
+
     #[test]
     fn render_does_not_panic_on_empty_buffer() {
-        let mut s = State::new(Vec::new(), 10, 10).unwrap();
+        let mut s = test_state();
         s.render().unwrap();
     }
 }

@@ -36,9 +36,6 @@ impl Buffer {
         buf.fs_path = Some(path);
         Ok(buf)
     }
-    pub fn fs_path(&self) -> Option<&Path> {
-        self.fs_path.as_ref().map(|p| p.as_ref())
-    }
     pub fn cursor_pos(&self) -> Position<u16> {
         self.cursor_pos
     }

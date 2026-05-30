@@ -59,4 +59,8 @@ pub enum MoveKind {
     Relative(Position<i16>),   // up, down, left, right of cursor
     Absolute(Position<usize>), // position in file
     LineNum(usize),
+    HalfPageDown,
+    HalfPageUp,
+    /// Vim's `zz` — re-center the viewport on the cursor without moving it.
+    Center,
 }

@@ -1,5 +1,5 @@
 use crate::action::MoveKind as MK;
-use crate::keymap::{KeyCode as KC, KeyEvent, trie::Trie};
+use crate::keymap::{KeyCode as KC, KeyEvent, KeyModifiers, trie::Trie};
 use crate::position::Position;
 use crate::{action::Action as A, mode::EditingMode};
 use std::collections::HashMap;
@@ -8,6 +8,10 @@ use std::rc::Rc;
 pub fn defaults() -> HashMap<EditingMode, Rc<Trie>> {
     let leaf = |a: A| Rc::new(Trie::Leaf(Rc::new(a)));
     let k = KeyEvent::from_code;
+    let ctrl = |c: char| KeyEvent {
+        code: KC::Char(c),
+        modifiers: KeyModifiers::CONTROL,
+    };
     let mv = |k: MK| leaf(A::MoveCursor(k));
 
     let mv_down = mv(MK::Relative(Position::new(0, 1)));
@@ -64,6 +68,15 @@ pub fn defaults() -> HashMap<EditingMode, Rc<Trie>> {
                     (k(KC::Char('G')), mv(MK::FileEnd)),
                     (k(KC::Char('b')), mv(MK::WordStart)),
                     (k(KC::Char('e')), mv(MK::WordEnd)),
+                    (ctrl('d'), mv(MK::HalfPageDown)),
+                    (ctrl('u'), mv(MK::HalfPageUp)),
+                    (
+                        k(KC::Char('z')),
+                        Rc::new(Trie::Node {
+                            children: HashMap::from([(k(KC::Char('z')), mv(MK::Center))]),
+                            on_char: None,
+                        }),
+                    ),
                 ]),
                 on_char: None,
             }),

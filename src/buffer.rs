@@ -197,9 +197,42 @@ impl Buffer {
                 self.file_pos.row = 0;
                 self.cursor_pos.row = n.min(last_line) as u16;
             }
+            MK::HalfPageDown => self.half_page(1),
+            MK::HalfPageUp => self.half_page(-1),
+            MK::Center => {
+                let abs_row = self.cursor_pos.row as usize + self.file_pos.row;
+                self.center_on(abs_row);
+            }
         }
 
         self.clamp_cursor();
+    }
+
+    /// Move the cursor by half the viewport height and re-center the
+    /// viewport on the new cursor row (matches vim's C-d / C-u + zz fusion).
+    fn half_page(&mut self, direction: i16) {
+        let vh = self.viewport.row as usize;
+        if vh == 0 {
+            return;
+        }
+        let half = ((vh / 2).max(1)) as isize * direction as isize;
+        let abs_row = (self.cursor_pos.row as isize)
+            .saturating_add(self.file_pos.row as isize)
+            .saturating_add(half)
+            .max(0) as usize;
+        self.center_on(abs_row);
+    }
+
+    /// Place `abs_row` at the vertical middle of the viewport. clamp_cursor
+    /// applies the EOF cap and per-line column clamping afterwards.
+    fn center_on(&mut self, abs_row: usize) {
+        let vh = self.viewport.row as usize;
+        if vh == 0 {
+            return;
+        }
+        let center_offset = vh / 2;
+        self.file_pos.row = abs_row.saturating_sub(center_offset);
+        self.cursor_pos.row = (abs_row - self.file_pos.row) as u16;
     }
 
     pub fn clamp_cursor(&mut self) {
@@ -216,6 +249,11 @@ impl Buffer {
             } else if abs_row >= self.file_pos.row + vh {
                 self.file_pos.row = abs_row + 1 - vh;
             }
+            // Pin viewport so the last file line never sits above the
+            // viewport bottom — avoids drawing empty rows past EOF after
+            // operations like HalfPageDown.
+            let max_file_pos = (last_line + 1).saturating_sub(vh);
+            self.file_pos.row = self.file_pos.row.min(max_file_pos);
         }
         self.cursor_pos.row = abs_row.saturating_sub(self.file_pos.row) as u16;
 
@@ -587,6 +625,94 @@ mod tests {
         let mut s = mk("a\nb\nc");
         s.viewport.row = 2;
         s.move_cursor(MoveKind::Relative(Position::new(0, -5)));
+        assert_eq!(s.file_pos.row, 0);
+        assert_eq!(s.cursor_pos.row, 0);
+    }
+
+    // ---- HalfPageDown / HalfPageUp ------------------------------------
+
+    #[test]
+    fn half_page_down_centers_cursor() {
+        let mut s = mk("0\n1\n2\n3\n4\n5\n6\n7\n8\n9");
+        s.viewport.row = 4; // half = 2, center offset = 2
+        s.cursor_pos = Position::<u16>::new(0, 1); // abs row 1
+        s.move_cursor(MoveKind::HalfPageDown);
+        // abs row → 3, centered: file_pos = 3 - 2 = 1, cursor at row 2.
+        assert_eq!(s.file_pos.row, 1);
+        assert_eq!(s.cursor_pos.row, 2);
+        assert_eq!(cur_row(&s), 3);
+    }
+
+    #[test]
+    fn half_page_up_centers_cursor() {
+        let mut s = mk("0\n1\n2\n3\n4\n5\n6\n7\n8\n9");
+        s.viewport.row = 4;
+        s.file_pos.row = 4;
+        s.cursor_pos = Position::<u16>::new(0, 2); // abs row 6
+        s.move_cursor(MoveKind::HalfPageUp);
+        // abs row → 4, centered: file_pos = 2, cursor at row 2.
+        assert_eq!(s.file_pos.row, 2);
+        assert_eq!(s.cursor_pos.row, 2);
+        assert_eq!(cur_row(&s), 4);
+    }
+
+    // ---- Center (zz) --------------------------------------------------
+
+    #[test]
+    fn center_puts_cursor_in_middle_of_viewport() {
+        let mut s = mk("0\n1\n2\n3\n4\n5\n6\n7\n8\n9");
+        s.viewport.row = 5; // center offset = 2
+        s.cursor_pos = Position::<u16>::new(0, 0);
+        s.file_pos.row = 6; // abs row 6
+        s.move_cursor(MoveKind::Center);
+        assert_eq!(s.file_pos.row, 4);
+        assert_eq!(s.cursor_pos.row, 2);
+        assert_eq!(cur_row(&s), 6);
+    }
+
+    #[test]
+    fn center_near_top_does_not_scroll_past_origin() {
+        let mut s = mk("0\n1\n2\n3\n4\n5\n6\n7\n8\n9");
+        s.viewport.row = 5;
+        s.cursor_pos = Position::<u16>::new(0, 1); // abs row 1
+        s.move_cursor(MoveKind::Center);
+        // Want file_pos = 1 - 2 = -1 → clamped to 0; cursor stays at abs row 1.
+        assert_eq!(s.file_pos.row, 0);
+        assert_eq!(s.cursor_pos.row, 1);
+    }
+
+    #[test]
+    fn center_near_eof_pins_viewport_to_last_line() {
+        let mut s = mk("0\n1\n2\n3\n4\n5\n6\n7\n8\n9");
+        s.viewport.row = 4; // max_file_pos = 6
+        s.cursor_pos = Position::<u16>::new(0, 0);
+        s.file_pos.row = 9; // abs row 9
+        s.move_cursor(MoveKind::Center);
+        // Center wants file_pos = 9 - 2 = 7, EOF cap pulls it back to 6.
+        assert_eq!(s.file_pos.row, 6);
+        assert_eq!(cur_row(&s), 9);
+    }
+
+    #[test]
+    fn half_page_down_near_eof_pins_viewport_to_last_line() {
+        // 10 lines (indices 0..=9), viewport 4, half = 2. From the bottom,
+        // C-d shouldn't scroll past EOF (the last line stays in view).
+        let mut s = mk("0\n1\n2\n3\n4\n5\n6\n7\n8\n9");
+        s.viewport.row = 4;
+        s.file_pos.row = 6;
+        s.cursor_pos = Position::<u16>::new(0, 3); // abs row 9
+        s.move_cursor(MoveKind::HalfPageDown);
+        // Already at last line; viewport stays pinned with last_line at bottom.
+        assert_eq!(s.file_pos.row, 6);
+        assert_eq!(cur_row(&s), 9);
+    }
+
+    #[test]
+    fn half_page_up_at_top_does_not_scroll_past_origin() {
+        let mut s = mk("0\n1\n2\n3\n4\n5");
+        s.viewport.row = 4;
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.move_cursor(MoveKind::HalfPageUp);
         assert_eq!(s.file_pos.row, 0);
         assert_eq!(s.cursor_pos.row, 0);
     }

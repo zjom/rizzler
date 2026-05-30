@@ -10,13 +10,14 @@ use crossterm::{
         self, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
     },
 };
-use ropey::{Rope, RopeSlice};
+use ropey::{Rope, RopeSlice, iter::Lines};
 use std::{
+    collections::VecDeque,
     io::{self, Read, Write},
     time::Duration,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum EditingMode {
     Insert,
     Normal,
@@ -28,7 +29,7 @@ trait PositionSealed {}
 impl PositionSealed for u16 {}
 impl PositionSealed for usize {}
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct Position<T: PositionSealed> {
     row: T, // line number
     col: T, // idx of char in row
@@ -39,53 +40,52 @@ impl Position<usize> {
         Self { row, col }
     }
 }
+impl Default for Position<usize> {
+    fn default() -> Self {
+        Self { row: 0, col: 0 }
+    }
+}
 
 impl Position<u16> {
     pub fn new(col: u16, row: u16) -> Self {
         Self { row, col }
     }
 }
+impl Default for Position<u16> {
+    fn default() -> Self {
+        Self { row: 0, col: 0 }
+    }
+}
 
-pub struct State<T: Write> {
+#[derive(Debug, Clone)]
+struct Buffer {
     buf: Rope,
-    mode: EditingMode,
-    command_buf: String,
-    quit: bool,
-    w: T,
-    size: Position<u16>,
     cursor_pos: Position<u16>,
     file_pos: Position<usize>,
 }
-
-impl<T: Write> State<T> {
-    pub fn new(r: impl Read, w: T, cols: u16, rows: u16) -> io::Result<Self> {
-        Ok(Self {
-            buf: Rope::from_reader(r)?,
-            mode: EditingMode::Normal,
-            quit: false,
-            command_buf: String::new(),
-            w,
-            size: Position::<u16>::new(cols, rows),
-            cursor_pos: Position::<u16>::new(0, 0),
-            file_pos: Position::<usize>::new(0, 0),
-        })
-    }
-    pub fn handle_command(&mut self) -> io::Result<()> {
-        if matches!(self.command_buf.as_str(), "quit" | "q") {
-            self.quit = true;
+impl Buffer {
+    fn new() -> Self {
+        Buffer {
+            buf: Rope::new(),
+            cursor_pos: Position::default(),
+            file_pos: Position::default(),
         }
-        self.command_buf.clear();
-        Ok(())
     }
 
-    /// Helper to transition modes and update the terminal cursor style automatically
-    fn set_mode(&mut self, mode: EditingMode) -> io::Result<()> {
-        self.mode = mode;
-        let cursor_style = match mode {
-            EditingMode::Insert => cursor::SetCursorStyle::SteadyBar,
-            _ => cursor::SetCursorStyle::SteadyBlock,
-        };
-        execute!(self.w, cursor_style)
+    fn from_str(s: &str) -> Self {
+        Buffer {
+            buf: Rope::from_str(s),
+            cursor_pos: Position::default(),
+            file_pos: Position::default(),
+        }
+    }
+
+    fn from_reader(r: impl Read) -> io::Result<Self> {
+        Ok(Buffer {
+            buf: Rope::from_reader(r)?,
+            cursor_pos: Position::default(),
+            file_pos: Position::default(),
+        })
     }
 
     fn insert_char(&mut self, c: char) {
@@ -135,6 +135,14 @@ impl<T: Write> State<T> {
         self.buf.line_to_char(self.cur_lnum())
     }
 
+    fn len_lines(&self) -> usize {
+        self.buf.len_lines()
+    }
+
+    fn lines_at(&self, line_idx: usize) -> Lines<'_> {
+        self.buf.lines_at(line_idx)
+    }
+
     fn move_cursor(&mut self, dx: i16, dy: i16) {
         if dx > 0 {
             self.cursor_pos.col = self.cursor_pos.col.saturating_add(dx as u16);
@@ -164,6 +172,47 @@ impl<T: Write> State<T> {
         let abs_col = (self.cursor_pos.col as usize + self.file_pos.col).min(line_len);
         self.cursor_pos.col = abs_col.saturating_sub(self.file_pos.col) as u16;
     }
+}
+
+pub struct State<T: Write> {
+    bufs: VecDeque<Buffer>,
+    bufno: usize,
+    mode: EditingMode,
+    command_buf: String,
+    quit: bool,
+    w: T,
+    size: Position<u16>,
+}
+
+impl<T: Write> State<T> {
+    pub fn new(w: T, cols: u16, rows: u16) -> io::Result<Self> {
+        Ok(Self {
+            bufs: VecDeque::from([Buffer::new()]),
+            bufno: 0,
+            mode: EditingMode::Normal,
+            quit: false,
+            command_buf: String::new(),
+            w,
+            size: Position::<u16>::new(cols, rows),
+        })
+    }
+    pub fn handle_command(&mut self) -> io::Result<()> {
+        if matches!(self.command_buf.as_str(), "quit" | "q") {
+            self.quit = true;
+        }
+        self.command_buf.clear();
+        Ok(())
+    }
+
+    /// Helper to transition modes and update the terminal cursor style automatically
+    fn set_mode(&mut self, mode: EditingMode) -> io::Result<()> {
+        self.mode = mode;
+        let cursor_style = match mode {
+            EditingMode::Insert => cursor::SetCursorStyle::SteadyBar,
+            _ => cursor::SetCursorStyle::SteadyBlock,
+        };
+        execute!(self.w, cursor_style)
+    }
 
     pub fn handle_key_event(&mut self, event: KeyEvent) -> io::Result<()> {
         match self.mode {
@@ -177,19 +226,19 @@ impl<T: Write> State<T> {
                 _ => {}
             },
             EditingMode::Insert => match event.code {
-                KeyCode::Enter => self.insert_char('\n'),
-                KeyCode::Char(c) => self.insert_char(c),
-                KeyCode::Backspace => self.delete_char(),
+                KeyCode::Enter => self.bufs[self.bufno].insert_char('\n'),
+                KeyCode::Char(c) => self.bufs[self.bufno].insert_char(c),
+                KeyCode::Backspace => self.bufs[self.bufno].delete_char(),
                 KeyCode::Esc => self.set_mode(EditingMode::Normal)?,
                 _ => {}
             },
             EditingMode::Normal => match event.code {
                 KeyCode::Char(':') => self.set_mode(EditingMode::Command)?,
                 KeyCode::Char('i') => self.set_mode(EditingMode::Insert)?,
-                KeyCode::Char('j') | KeyCode::Down => self.move_cursor(0, 1),
-                KeyCode::Char('k') | KeyCode::Up => self.move_cursor(0, -1),
-                KeyCode::Char('h') | KeyCode::Left => self.move_cursor(-1, 0),
-                KeyCode::Char('l') | KeyCode::Right => self.move_cursor(1, 0),
+                KeyCode::Char('j') | KeyCode::Down => self.bufs[self.bufno].move_cursor(0, 1),
+                KeyCode::Char('k') | KeyCode::Up => self.bufs[self.bufno].move_cursor(0, -1),
+                KeyCode::Char('h') | KeyCode::Left => self.bufs[self.bufno].move_cursor(-1, 0),
+                KeyCode::Char('l') | KeyCode::Right => self.bufs[self.bufno].move_cursor(1, 0),
                 _ => {}
             },
             EditingMode::Visual => {
@@ -198,7 +247,7 @@ impl<T: Write> State<T> {
         };
 
         // Keep the cursor valid, then render once per handled input.
-        self.clamp_cursor();
+        self.bufs[self.bufno].clamp_cursor();
         self.render()
     }
 
@@ -210,8 +259,9 @@ impl<T: Write> State<T> {
             SetForegroundColor(Color::Blue)
         )?;
 
-        let start = self.file_pos.row.min(self.buf.len_lines());
-        let lines = self.buf.lines_at(start);
+        let buf = &self.bufs[self.bufno];
+        let start = buf.file_pos.row.min(buf.len_lines());
+        let lines = buf.lines_at(start);
 
         let view_height = self.size.row.saturating_sub(1);
         for (lnum, line) in (0u16..view_height).zip(lines) {
@@ -235,7 +285,7 @@ impl<T: Write> State<T> {
             .split_at(cmd_area.min(self.command_buf.len()));
         self.w.write_all(cmd_buf.as_bytes())?;
 
-        execute!(self.w, MoveTo(self.cursor_pos.col, self.cursor_pos.row))?;
+        execute!(self.w, MoveTo(buf.cursor_pos.col, buf.cursor_pos.row))?;
         self.w.flush()
     }
 }
@@ -252,7 +302,7 @@ fn main() -> io::Result<()> {
     enable_raw_mode()?;
     let (cols, rows) = terminal::size()?;
 
-    let mut state = State::new(Vec::new().as_slice(), io::stdout(), cols, rows)?;
+    let mut state = State::new(io::stdout(), cols, rows)?;
 
     loop {
         if state.quit {
@@ -279,17 +329,8 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn mk(text: &str) -> State<Vec<u8>> {
-        State {
-            buf: Rope::from_str(text),
-            mode: EditingMode::Normal,
-            quit: false,
-            command_buf: String::new(),
-            w: Vec::new(),
-            size: Position::<u16>::new(80, 24),
-            cursor_pos: Position::<u16>::new(0, 0),
-            file_pos: Position::<usize>::new(0, 0),
-        }
+    fn mk(text: &str) -> Buffer {
+        Buffer::from_str(text)
     }
 
     #[test]
@@ -328,7 +369,7 @@ mod tests {
 
     #[test]
     fn render_does_not_panic_on_empty_buffer() {
-        let mut s = mk("");
+        let mut s = State::new(Vec::new(), 10, 10).unwrap();
         s.render().unwrap();
     }
 }

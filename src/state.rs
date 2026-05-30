@@ -43,6 +43,7 @@ pub struct State<W: Write> {
     keymap: KeymapRegistry,
     commands: Box<dyn CommandRegistry>,
     renderer: Box<dyn Renderer>,
+    keyevent: Option<KeyEvent>,
 }
 
 impl<W: Write> State<W> {
@@ -62,6 +63,7 @@ impl<W: Write> State<W> {
             keymap: KeymapRegistry::new(),
             commands: config.commands,
             renderer: config.renderer,
+            keyevent: None,
         })
     }
 
@@ -70,6 +72,7 @@ impl<W: Write> State<W> {
     }
 
     pub fn handle_key_event(&mut self, event: KeyEvent) -> io::Result<()> {
+        self.keyevent = Some(event);
         if let Some(action) = self.keymap.resolve(self.mode, event.into()) {
             self.apply(&action)?;
         }
@@ -228,6 +231,7 @@ impl<W: Write> State<W> {
             command_buf: command_buf.as_str(),
             bufno: *bufno,
             size: *size,
+            keyevent: self.keyevent.map(|e| e.into()),
         };
         renderer.render(w, snap)
     }

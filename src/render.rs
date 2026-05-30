@@ -7,7 +7,7 @@ use crossterm::{
     terminal,
 };
 
-use crate::{buffer::Buffer, mode::EditingMode, position::Position};
+use crate::{buffer::Buffer, keymap::KeyEvent, mode::EditingMode, position::Position};
 
 /// Read-only view of the editor passed to renderers. Decoupling this from
 /// `State` means a renderer can be implemented without depending on the
@@ -19,6 +19,7 @@ pub struct StateSnapshot<'a> {
     pub command_buf: &'a str,
     pub bufno: usize,
     pub size: Position<u16>,
+    pub keyevent: Option<KeyEvent>,
 }
 
 pub trait Renderer {
@@ -61,16 +62,26 @@ impl Renderer for DefaultRenderer {
         }
 
         let cmd_area = (snap.size.col as usize).saturating_sub(4);
-        let (cmd_buf, _) = snap.command_buf.split_at(cmd_area.min(snap.command_buf.len()));
+        let (cmd_buf, _) = snap
+            .command_buf
+            .split_at(cmd_area.min(snap.command_buf.len()));
         out.write_all(cmd_buf.as_bytes())?;
+
+        let rhs = format!(
+            "{}  {}",
+            snap.keyevent
+                .map(|e| e.code.to_string())
+                .unwrap_or("None".to_string()),
+            snap.bufno
+        );
         execute!(
             out,
-            cursor::MoveTo(
-                snap.size.col.saturating_sub(2),
-                snap.size.row.saturating_sub(1)
+            MoveTo(
+                snap.size.col.saturating_sub(rhs.len() as u16),
+                snap.size.row - 1
             )
         )?;
-        write!(out, "{}", snap.bufno)?;
+        out.write_all(rhs.as_bytes())?;
 
         let cur = snap.buffer.cursor_pos();
         execute!(out, MoveTo(cur.col, cur.row))?;

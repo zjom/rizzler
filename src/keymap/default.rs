@@ -1,62 +1,69 @@
-use crate::action::MoveKind;
-use crate::keymap::{KeyCode, KeyEvent, trie::Trie};
+use crate::action::MoveKind as MK;
+use crate::keymap::{KeyCode as KC, KeyEvent, trie::Trie};
 use crate::position::Position;
-use crate::{action::Action, mode::EditingMode};
+use crate::{action::Action as A, mode::EditingMode};
 use std::collections::HashMap;
 use std::rc::Rc;
 
 pub fn defaults() -> HashMap<EditingMode, Rc<Trie>> {
-    let leaf = |a: Action| Rc::new(Trie::Leaf(Rc::new(a)));
+    let leaf = |a: A| Rc::new(Trie::Leaf(Rc::new(a)));
     let k = KeyEvent::from_code;
+    let mv = |k: MK| leaf(A::MoveCursor(k));
 
-    let mv_down = leaf(Action::MoveCursor(MoveKind::Relative(Position::new(0, 1))));
-    let mv_up = leaf(Action::MoveCursor(MoveKind::Relative(Position::new(0, -1))));
-    let mv_left = leaf(Action::MoveCursor(MoveKind::Relative(Position::new(-1, 0))));
-    let mv_right = leaf(Action::MoveCursor(MoveKind::Relative(Position::new(1, 0))));
+    let mv_down = mv(MK::Relative(Position::new(0, 1)));
+    let mv_up = mv(MK::Relative(Position::new(0, -1)));
+    let mv_left = mv(MK::Relative(Position::new(-1, 0)));
+    let mv_right = mv(MK::Relative(Position::new(1, 0)));
 
     HashMap::from([
         (
             EditingMode::Command,
             Rc::new(Trie::Node {
                 children: HashMap::from([
-                    (k(KeyCode::Enter), leaf(Action::CommandSubmit)),
-                    (k(KeyCode::Backspace), leaf(Action::CommandPop)),
-                    (k(KeyCode::Esc), leaf(Action::CommandCancel)),
+                    (k(KC::Enter), leaf(A::CommandSubmit)),
+                    (k(KC::Backspace), leaf(A::CommandPop)),
+                    (k(KC::Esc), leaf(A::CommandCancel)),
                 ]),
-                on_char: Some(Action::CommandPush),
+                on_char: Some(A::CommandPush),
             }),
         ),
         (
             EditingMode::Insert,
             Rc::new(Trie::Node {
                 children: HashMap::from([
-                    (k(KeyCode::Enter), leaf(Action::InsertNewline)),
-                    (k(KeyCode::Backspace), leaf(Action::DeleteChar)),
-                    (k(KeyCode::Esc), leaf(Action::SetMode(EditingMode::Normal))),
+                    (k(KC::Enter), leaf(A::InsertNewline)),
+                    (k(KC::Backspace), leaf(A::DeleteChar)),
+                    (k(KC::Esc), leaf(A::SetMode(EditingMode::Normal))),
                 ]),
-                on_char: Some(Action::InsertChar),
+                on_char: Some(A::InsertChar),
             }),
         ),
         (
             EditingMode::Normal,
             Rc::new(Trie::Node {
                 children: HashMap::from([
+                    (k(KC::Char(':')), leaf(A::SetMode(EditingMode::Command))),
+                    (k(KC::Char('i')), leaf(A::SetMode(EditingMode::Insert))),
+                    (k(KC::Char('j')), mv_down.clone()),
+                    (k(KC::Down), mv_down),
+                    (k(KC::Char('k')), mv_up.clone()),
+                    (k(KC::Up), mv_up),
+                    (k(KC::Char('h')), mv_left.clone()),
+                    (k(KC::Left), mv_left),
+                    (k(KC::Char('l')), mv_right.clone()),
+                    (k(KC::Right), mv_right),
+                    (k(KC::Char('0')), mv(MK::LineStart)),
+                    (k(KC::Char('$')), mv(MK::LineEnd)),
                     (
-                        k(KeyCode::Char(':')),
-                        leaf(Action::SetMode(EditingMode::Command)),
+                        k(KC::Char('g')),
+                        Rc::new(Trie::Node {
+                            children: HashMap::from([(k(KC::Char('g')), mv(MK::FileStart))]),
+                            on_char: None,
+                        }),
                     ),
-                    (
-                        k(KeyCode::Char('i')),
-                        leaf(Action::SetMode(EditingMode::Insert)),
-                    ),
-                    (k(KeyCode::Char('j')), mv_down.clone()),
-                    (k(KeyCode::Down), mv_down),
-                    (k(KeyCode::Char('k')), mv_up.clone()),
-                    (k(KeyCode::Up), mv_up),
-                    (k(KeyCode::Char('h')), mv_left.clone()),
-                    (k(KeyCode::Left), mv_left),
-                    (k(KeyCode::Char('l')), mv_right.clone()),
-                    (k(KeyCode::Right), mv_right),
+                    (k(KC::Char('G')), mv(MK::FileEnd)),
+                    (k(KC::Char('b')), mv(MK::WordStart)),
+                    (k(KC::Char('e')), mv(MK::WordEnd)),
                 ]),
                 on_char: None,
             }),

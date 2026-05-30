@@ -12,7 +12,7 @@ use crossterm::{
 };
 use ropey::{Rope, RopeSlice};
 use std::{
-    io::{self, Write},
+    io::{self, Read, Write},
     time::Duration,
 };
 
@@ -58,6 +58,18 @@ pub struct State<T: Write> {
 }
 
 impl<T: Write> State<T> {
+    pub fn new(r: impl Read, w: T, cols: u16, rows: u16) -> io::Result<Self> {
+        Ok(Self {
+            buf: Rope::from_reader(r)?,
+            mode: EditingMode::Normal,
+            quit: false,
+            command_buf: String::new(),
+            w,
+            size: Position::<u16>::new(cols, rows),
+            cursor_pos: Position::<u16>::new(0, 0),
+            file_pos: Position::<usize>::new(0, 0),
+        })
+    }
     pub fn handle_command(&mut self) -> io::Result<()> {
         if matches!(self.command_buf.as_str(), "quit" | "q") {
             self.quit = true;
@@ -240,16 +252,7 @@ fn main() -> io::Result<()> {
     enable_raw_mode()?;
     let (cols, rows) = terminal::size()?;
 
-    let mut state = State {
-        buf: Rope::new(),
-        mode: EditingMode::Normal,
-        quit: false,
-        command_buf: String::new(),
-        w: io::stdout(),
-        size: Position::<u16>::new(cols, rows),
-        cursor_pos: Position::<u16>::new(0, 0),
-        file_pos: Position::<usize>::new(0, 0),
-    };
+    let mut state = State::new(Vec::new().as_slice(), io::stdout(), cols, rows)?;
 
     loop {
         if state.quit {

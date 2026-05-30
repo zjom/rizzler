@@ -16,9 +16,13 @@ impl KeyEvent {
 }
 impl From<crossterm::event::KeyEvent> for KeyEvent {
     fn from(value: crossterm::event::KeyEvent) -> Self {
+        let mut modifiers = value.modifiers;
+        if matches!(value.code, KeyCode::Char(_)) {
+            modifiers.remove(KeyModifiers::SHIFT);
+        }
         Self {
             code: value.code,
-            modifiers: value.modifiers,
+            modifiers,
         }
     }
 }

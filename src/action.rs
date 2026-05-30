@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
+use crate::position::Position;
 
 /// Every input source (keymap, command line, scripted automation) ultimately
 /// produces an [`Action`]. [`crate::state::State::apply`] is the single point
@@ -55,7 +56,7 @@ pub enum MoveKind {
     FileEnd,
     WordStart,
     WordEnd,
-    Relative(i16, i16),     // up, down, left, right of cursor
-    Absolute(usize, usize), // position in file
+    Relative(Position<i16>),   // up, down, left, right of cursor
+    Absolute(Position<usize>), // position in file
     LineNum(usize),
 }

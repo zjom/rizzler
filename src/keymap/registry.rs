@@ -9,7 +9,6 @@ use std::rc::Rc;
 
 pub struct KeymapRegistry {
     children: HashMap<EditingMode, Rc<Trie>>,
-    defaults: HashMap<EditingMode, Rc<Trie>>,
     cur: Option<Rc<Trie>>,
     prev_mode: Option<EditingMode>,
 }
@@ -17,8 +16,7 @@ pub struct KeymapRegistry {
 impl KeymapRegistry {
     pub fn new() -> Self {
         Self {
-            children: HashMap::new(),
-            defaults: defaults(),
+            children: defaults(),
             cur: None,
             prev_mode: None,
         }
@@ -39,18 +37,12 @@ impl KeymapRegistry {
             Some(WalkOutcome::Action(a)) => Some(a),
             Some(WalkOutcome::Descend(n)) => {
                 self.cur = Some(n);
-                return None; // mid-sequence; defaults must not preempt
+                return None;
             }
             Some(WalkOutcome::Miss) | None => None,
         };
 
-        // TODO: update the rest of the data structures to work with a seq of actions
-        user_action.map(|a| vec![a]).or_else(|| {
-            self.defaults.get(&mode).and_then(|d| match walk(d, key) {
-                WalkOutcome::Action(a) => Some(vec![a]),
-                _ => None,
-            })
-        })
+        user_action.map(|a| vec![a])
     }
 
     /// Bind a key sequence in `mode` to `action`.

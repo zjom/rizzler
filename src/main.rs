@@ -12,8 +12,8 @@ use crossterm::{
 };
 use ropey::{Rope, RopeSlice, iter::Lines};
 use std::{
-    collections::VecDeque,
     io::{self, Read, Write},
+    str::FromStr,
     time::Duration,
 };
 
@@ -25,12 +25,14 @@ pub enum EditingMode {
     Command,
 }
 
-trait PositionSealed {}
-impl PositionSealed for u16 {}
-impl PositionSealed for usize {}
+mod sealed {
+    pub trait Position {}
+    impl Position for u16 {}
+    impl Position for usize {}
+}
 
 #[derive(Debug, Clone, Copy)]
-struct Position<T: PositionSealed> {
+pub struct Position<T: sealed::Position> {
     row: T, // line number
     col: T, // idx of char in row
 }
@@ -57,14 +59,14 @@ impl Default for Position<u16> {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Buffer {
+#[derive(Debug, Clone, Default)]
+pub struct Buffer {
     buf: Rope,
     cursor_pos: Position<u16>,
     file_pos: Position<usize>,
 }
 impl Buffer {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Buffer {
             buf: Rope::new(),
             cursor_pos: Position::default(),
@@ -72,15 +74,7 @@ impl Buffer {
         }
     }
 
-    fn from_str(s: &str) -> Self {
-        Buffer {
-            buf: Rope::from_str(s),
-            cursor_pos: Position::default(),
-            file_pos: Position::default(),
-        }
-    }
-
-    fn from_reader(r: impl Read) -> io::Result<Self> {
+    pub fn from_reader(r: impl Read) -> io::Result<Self> {
         Ok(Buffer {
             buf: Rope::from_reader(r)?,
             cursor_pos: Position::default(),
@@ -174,8 +168,19 @@ impl Buffer {
     }
 }
 
+impl FromStr for Buffer {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Buffer {
+            buf: Rope::from_str(s),
+            cursor_pos: Position::default(),
+            file_pos: Position::default(),
+        })
+    }
+}
+
 pub struct State<T: Write> {
-    bufs: VecDeque<Buffer>,
+    bufs: Vec<Buffer>,
     bufno: usize,
     mode: EditingMode,
     command_buf: String,
@@ -187,7 +192,7 @@ pub struct State<T: Write> {
 impl<T: Write> State<T> {
     pub fn new(w: T, cols: u16, rows: u16) -> io::Result<Self> {
         Ok(Self {
-            bufs: VecDeque::from([Buffer::new()]),
+            bufs: Vec::from([Buffer::new()]),
             bufno: 0,
             mode: EditingMode::Normal,
             quit: false,
@@ -197,11 +202,61 @@ impl<T: Write> State<T> {
         })
     }
     pub fn handle_command(&mut self) -> io::Result<()> {
-        if matches!(self.command_buf.as_str(), "quit" | "q") {
-            self.quit = true;
+        match self.command_buf.as_str() {
+            "quit" | "q" => {
+                self.quit = true;
+            }
+            "bufcreate" | "bc" => self.create_buf(),
+            "bufdelete" | "bd" => self.delete_buf(self.bufno),
+            "bufprev" | "bp" => self.previous_buffer(),
+            "bufnext" | "bn" => self.next_buffer(),
+            _ => {}
         }
         self.command_buf.clear();
+        self.set_mode(EditingMode::Normal)?;
         Ok(())
+    }
+
+    fn create_buf(&mut self) {
+        self.bufs.push(Buffer::new());
+        self.bufno = self.bufs.len() - 1;
+    }
+
+    fn delete_buf(&mut self, bufno: usize) {
+        if bufno >= self.bufs.len() {
+            return;
+        }
+
+        // Never drop the final buffer — just reset it to an empty one.
+        if self.bufs.len() == 1 {
+            self.bufs[0] = Buffer::new();
+            self.bufno = 0;
+            return;
+        }
+
+        self.bufs.remove(bufno);
+
+        if self.bufno > bufno {
+            self.bufno -= 1;
+        } else if self.bufno >= self.bufs.len() {
+            self.bufno = self.bufs.len() - 1;
+        }
+    }
+
+    fn previous_buffer(&mut self) {
+        if self.bufno == 0 {
+            self.bufno = self.bufs.len() - 1;
+            return;
+        }
+        self.bufno -= 1;
+    }
+
+    fn next_buffer(&mut self) {
+        if self.bufno == self.bufs.len() - 1 {
+            self.bufno = 0;
+            return;
+        }
+        self.bufno += 1;
     }
 
     /// Helper to transition modes and update the terminal cursor style automatically
@@ -222,7 +277,10 @@ impl<T: Write> State<T> {
                 KeyCode::Backspace => {
                     self.command_buf.pop();
                 }
-                KeyCode::Esc => self.set_mode(EditingMode::Normal)?,
+                KeyCode::Esc => {
+                    self.command_buf.clear();
+                    self.set_mode(EditingMode::Normal)?
+                }
                 _ => {}
             },
             EditingMode::Insert => match event.code {
@@ -259,9 +317,11 @@ impl<T: Write> State<T> {
             SetForegroundColor(Color::Blue)
         )?;
 
-        let buf = &self.bufs[self.bufno];
-        let start = buf.file_pos.row.min(buf.len_lines());
-        let lines = buf.lines_at(start);
+        let start = self.bufs[self.bufno]
+            .file_pos
+            .row
+            .min(self.bufs[self.bufno].len_lines());
+        let lines = self.bufs[self.bufno].lines_at(start);
 
         let view_height = self.size.row.saturating_sub(1);
         for (lnum, line) in (0u16..view_height).zip(lines) {
@@ -276,16 +336,30 @@ impl<T: Write> State<T> {
             EditingMode::Insert => self.w.write_all(b"i"),
             EditingMode::Normal => self.w.write_all(b"n"),
             EditingMode::Visual => self.w.write_all(b"v"),
-            EditingMode::Command => self.w.write_all(b"c"),
+            EditingMode::Command => self.w.write_all(b":"),
         }?;
 
-        let cmd_area = (self.size.col as usize).saturating_sub(1);
+        let cmd_area = (self.size.col as usize).saturating_sub(4);
         let (cmd_buf, _) = self
             .command_buf
             .split_at(cmd_area.min(self.command_buf.len()));
         self.w.write_all(cmd_buf.as_bytes())?;
+        execute!(
+            self.w,
+            cursor::MoveTo(
+                self.size.col.saturating_sub(2),
+                self.size.row.saturating_sub(1)
+            )
+        )?;
+        write!(self.w, "{}", self.bufno)?;
 
-        execute!(self.w, MoveTo(buf.cursor_pos.col, buf.cursor_pos.row))?;
+        execute!(
+            self.w,
+            MoveTo(
+                self.bufs[self.bufno].cursor_pos.col,
+                self.bufs[self.bufno].cursor_pos.row
+            )
+        )?;
         self.w.flush()
     }
 }
@@ -309,10 +383,10 @@ fn main() -> io::Result<()> {
             break;
         }
 
-        if event::poll(Duration::from_millis(500))? {
-            if let Event::Key(key_event) = event::read()? {
-                state.handle_key_event(key_event)?;
-            }
+        if event::poll(Duration::from_millis(500))?
+            && let Event::Key(key_event) = event::read()?
+        {
+            state.handle_key_event(key_event)?;
         }
     }
 
@@ -330,7 +404,7 @@ fn main() -> io::Result<()> {
 mod tests {
     use super::*;
     fn mk(text: &str) -> Buffer {
-        Buffer::from_str(text)
+        Buffer::from_str(text).expect("never fails")
     }
 
     #[test]

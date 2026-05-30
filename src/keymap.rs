@@ -39,51 +39,30 @@ impl KeymapRegistry {
         // otherwise restart from this mode's root keymap. `take()` clears
         // any stale sequence either way.
         let continuing = self.prev_mode.as_ref() == Some(&mode);
-
-        let start = match self.cur.take() {
-            Some(cur) if continuing => cur,
-            _ => match self.children.get(&mode).map(Rc::clone) {
-                Some(root) => root,
-                None => {
-                    self.prev_mode = Some(mode);
-                    self.cur = None;
-                    return None;
-                }
-            },
-        };
-
         self.prev_mode = Some(mode);
 
-        // A mode root that is itself a leaf maps every key to one action.
-        if let Trie::Leaf(action) = start.as_ref() {
-            self.cur = None;
-            return Some(action.clone());
-        }
-
-        let maybe_action = match start.child(key) {
-            Some(next) => match next.as_ref() {
-                Trie::Leaf(action) => {
-                    self.cur = None;
-                    Some(action.clone())
-                }
-                Trie::Node { .. } => {
-                    self.cur = Some(next);
-                    None
-                }
-            },
-            None => {
-                self.cur = None;
-                None
-            }
+        let start = match self.cur.take() {
+            Some(cur) if continuing => Some(cur),
+            _ => self.children.get(&mode).map(Rc::clone),
         };
 
-        // fallback to default keymaps
-        if let Some(action) = maybe_action.or_else(|| self.default_km.resolve(mode, key)) {
-            self.cur = None; // reset our state bc we found something in default
-            Some(action)
-        } else {
-            None
-        }
+        let user_action = match start.as_deref() {
+            // A mode root that is itself a leaf maps every key to one action.
+            Some(Trie::Leaf(action)) => Some(action.clone()),
+            Some(Trie::Node { .. }) => match start.as_ref().unwrap().child(key) {
+                Some(next) => match next.as_ref() {
+                    Trie::Leaf(action) => Some(action.clone()),
+                    Trie::Node { .. } => {
+                        self.cur = Some(next);
+                        return None; // mid-sequence; defaults must not preempt
+                    }
+                },
+                None => None,
+            },
+            None => None,
+        };
+
+        user_action.or_else(|| self.default_km.resolve(mode, key))
     }
 
     /// Bind a key sequence in `mode` to `action`.

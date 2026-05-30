@@ -1,6 +1,6 @@
 use std::{path::PathBuf, str::FromStr};
 
-use crate::action::Action;
+use crate::action::{Action, MoveKind};
 
 /// Maps a typed `:command` string to an [`Action`]. Implement this trait to
 /// provide alternate or extended command sets.
@@ -34,7 +34,13 @@ impl CommandRegistry for DefaultCommands {
                 }
                 Action::BufWrite(None)
             }
-            _ => Action::Noop,
+            nums => {
+                if let Ok(lnum) = nums.parse() {
+                    Action::MoveCursor(MoveKind::LineNum(lnum))
+                } else {
+                    Action::Noop
+                }
+            }
         }
     }
 }

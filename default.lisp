@@ -4,10 +4,30 @@
 
 ;; ----- normal mode -----------------------------------------------------
 (keymap-set 'normal ":"      '(set-mode 'command))
-(keymap-set 'normal "i"      '(set-mode 'insert))
 (keymap-set 'normal "v"      '(set-mode 'visual))
 (keymap-set 'normal "V"      '(set-mode 'visual-line))
 (keymap-set 'normal "<c-v>"  '(set-mode 'visual-block))
+
+(keymap-set 'normal "i"      '(set-mode 'insert))
+(keymap-set 'normal "I"      '(do (move-cursor 'line-start)
+                                  (set-mode 'insert)))
+(keymap-set 'normal "a"      '(do (move-cursor 'right)
+                                  (set-mode 'insert)))
+(keymap-set 'normal "A"      '(do (move-cursor 'line-end)
+                                  (move-cursor 'right)
+                                  (set-mode 'insert)))
+(keymap-set 'normal "o"      '(do (move-cursor 'line-end)
+                                  (set-mode 'insert)
+                                  (newline)))
+(keymap-set 'normal "O"      '(do (move-cursor 'line-start)
+                                  (set-mode 'insert)
+                                  (newline)
+                                  (move-cursor 'up)))
+
+(keymap-set 'normal "x"      '(do (move-cursor 'right)
+                                  (set-mode 'insert)
+                                  (delete-char)
+                                  (set-mode 'normal)))
 
 (keymap-set 'normal "j"      '(move-cursor 'down))
 (keymap-set 'normal "<down>" '(move-cursor 'down))

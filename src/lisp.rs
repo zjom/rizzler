@@ -155,41 +155,6 @@ pub fn init_script_path() -> Option<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// Minibuffer input → lisp source
-// ---------------------------------------------------------------------------
-
-/// Translate ergonomic minibuffer input into a lisp form.
-///
-/// * `(...)` passes through as-is.
-/// * A bare integer becomes `(line N)` — preserves the legacy `:42` jump.
-/// * Anything else is wrapped in parens.
-///   `head arg1 arg2 ...` and becomes `(head arg1 arg2 ...)`.
-/// * Empty input becomes `()` (a no-op).
-fn wrap_shell_style(input: &str) -> String {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return "()".into();
-    }
-    if trimmed.starts_with('(') {
-        return trimmed.into();
-    }
-    if let Ok(n) = trimmed.parse::<i64>() {
-        return format!("(line {n})");
-    }
-    let mut parts = trimmed.split_whitespace();
-    let head = parts.next().unwrap();
-    let mut out = String::with_capacity(trimmed.len() + 4);
-    out.push('(');
-    out.push_str(head);
-    for arg in parts {
-        out.push(' ');
-        out.push_str(arg);
-    }
-    out.push(')');
-    out
-}
-
-// ---------------------------------------------------------------------------
 // Builtin registration
 // ---------------------------------------------------------------------------
 
@@ -670,6 +635,37 @@ fn as_ident_or_str(v: &Rc<Value>, name: &str) -> Result<Rc<str>, RuntimeError> {
         Value::Ident(s) | Value::Str(s) => Ok(s.clone()),
         _ => Err(RuntimeError::type_mismatch(name, "ident|str", v)),
     }
+}
+
+/// Translate ergonomic minibuffer input into a lisp form.
+///
+/// * `(...)` passes through as-is.
+/// * A bare integer becomes `(line N)` — preserves the legacy `:42` jump.
+/// * Anything else is wrapped in parens.
+///   `head arg1 arg2 ...` and becomes `(head arg1 arg2 ...)`.
+/// * Empty input becomes `()` (a no-op).
+fn wrap_shell_style(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return "()".into();
+    }
+    if trimmed.starts_with('(') {
+        return trimmed.into();
+    }
+    if let Ok(n) = trimmed.parse::<i64>() {
+        return format!("(line {n})");
+    }
+    let mut parts = trimmed.split_whitespace();
+    let head = parts.next().unwrap();
+    let mut out = String::with_capacity(trimmed.len() + 4);
+    out.push('(');
+    out.push_str(head);
+    for arg in parts {
+        out.push(' ');
+        out.push_str(arg);
+    }
+    out.push(')');
+    out
 }
 
 fn as_u8(v: &Rc<Value>, name: &str) -> Result<u8, RuntimeError> {

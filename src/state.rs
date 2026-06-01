@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
-use std::{io, process};
+use std::io;
 
 use crossterm::event::KeyEvent;
 use rizz::RizzError;

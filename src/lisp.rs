@@ -9,10 +9,10 @@
 
 use std::cell::Cell;
 use std::path::PathBuf;
-use std::process;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::str::FromStr;
+use std::{fs, process};
 
 use anyhow::anyhow;
 use im::{HashMap as ImHashMap, Vector};
@@ -587,7 +587,7 @@ fn builtins() -> Env {
     });
 
     // the directory that the editor was started in
-    b!("dir-root", 0, |_, env| {
+    b!("workdir", 0, |_, env| {
         let d: Rc<str> = with_editor_mut(|st| st.workdir())
             .to_string_lossy()
             .as_ref()
@@ -595,7 +595,25 @@ fn builtins() -> Env {
         Ok((Rc::new(d.into()), env.clone()))
     });
 
-    b!("dir-read", 1, |args, env| {
+    b!("fs-canonicalize", 1, |args, env| {
+        let s = as_str(&args[0], "fs-canonicalize")?;
+        let path = std::fs::canonicalize(s.as_ref())?;
+        Ok((Rc::new(path.into()), env.clone()))
+    });
+
+    b!("fs-parent", 1, |args, env| {
+        let s = as_str(&args[0], "fs-parent")?;
+        let path = PathBuf::from_str(&s).unwrap();
+        if let Some(parent) = path.parent()
+            && parent.exists()
+        {
+            Ok((Rc::new(parent.into()), env.clone()))
+        } else {
+            Ok((unit(), env.clone()))
+        }
+    });
+
+    b!("fs-readdir", 1, |args, env| {
         let path = as_str(&args[0], "dir-read")?;
         let dirs = std::fs::read_dir(path.as_ref())?
             .map(|res| res.map(|e| e.path().to_string_lossy().as_ref().into()))

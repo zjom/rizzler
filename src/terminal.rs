@@ -7,7 +7,7 @@ use crossterm::{
     },
     execute,
     terminal::{
-        self, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
         supports_keyboard_enhancement,
     },
 };
@@ -28,7 +28,6 @@ impl TerminalGuard {
         execute!(
             io::stdout(),
             EnterAlternateScreen,
-            terminal::Clear(terminal::ClearType::All),
             EnableFocusChange,
             EnableMouseCapture,
         )?;

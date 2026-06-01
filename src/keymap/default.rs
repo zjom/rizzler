@@ -89,6 +89,7 @@ pub fn defaults() -> HashMap<EditingMode, Rc<Trie>> {
                                 (k(KC::Char('l')), leaf(A::WindowFocus(FocusDir::Right))),
                                 (k(KC::Char('k')), leaf(A::WindowFocus(FocusDir::Up))),
                                 (k(KC::Char('j')), leaf(A::WindowFocus(FocusDir::Down))),
+                                (k(KC::Char('w')), leaf(A::WindowFocusNext)),
                             ]),
                             on_char: None,
                         }),

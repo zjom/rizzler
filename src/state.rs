@@ -1,6 +1,6 @@
+use std::io;
 use std::path::Path;
 use std::rc::Rc;
-use std::io;
 
 use crossterm::event::KeyEvent;
 use rizz::RizzError;
@@ -232,7 +232,7 @@ impl State {
     pub fn handle_key_event(&mut self, event: KeyEvent) -> io::Result<()> {
         self.keyevent = Some(event);
         let mode = self.bufs[self.focused_bufno()].mode();
-        if let Some(action) = self.keymap.resolve(mode, event.into()) {
+        if let Some(action) = self.keymap.resolve(mode.to_str().into(), event.into()) {
             self.apply(&action)?;
         }
         // Refresh after apply: window splits/closes and buffer switches may
@@ -284,10 +284,10 @@ impl State {
                 Action::WindowFocusNext => self.windows.focus_next(),
                 Action::WindowFocus(d) => self.windows.focus_dir(*d),
                 Action::KeymapSet { mode, lhs, rhs } => {
-                    self.keymap.set(*mode, lhs, rhs.clone());
+                    self.keymap.set(mode.to_str().into(), lhs, rhs.clone());
                 }
                 Action::KeymapRemove { mode, lhs } => {
-                    self.keymap.remove(*mode, lhs);
+                    self.keymap.remove(mode.to_str().into(), lhs);
                 }
                 Action::EvalLisp(form) => {
                     if let Err(e) = self.eval_lisp_value(form.clone()) {

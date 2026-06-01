@@ -15,6 +15,17 @@ impl EditingMode {
     pub fn is_visual(self) -> bool {
         matches!(self, Self::Visual | Self::VisualLine | Self::VisualBlock)
     }
+
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Insert => "insert",
+            Self::Visual => "visual",
+            Self::VisualLine => "visual-line",
+            Self::VisualBlock => "visual-block",
+            Self::Command => "command",
+        }
+    }
 }
 
 impl FromStr for EditingMode {

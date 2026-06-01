@@ -588,11 +588,8 @@ fn builtins() -> Env {
 
     // the directory that the editor was started in
     b!("workdir", 0, |_, env| {
-        let d: Rc<str> = with_editor_mut(|st| st.workdir())
-            .to_string_lossy()
-            .as_ref()
-            .into();
-        Ok((Rc::new(d.into()), env.clone()))
+        let d: Value = with_editor_mut(|st| st.workdir()).as_ref().into();
+        Ok((Rc::new(d), env.clone()))
     });
 
     b!("fs-canonicalize", 1, |args, env| {
@@ -616,10 +613,9 @@ fn builtins() -> Env {
     b!("fs-readdir", 1, |args, env| {
         let path = as_str(&args[0], "dir-read")?;
         let dirs = std::fs::read_dir(path.as_ref())?
-            .map(|res| res.map(|e| e.path().to_string_lossy().as_ref().into()))
-            .map(|res| res.map(|p: Rc<str>| Rc::new(Value::Str(p))))
-            .collect::<Result<Vector<Rc<Value>>, std::io::Error>>()?;
-        Ok((Rc::new(Value::Array(dirs)), env.clone()))
+            .map(|res| res.map(|e| e.path().into()))
+            .collect::<Result<Vector<Value>, std::io::Error>>()?;
+        Ok((Rc::new(dirs.into()), env.clone()))
     });
     alias!("ls"=>"dir-read");
 

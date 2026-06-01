@@ -60,6 +60,8 @@ impl Segment for ModeGlyph {
             EditingMode::Insert => "i",
             EditingMode::Normal => "n",
             EditingMode::Visual => "v",
+            EditingMode::VisualLine => "V",
+            EditingMode::VisualBlock => "^V",
             EditingMode::Command => "c",
         })
     }

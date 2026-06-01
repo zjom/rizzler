@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::buffer::Buffer;
+use crate::mode::EditingMode;
 
 /// Left-side column attached to the editor view — line numbers, signs, diff
 /// markers, breakpoints, etc. Each gutter renders its own column.
@@ -108,6 +109,9 @@ impl Default for EditorView {
             vec![Box::new(LineNumbers)],
             vec![
                 Box::new(BaseFg(Color::Blue)),
+                // Selection runs before CurrentLineHighlight so the span-level
+                // selection bg overrides the line-level current-line bg.
+                Box::new(SelectionHighlight(Color::Rgb(60, 90, 130))),
                 Box::new(CurrentLineHighlight(Color::DarkGray)),
             ],
         )
@@ -141,6 +145,105 @@ impl LineDecorator for BaseFg {
     fn decorate(&self, _lnum: usize, line: &mut Line<'static>, _w: u16, _buf: &Buffer) {
         line.style = line.style.patch(Style::default().fg(self.0));
     }
+}
+
+/// Background-highlights the visual selection on this line, using the buffer's
+/// `selection_anchor` and current cursor. Behaves differently per visual mode:
+///
+/// * `Visual` — characterwise from the earlier endpoint to the later one,
+///   inclusive on both ends. Selection is single-line-bounded by `lnum`.
+/// * `VisualLine` — full row width (padded out to `area_width`).
+/// * `VisualBlock` — the column range `[min_col, max_col]` on every row in
+///   `[min_row, max_row]`.
+///
+/// No-op when the buffer has no anchor or is not in a visual mode.
+pub struct SelectionHighlight(pub Color);
+impl LineDecorator for SelectionHighlight {
+    fn decorate(&self, lnum: usize, line: &mut Line<'static>, area_width: u16, buf: &Buffer) {
+        let Some(anchor) = buf.selection_anchor() else {
+            return;
+        };
+        let cur = buf.abs_pos();
+        let mode = buf.mode();
+        if !mode.is_visual() {
+            return;
+        }
+
+        let (min_row, max_row) = order(anchor.row, cur.row);
+        if lnum < min_row || lnum > max_row {
+            return;
+        }
+
+        let line_len: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+
+        let (start, end) = match mode {
+            EditingMode::VisualLine => (0usize, area_width as usize),
+            EditingMode::VisualBlock => {
+                let (lo, hi) = order(anchor.col, cur.col);
+                (lo, (hi + 1).min(area_width as usize))
+            }
+            EditingMode::Visual => {
+                // Order endpoints in (row, col) lexicographic order.
+                let (lo_row, lo_col, hi_row, hi_col) =
+                    if (anchor.row, anchor.col) <= (cur.row, cur.col) {
+                        (anchor.row, anchor.col, cur.row, cur.col)
+                    } else {
+                        (cur.row, cur.col, anchor.row, anchor.col)
+                    };
+                let s = if lnum == lo_row { lo_col } else { 0 };
+                let e = if lnum == hi_row {
+                    hi_col + 1
+                } else {
+                    line_len.max(1)
+                };
+                (s, e)
+            }
+            _ => return,
+        };
+
+        if start >= end {
+            return;
+        }
+        paint_bg_range(line, start, end, self.0, area_width);
+    }
+}
+
+fn order(a: usize, b: usize) -> (usize, usize) {
+    if a <= b { (a, b) } else { (b, a) }
+}
+
+/// Repaint `line` so that character indices `start..end` carry background
+/// `bg`. Pads with spaces to reach `end` (capped by `area_width`) so an
+/// empty/short line still shows a visible selection band.
+fn paint_bg_range(line: &mut Line<'static>, start: usize, end: usize, bg: Color, area_width: u16) {
+    let inherited = line.style;
+    let highlight = inherited.bg(bg);
+
+    let mut text: String = line.spans.iter().flat_map(|s| s.content.chars()).collect();
+    let end = end.min(area_width as usize);
+    let cur_len = text.chars().count();
+    if end > cur_len {
+        text.extend(std::iter::repeat_n(' ', end - cur_len));
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let start = start.min(chars.len());
+    let split = end.min(chars.len());
+
+    let before: String = chars[..start].iter().collect();
+    let middle: String = chars[start..split].iter().collect();
+    let after: String = chars[split..].iter().collect();
+
+    let mut spans = Vec::with_capacity(3);
+    if !before.is_empty() {
+        spans.push(Span::styled(before, inherited));
+    }
+    if !middle.is_empty() {
+        spans.push(Span::styled(middle, highlight));
+    }
+    if !after.is_empty() {
+        spans.push(Span::styled(after, inherited));
+    }
+    line.spans = spans;
 }
 
 /// Background-highlights the line the cursor is on, padding to area width so

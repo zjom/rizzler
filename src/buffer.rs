@@ -47,6 +47,9 @@ pub struct Buffer {
     pub(crate) viewport: Position<u16>,
     pub(crate) kind: BufferKind,
     pub(crate) mode: EditingMode,
+    /// Anchor (absolute file position) of the current visual selection.
+    /// `Some` iff `mode` is one of the visual modes — managed by `set_mode`.
+    pub(crate) selection_anchor: Option<Position<usize>>,
     // pub(crate) permissions: Permissions,
 }
 
@@ -74,7 +77,27 @@ impl Buffer {
     }
 
     pub fn set_mode(&mut self, mode: EditingMode) {
+        let was_visual = self.mode.is_visual();
+        let is_visual = mode.is_visual();
+        if is_visual && !was_visual {
+            self.selection_anchor = Some(self.abs_pos());
+        } else if !is_visual {
+            self.selection_anchor = None;
+        }
         self.mode = mode;
+    }
+
+    /// Anchor of the current visual selection (absolute file position).
+    pub fn selection_anchor(&self) -> Option<Position<usize>> {
+        self.selection_anchor
+    }
+
+    /// Cursor's absolute file position (file_pos + cursor_pos).
+    pub fn abs_pos(&self) -> Position<usize> {
+        Position::new(
+            self.file_pos.col + self.cursor_pos.col as usize,
+            self.file_pos.row + self.cursor_pos.row as usize,
+        )
     }
 
     /// Reset rope content and cursor — used when the minibuffer finishes

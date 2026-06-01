@@ -445,6 +445,8 @@ fn builtins() -> Env {
             EditingMode::Normal => "normal",
             EditingMode::Insert => "insert",
             EditingMode::Visual => "visual",
+            EditingMode::VisualLine => "visual-line",
+            EditingMode::VisualBlock => "visual-block",
             EditingMode::Command => "command",
         };
         Ok((Rc::new(Value::Ident(s.into())), env.clone()))
@@ -494,6 +496,8 @@ fn parse_mode_ident(v: &Rc<Value>) -> Result<EditingMode, RuntimeError> {
         "normal" => EditingMode::Normal,
         "insert" => EditingMode::Insert,
         "visual" => EditingMode::Visual,
+        "visual-line" => EditingMode::VisualLine,
+        "visual-block" => EditingMode::VisualBlock,
         "command" => EditingMode::Command,
         other => return Err(unknown_variant("mode", other)),
     })

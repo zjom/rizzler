@@ -189,9 +189,16 @@
 
 (status-segment-add 'mode 'left _mode-segment)
 
-;; --- left: a static brand chip (showcase Static payload) ---------------
-(status-segment-add 'brand 'left
-  (span "  twilight " "twilight.signature"))
+;; --- left: current buffer file path ----------------------
+(fn _buf-path ()
+  (do
+    (let path (buf-path))
+    (let content
+      (if (= path ())
+        "  twilight  "
+        path))
+    (span content "twilight.signature")))
+(status-segment-add 'buffer-path 'left _buf-path)
 
 ;; --- left: contextual hint depending on selection ----------------------
 ;; `selected-text` returns `()` when nothing's selected, otherwise the text.

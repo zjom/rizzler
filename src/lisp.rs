@@ -587,7 +587,7 @@ fn builtins() -> Env {
     });
 
     // the directory that the editor was started in
-    b!("work-dir", 0, |_, env| {
+    b!("dir-work", 0, |_, env| {
         let d: Rc<str> = with_editor_mut(|st| st.workdir())
             .to_string_lossy()
             .as_ref()
@@ -595,15 +595,15 @@ fn builtins() -> Env {
         Ok((Rc::new(d.into()), env.clone()))
     });
 
-    b!("read-dir", 1, |args, env| {
-        let path = as_str(&args[0], "read-dir")?;
+    b!("dir-read", 1, |args, env| {
+        let path = as_str(&args[0], "dir-read")?;
         let dirs = std::fs::read_dir(path.as_ref())?
             .map(|res| res.map(|e| e.path().to_string_lossy().as_ref().into()))
             .map(|res| res.map(|p: Rc<str>| Rc::new(Value::Str(p))))
             .collect::<Result<Vector<Rc<Value>>, std::io::Error>>()?;
         Ok((Rc::new(Value::Array(dirs)), env.clone()))
     });
-    alias!("ls"=>"read-dir");
+    alias!("ls"=>"dir-read");
 
     b!("exec", 1, |args, env| {
         let cmd_args = as_str(&args[0], "exec")?;

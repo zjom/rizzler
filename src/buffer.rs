@@ -445,7 +445,14 @@ impl Buffer {
         let mut line_len = line.len_chars();
         // don't count the trailing newline as a landable column
         if line_len > 0 && line.char(line_len - 1) == '\n' {
-            line_len -= 1;
+            line_len = line_len.wrapping_sub(match self.mode {
+                EditingMode::Insert
+                | EditingMode::Command
+                | EditingMode::Visual
+                | EditingMode::VisualLine
+                | EditingMode::VisualBlock => 1,
+                EditingMode::Normal => 2,
+            });
         }
         let abs_col = (self.cursor_pos.col as usize + self.file_pos.col).min(line_len);
         self.cursor_pos.col = abs_col.saturating_sub(self.file_pos.col) as u16;

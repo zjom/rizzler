@@ -16,12 +16,15 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::str::FromStr;
 
 use rizz::runtime::{RuntimeError, Value};
 
 // ---------------------------------------------------------------------------
 // Style
 // ---------------------------------------------------------------------------
+
+pub type Color = ratatui::style::Color;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Style {
@@ -38,69 +41,16 @@ impl Style {
     /// modifiers are OR-ed so a base style's bold survives a non-bold overlay.
     pub fn patch(mut self, over: &Style) -> Self {
         if over.fg.is_some() {
-            self.fg = over.fg.clone();
+            self.fg = over.fg;
         }
         if over.bg.is_some() {
-            self.bg = over.bg.clone();
+            self.bg = over.bg;
         }
         self.bold |= over.bold;
         self.italic |= over.italic;
         self.underline |= over.underline;
         self.reverse |= over.reverse;
         self
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Color {
-    Named(NamedColor),
-    Indexed(u8),
-    Rgb(u8, u8, u8),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NamedColor {
-    Black,
-    Red,
-    Green,
-    Yellow,
-    Blue,
-    Magenta,
-    Cyan,
-    Gray,
-    DarkGray,
-    LightRed,
-    LightGreen,
-    LightYellow,
-    LightBlue,
-    LightMagenta,
-    LightCyan,
-    White,
-    Reset,
-}
-
-impl NamedColor {
-    pub fn parse(s: &str) -> Option<Self> {
-        Some(match s {
-            "black" => Self::Black,
-            "red" => Self::Red,
-            "green" => Self::Green,
-            "yellow" => Self::Yellow,
-            "blue" => Self::Blue,
-            "magenta" => Self::Magenta,
-            "cyan" => Self::Cyan,
-            "gray" | "grey" => Self::Gray,
-            "dark-gray" | "dark-grey" => Self::DarkGray,
-            "light-red" => Self::LightRed,
-            "light-green" => Self::LightGreen,
-            "light-yellow" => Self::LightYellow,
-            "light-blue" => Self::LightBlue,
-            "light-magenta" => Self::LightMagenta,
-            "light-cyan" => Self::LightCyan,
-            "white" => Self::White,
-            "reset" | "default" => Self::Reset,
-            _ => return None,
-        })
     }
 }
 
@@ -183,13 +133,15 @@ pub fn style_from_value(v: &Rc<Value>, theme: &Theme) -> Result<Style, RuntimeEr
 pub fn color_from_value(v: &Rc<Value>) -> Result<Option<Color>, RuntimeError> {
     match &**v {
         Value::Unit => Ok(None),
-        Value::Ident(s) | Value::Str(s) => NamedColor::parse(s)
-            .map(|c| Some(Color::Named(c)))
-            .ok_or_else(|| RuntimeError::TypeMismatch {
-                name: "color".into(),
-                expected: "known color name".into(),
-                got: s.as_ref().into(),
-            }),
+        Value::Ident(s) | Value::Str(s) => {
+            Color::from_str(s.as_ref())
+                .map(Some)
+                .map_err(|_| RuntimeError::TypeMismatch {
+                    name: "color".into(),
+                    expected: "known color name".into(),
+                    got: s.as_ref().into(),
+                })
+        }
         Value::Int(n) => {
             let n = u8::try_from(*n).map_err(|_| RuntimeError::TypeMismatch {
                 name: "color".into(),
@@ -259,7 +211,6 @@ pub fn style_to_value(style: &Style) -> Rc<Value> {
 fn color_to_value(c: &Color) -> Rc<Value> {
     use im::HashMap as ImHashMap;
     match c {
-        Color::Named(n) => Rc::new(Value::Str(named_to_str(*n).into())),
         Color::Indexed(i) => Rc::new(Value::Int(*i as i64)),
         Color::Rgb(r, g, b) => {
             // Tagged map with string keys so that re-evaluation by the
@@ -272,28 +223,7 @@ fn color_to_value(c: &Color) -> Rc<Value> {
             m.insert(key("b"), Rc::new(Value::Int(*b as i64)));
             Rc::new(Value::Map(m))
         }
-    }
-}
-
-fn named_to_str(c: NamedColor) -> &'static str {
-    match c {
-        NamedColor::Black => "black",
-        NamedColor::Red => "red",
-        NamedColor::Green => "green",
-        NamedColor::Yellow => "yellow",
-        NamedColor::Blue => "blue",
-        NamedColor::Magenta => "magenta",
-        NamedColor::Cyan => "cyan",
-        NamedColor::Gray => "gray",
-        NamedColor::DarkGray => "dark-gray",
-        NamedColor::LightRed => "light-red",
-        NamedColor::LightGreen => "light-green",
-        NamedColor::LightYellow => "light-yellow",
-        NamedColor::LightBlue => "light-blue",
-        NamedColor::LightMagenta => "light-magenta",
-        NamedColor::LightCyan => "light-cyan",
-        NamedColor::White => "white",
-        NamedColor::Reset => "reset",
+        other => Rc::new(Value::Str(other.to_string().into())),
     }
 }
 
@@ -453,10 +383,10 @@ pub fn style_to_ratatui(style: &Style) -> ratatui::style::Style {
 
     let mut s = ratatui::style::Style::default();
     if let Some(c) = &style.fg {
-        s = s.fg(color_to_ratatui(c));
+        s = s.fg(*c);
     }
     if let Some(c) = &style.bg {
-        s = s.bg(color_to_ratatui(c));
+        s = s.bg(*c);
     }
     let mut m = Modifier::empty();
     if style.bold {
@@ -477,33 +407,6 @@ pub fn style_to_ratatui(style: &Style) -> ratatui::style::Style {
     s
 }
 
-fn color_to_ratatui(c: &Color) -> ratatui::style::Color {
-    use ratatui::style::Color as RC;
-    match c {
-        Color::Named(n) => match n {
-            NamedColor::Black => RC::Black,
-            NamedColor::Red => RC::Red,
-            NamedColor::Green => RC::Green,
-            NamedColor::Yellow => RC::Yellow,
-            NamedColor::Blue => RC::Blue,
-            NamedColor::Magenta => RC::Magenta,
-            NamedColor::Cyan => RC::Cyan,
-            NamedColor::Gray => RC::Gray,
-            NamedColor::DarkGray => RC::DarkGray,
-            NamedColor::LightRed => RC::LightRed,
-            NamedColor::LightGreen => RC::LightGreen,
-            NamedColor::LightYellow => RC::LightYellow,
-            NamedColor::LightBlue => RC::LightBlue,
-            NamedColor::LightMagenta => RC::LightMagenta,
-            NamedColor::LightCyan => RC::LightCyan,
-            NamedColor::White => RC::White,
-            NamedColor::Reset => RC::Reset,
-        },
-        Color::Indexed(i) => RC::Indexed(*i),
-        Color::Rgb(r, g, b) => RC::Rgb(*r, *g, *b),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -522,7 +425,7 @@ mod tests {
         let v = run(r#"{"fg": 'red "bold": 1}"#);
         let theme = Theme::new();
         let s = style_from_value(&v, &theme).unwrap();
-        assert_eq!(s.fg, Some(Color::Named(NamedColor::Red)));
+        assert_eq!(s.fg, Some(Color::Red));
         assert!(s.bold);
         assert!(!s.italic);
     }
@@ -533,14 +436,14 @@ mod tests {
         theme.insert(
             "header".into(),
             Style {
-                fg: Some(Color::Named(NamedColor::Cyan)),
+                fg: Some(Color::Cyan),
                 bold: true,
                 ..Default::default()
             },
         );
         let v = run("'header");
         let s = style_from_value(&v, &theme).unwrap();
-        assert_eq!(s.fg, Some(Color::Named(NamedColor::Cyan)));
+        assert_eq!(s.fg, Some(Color::Cyan));
         assert!(s.bold);
     }
 
@@ -579,7 +482,7 @@ mod tests {
     #[test]
     fn style_to_value_round_trips_basic() {
         let s = Style {
-            fg: Some(Color::Named(NamedColor::Blue)),
+            fg: Some(Color::Blue),
             bold: true,
             ..Default::default()
         };

@@ -22,9 +22,7 @@ use rizz::runtime::{self, Env, Value};
 use crate::buffer::Buffer;
 use crate::mode::EditingMode;
 use crate::render::{DecoratorRanges, RenderedGutter, StateSnapshot, StyledRange};
-use crate::styling::{
-    Color, NamedColor, Style, Theme, rgb_value, spans_from_value, style_from_value,
-};
+use crate::styling::{Color, Style, Theme, rgb_value, spans_from_value, style_from_value};
 
 // ---------------------------------------------------------------------------
 // Renderable payload
@@ -442,7 +440,7 @@ fn builtin_decorator(b: BuiltinId, buf: &Buffer, _theme: &Theme) -> DecoratorRan
     match b {
         BuiltinId::BaseFg => {
             let style = Style {
-                fg: Some(Color::Named(NamedColor::Blue)),
+                fg: Some(Color::Blue),
                 ..Default::default()
             };
             for (i, line) in buf.lines_at(start).take(visible).enumerate() {
@@ -515,7 +513,7 @@ fn builtin_decorator(b: BuiltinId, buf: &Buffer, _theme: &Theme) -> DecoratorRan
         }
         BuiltinId::CurrentLineHighlight => {
             let style = Style {
-                bg: Some(Color::Named(NamedColor::DarkGray)),
+                bg: Some(Color::DarkGray),
                 ..Default::default()
             };
             let cur_row = buf.file_pos().row + buf.cursor_pos().row as usize;

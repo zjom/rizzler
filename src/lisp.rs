@@ -9,10 +9,10 @@
 
 use std::cell::Cell;
 use std::path::PathBuf;
+use std::process;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::{fs, process};
 
 use anyhow::anyhow;
 use im::{HashMap as ImHashMap, Vector};

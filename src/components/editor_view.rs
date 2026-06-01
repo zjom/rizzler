@@ -33,7 +33,10 @@ pub struct EditorView {
 
 impl EditorView {
     pub fn new(gutters: Vec<Box<dyn Gutter>>, decorators: Vec<Box<dyn LineDecorator>>) -> Self {
-        Self { gutters, decorators }
+        Self {
+            gutters,
+            decorators,
+        }
     }
 
     /// Width occupied by gutters — used by the host renderer to translate a

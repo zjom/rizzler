@@ -28,10 +28,7 @@ impl RatatuiRenderer {
         )
     }
 
-    pub fn with_parts(
-        editor: EditorView,
-        bottom: Vec<Box<dyn Component>>,
-    ) -> io::Result<Self> {
+    pub fn with_parts(editor: EditorView, bottom: Vec<Box<dyn Component>>) -> io::Result<Self> {
         let backend = CrosstermBackend::new(io::stdout());
         Ok(Self {
             term: Terminal::new(backend)?,
@@ -97,4 +94,3 @@ impl Renderer for RatatuiRenderer {
         Ok(())
     }
 }
-

@@ -41,10 +41,7 @@ impl Component for StatusLine {
     fn render(&self, area: Rect, snap: &StateSnapshot<'_>, frame: &mut Frame) {
         let left: Vec<Span<'static>> = self.left.iter().map(|s| s.render(snap)).collect();
         let right: Vec<Span<'static>> = self.right.iter().map(|s| s.render(snap)).collect();
-        let right_width: u16 = right
-            .iter()
-            .map(|s| s.content.chars().count() as u16)
-            .sum();
+        let right_width: u16 = right.iter().map(|s| s.content.chars().count() as u16).sum();
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Min(0), Constraint::Length(right_width)])
@@ -63,7 +60,7 @@ impl Segment for ModeGlyph {
             EditingMode::Insert => "i",
             EditingMode::Normal => "n",
             EditingMode::Visual => "v",
-            EditingMode::Command => ":",
+            EditingMode::Command => "c",
         })
     }
 }

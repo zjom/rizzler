@@ -47,7 +47,9 @@ impl SplitDir {
 /// divide their rect proportionally among children by integer weights.
 #[derive(Debug, Clone)]
 pub enum Window {
-    Leaf { bufno: usize },
+    Leaf {
+        bufno: usize,
+    },
     Split {
         dir: SplitDir,
         children: Vec<(u16, Window)>,

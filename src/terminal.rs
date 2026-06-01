@@ -43,9 +43,7 @@ impl TerminalGuard {
         if kitty_pushed {
             execute!(
                 io::stdout(),
-                PushKeyboardEnhancementFlags(
-                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
-                ),
+                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,),
             )?;
         }
 

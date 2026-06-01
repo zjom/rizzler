@@ -3,12 +3,14 @@ use std::path::Path;
 use std::rc::Rc;
 
 use crossterm::event::KeyEvent;
+use risp::RispError;
+use risp::runtime::Value;
 
 use crate::{
     action::Action,
     buffer::{Buffer, BufferKind},
-    command::{CommandRegistry, DefaultCommands},
     keymap::KeymapRegistry,
+    lisp::{EditorGuard, LispRuntime, init_script_path, wrap_shell_style},
     mode::EditingMode,
     position::Position,
     render::{CursorStyle, Renderer, StateSnapshot},
@@ -25,14 +27,12 @@ const MINIBUFFER_ROWS: u16 = 1;
 /// Bundle of plugin points injected into [`State`]. Swap any field to
 /// customise the editor without touching `State`'s internals.
 pub struct Config {
-    pub commands: Box<dyn CommandRegistry>,
     pub renderer: Box<dyn Renderer>,
 }
 
 impl Config {
     pub fn new() -> io::Result<Self> {
         Ok(Self {
-            commands: Box::new(DefaultCommands),
             renderer: Box::new(RatatuiRenderer::new()?),
         })
     }
@@ -52,9 +52,11 @@ pub struct State {
     minibuffer: usize,
     quit: bool,
     keymap: KeymapRegistry,
-    commands: Box<dyn CommandRegistry>,
     renderer: Box<dyn Renderer>,
     keyevent: Option<KeyEvent>,
+    /// Embedded lisp runtime. Held as `Option` so `eval_lisp*` can `take` it
+    /// for the duration of an eval — this also blocks re-entrant evaluation.
+    lisp: Option<LispRuntime>,
 }
 
 impl State {
@@ -72,12 +74,85 @@ impl State {
             minibuffer: 0,
             quit: false,
             keymap: KeymapRegistry::new(),
-            commands: config.commands,
             renderer: config.renderer,
             keyevent: None,
+            lisp: Some(LispRuntime::new()),
         };
         state.refresh_viewport();
+
+        // Bundled defaults: every key binding lives in `default.lisp` rather
+        // than Rust code. Then layer the user's `init.lisp` on top if present.
+        if let Err(e) = state.eval_lisp_script(include_str!("../default.lisp")) {
+            eprintln!("default.lisp eval failed: {e}");
+        }
+        if let Some(path) = init_script_path()
+            && let Ok(src) = std::fs::read_to_string(&path)
+            && let Err(e) = state.eval_lisp_script(&src)
+        {
+            eprintln!("init.lisp ({}) eval failed: {e}", path.display());
+        }
+
         Ok(state)
+    }
+
+    /// Parse `src` as one lisp form and evaluate it in the embedded runtime.
+    /// Re-entrant calls panic — see [`crate::lisp::EditorGuard`].
+    pub fn eval_lisp(&mut self, src: &str) -> Result<Rc<Value>, RispError> {
+        let mut lisp = self
+            .lisp
+            .take()
+            .expect("recursive eval_lisp is not supported");
+        let result = {
+            let _guard = EditorGuard::new(self);
+            lisp.eval_str(src)
+        };
+        self.lisp = Some(lisp);
+        result
+    }
+
+    /// Evaluate an already-parsed form. Used to dispatch keymap-bound lisp.
+    pub fn eval_lisp_value(&mut self, form: Rc<Value>) -> Result<Rc<Value>, RispError> {
+        let mut lisp = self
+            .lisp
+            .take()
+            .expect("recursive eval_lisp is not supported");
+        let result = {
+            let _guard = EditorGuard::new(self);
+            lisp.eval_value(form)
+        };
+        self.lisp = Some(lisp);
+        result
+    }
+
+    /// Evaluate a multi-form script (e.g. `default.lisp`, `init.lisp`).
+    pub fn eval_lisp_script(&mut self, src: &str) -> Result<(), RispError> {
+        let mut lisp = self
+            .lisp
+            .take()
+            .expect("recursive eval_lisp is not supported");
+        let result = {
+            let _guard = EditorGuard::new(self);
+            lisp.eval_script(src)
+        };
+        self.lisp = Some(lisp);
+        result
+    }
+
+    /// Read-only accessor for the focused buffer. Exposed for lisp builtins
+    /// that need to query buffer state without going through `Action`.
+    pub(crate) fn focused_buf(&self) -> &Buffer {
+        let i = self.focused_bufno();
+        &self.bufs[i]
+    }
+
+    /// Write `msg` into the minibuffer as a status line. Used by lisp's
+    /// `(message ...)` and as the sink for eval errors.
+    pub(crate) fn set_minibuffer_message(&mut self, msg: &str) {
+        let b = &mut self.bufs[self.minibuffer];
+        b.clear();
+        for c in msg.chars() {
+            b.insert_char(c);
+        }
     }
 
     /// The buffer currently receiving key events.
@@ -150,8 +225,12 @@ impl State {
                 Action::CommandSubmit => {
                     let cmd = self.bufs[self.minibuffer].text();
                     self.exit_minibuffer();
-                    let next = self.commands.parse(&cmd);
-                    self.apply(&[Rc::new(next)])?;
+                    let src = wrap_shell_style(&cmd);
+                    match self.eval_lisp(&src) {
+                        Ok(v) if !v.is_unit() => self.set_minibuffer_message(&v.display()),
+                        Err(e) => self.set_minibuffer_message(&e.to_string()),
+                        _ => {}
+                    }
                 }
                 Action::CommandCancel => self.exit_minibuffer(),
                 Action::BufCreate { path, set_active } => {
@@ -177,6 +256,11 @@ impl State {
                 Action::KeymapRemove { mode, lhs } => {
                     self.keymap.remove(*mode, lhs);
                 }
+                Action::EvalLisp(form) => {
+                    if let Err(e) = self.eval_lisp_value(form.clone()) {
+                        self.set_minibuffer_message(&e.to_string());
+                    }
+                }
             }
         }
         Ok(())
@@ -186,6 +270,8 @@ impl State {
     /// minibuffer instead of changing an editor buffer's mode.
     fn set_mode(&mut self, mode: EditingMode) {
         if mode == EditingMode::Command {
+            // Wipe any leftover status text from a previous eval.
+            self.bufs[self.minibuffer].clear();
             self.bufs[self.minibuffer].set_mode(EditingMode::Command);
             self.focus_minibuffer = true;
         } else {
@@ -346,24 +432,29 @@ impl State {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
 
     /// A renderer that does nothing — used in tests that don't want to touch a terminal.
-    struct NullRenderer;
+    pub struct NullRenderer;
     impl Renderer for NullRenderer {
         fn render(&mut self, _snap: StateSnapshot<'_>) -> io::Result<()> {
             Ok(())
         }
     }
 
-    fn test_state() -> State {
+    pub fn test_state() -> State {
         State::with_config(Config {
-            commands: Box::new(DefaultCommands),
             renderer: Box::new(NullRenderer),
         })
         .unwrap()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::test_support::test_state;
 
     #[test]
     fn render_does_not_panic_on_empty_buffer() {

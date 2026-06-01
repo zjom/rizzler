@@ -1,8 +1,8 @@
 mod action;
 mod buffer;
-mod command;
 mod components;
 mod keymap;
+mod lisp;
 mod mode;
 mod position;
 mod render;

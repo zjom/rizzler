@@ -6,6 +6,7 @@ use std::rc::Rc;
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
 use crate::window::{FocusDir, SplitDir};
+use risp::runtime::Value;
 
 /// Every input source (keymap, command line, scripted automation) ultimately
 /// produces an [`Action`]. [`crate::state::State::apply`] is the single point
@@ -54,4 +55,9 @@ pub enum Action {
         mode: EditingMode,
         lhs: Vec<KeyEvent>,
     },
+
+    /// Evaluate a pre-parsed lisp form in the editor's runtime. Used to bind
+    /// arbitrary lisp expressions to keys: the form lives in the keymap and
+    /// is re-evaluated on every keystroke.
+    EvalLisp(Rc<Value>),
 }

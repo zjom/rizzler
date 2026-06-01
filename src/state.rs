@@ -453,8 +453,8 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::test_support::test_state;
+    use super::*;
 
     #[test]
     fn render_does_not_panic_on_empty_buffer() {

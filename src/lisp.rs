@@ -236,10 +236,16 @@ fn builtins() -> Env {
     }
 
     // mode + lifecycle
+    b!("q", 0, |_, env| {
+        apply(Action::Quit);
+        ok_unit(env)
+    });
+
     b!("quit", 0, |_, env| {
         apply(Action::Quit);
         ok_unit(env)
     });
+
     b!("set-mode", 1, |args, env| {
         let mode = parse_mode_ident(&args[0])?;
         apply(Action::SetMode(mode));

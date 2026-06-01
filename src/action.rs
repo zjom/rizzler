@@ -5,7 +5,7 @@ use std::rc::Rc;
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
 use crate::position::Position;
-use crate::window::SplitDir;
+use crate::window::{FocusDir, SplitDir};
 
 /// Every input source (keymap, command line, scripted automation) ultimately
 /// produces an [`Action`]. [`crate::state::State::apply`] is the single point
@@ -41,6 +41,8 @@ pub enum Action {
     WindowClose,
     /// Move focus to the next window in tree order, wrapping.
     WindowFocusNext,
+    /// Move focus to the nearest window in the given direction.
+    WindowFocus(FocusDir),
 
     KeymapSet {
         mode: EditingMode,

@@ -10,6 +10,30 @@ pub enum SplitDir {
     Vertical,
 }
 
+/// Cardinal direction for moving window focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FocusDir {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl FocusDir {
+    /// Which split orientation a step in this direction can traverse.
+    fn split_axis(self) -> SplitDir {
+        match self {
+            FocusDir::Left | FocusDir::Right => SplitDir::Horizontal,
+            FocusDir::Up | FocusDir::Down => SplitDir::Vertical,
+        }
+    }
+
+    /// True for Right/Down — directions that move toward later siblings.
+    fn forward(self) -> bool {
+        matches!(self, FocusDir::Right | FocusDir::Down)
+    }
+}
+
 impl SplitDir {
     fn as_ratatui(self) -> Direction {
         match self {
@@ -157,6 +181,55 @@ impl WindowTree {
         self.focused.push(1);
     }
 
+    /// Move focus to the nearest window in `dir`. Walks up the tree until it
+    /// finds an ancestor split whose orientation matches `dir` and that has a
+    /// sibling in the requested direction; then descends into that sibling's
+    /// leftmost/topmost leaf. No-op if no such ancestor exists (focus is
+    /// already at the edge along that axis).
+    pub fn focus_dir(&mut self, dir: FocusDir) {
+        let axis = dir.split_axis();
+        let forward = dir.forward();
+        let mut path = self.focused.clone();
+        while let Some(child_idx) = path.pop() {
+            let Some(Window::Split {
+                dir: split_dir,
+                children,
+            }) = self.node_at(&path)
+            else {
+                continue;
+            };
+            if *split_dir != axis {
+                continue;
+            }
+            let sibling = if forward {
+                (child_idx + 1 < children.len()).then_some(child_idx + 1)
+            } else {
+                (child_idx > 0).then(|| child_idx - 1)
+            };
+            let Some(sibling_idx) = sibling else { continue };
+            path.push(sibling_idx);
+            Self::descend_first_leaf(&self.root, &mut path);
+            self.focused = path;
+            return;
+        }
+    }
+
+    /// Extend `path` by descending through the first child of each Split
+    /// until it points at a Leaf.
+    fn descend_first_leaf(root: &Window, path: &mut LeafPath) {
+        let mut node = root;
+        for &i in path.iter() {
+            node = match node {
+                Window::Split { children, .. } => &children[i].1,
+                Window::Leaf { .. } => return,
+            };
+        }
+        while let Window::Split { children, .. } = node {
+            path.push(0);
+            node = &children[0].1;
+        }
+    }
+
     /// Move focus to the next leaf in tree order; wraps around.
     pub fn focus_next(&mut self) {
         let leaves = self.layout(Rect::default());
@@ -292,6 +365,48 @@ mod tests {
         assert_eq!(layout[0].bufno, 1);
         assert_eq!(layout[1].bufno, 2);
         assert_eq!(layout[2].bufno, 3);
+    }
+
+    #[test]
+    fn focus_dir_moves_across_horizontal_split() {
+        let mut t = WindowTree::new(1);
+        t.split(SplitDir::Horizontal, 2); // focus on 2 (right)
+        t.focus_dir(FocusDir::Left);
+        assert_eq!(t.focused_bufno(), 1);
+        t.focus_dir(FocusDir::Right);
+        assert_eq!(t.focused_bufno(), 2);
+    }
+
+    #[test]
+    fn focus_dir_moves_across_vertical_split() {
+        let mut t = WindowTree::new(1);
+        t.split(SplitDir::Vertical, 2); // focus on 2 (bottom)
+        t.focus_dir(FocusDir::Up);
+        assert_eq!(t.focused_bufno(), 1);
+        t.focus_dir(FocusDir::Down);
+        assert_eq!(t.focused_bufno(), 2);
+    }
+
+    #[test]
+    fn focus_dir_noop_at_edge() {
+        let mut t = WindowTree::new(1);
+        t.split(SplitDir::Horizontal, 2); // focus on 2 (rightmost)
+        t.focus_dir(FocusDir::Right);
+        assert_eq!(t.focused_bufno(), 2); // unchanged
+        t.focus_dir(FocusDir::Up);
+        assert_eq!(t.focused_bufno(), 2); // no vertical axis available
+    }
+
+    #[test]
+    fn focus_dir_skips_mismatched_split_axis() {
+        // Layout (Horizontal split):
+        //   [ 1 ] | [ Vertical: 2 over 3 ]
+        // From 3, focus-left should jump out of the vertical split and into 1.
+        let mut t = WindowTree::new(1);
+        t.split(SplitDir::Horizontal, 2); // focus on 2
+        t.split(SplitDir::Vertical, 3); // focus on 3, nested in the right half
+        t.focus_dir(FocusDir::Left);
+        assert_eq!(t.focused_bufno(), 1);
     }
 
     #[test]

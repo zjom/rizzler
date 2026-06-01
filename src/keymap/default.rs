@@ -1,7 +1,7 @@
 use crate::action::MoveKind as MK;
 use crate::keymap::{KeyCode as KC, KeyEvent, KeyModifiers, trie::Trie};
 use crate::position::Position;
-use crate::window::SplitDir;
+use crate::window::{FocusDir, SplitDir};
 use crate::{action::Action as A, mode::EditingMode};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -83,8 +83,12 @@ pub fn defaults() -> HashMap<EditingMode, Rc<Trie>> {
                         Rc::new(Trie::Node {
                             children: HashMap::from([
                                 (k(KC::Char('q')), leaf(A::WindowClose)),
-                                (k(KC::Char('v')), leaf(A::WindowSplit(SplitDir::Vertical))),
-                                (k(KC::Char('h')), leaf(A::WindowSplit(SplitDir::Horizontal))),
+                                (k(KC::Char('"')), leaf(A::WindowSplit(SplitDir::Vertical))),
+                                (k(KC::Char('|')), leaf(A::WindowSplit(SplitDir::Horizontal))),
+                                (k(KC::Char('h')), leaf(A::WindowFocus(FocusDir::Left))),
+                                (k(KC::Char('l')), leaf(A::WindowFocus(FocusDir::Right))),
+                                (k(KC::Char('k')), leaf(A::WindowFocus(FocusDir::Up))),
+                                (k(KC::Char('j')), leaf(A::WindowFocus(FocusDir::Down))),
                             ]),
                             on_char: None,
                         }),

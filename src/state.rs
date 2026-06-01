@@ -170,6 +170,7 @@ impl State {
                 Action::WindowSplit(dir) => self.window_split(*dir),
                 Action::WindowClose => self.window_close(),
                 Action::WindowFocusNext => self.windows.focus_next(),
+                Action::WindowFocus(d) => self.windows.focus_dir(*d),
                 Action::KeymapSet { mode, lhs, rhs } => {
                     self.keymap.set(*mode, lhs, rhs.clone());
                 }

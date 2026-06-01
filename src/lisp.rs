@@ -386,9 +386,27 @@ fn builtins() -> Env {
     });
 
     // minibuffer flow
+    //
+    // `command-submit` runs inside an `eval_lisp_value` frame (it's fired from
+    // the `<enter>` keybinding in command mode), so it cannot call back into
+    // `State::eval_lisp` — that would re-take `self.lisp` and panic. Parse and
+    // evaluate the user's input directly against `env` instead.
     b!("command-submit", 0, |_, env| {
-        apply(Action::CommandSubmit);
-        ok_unit(env)
+        let cmd = with_editor_mut(|st| st.take_minibuffer_command());
+        let src = wrap_shell_style(&cmd);
+        match risp::parse_and_run_with_env(src.as_bytes(), env) {
+            Ok((v, new_env)) => {
+                if !v.is_unit() {
+                    with_editor_mut(|st| st.set_minibuffer_message(&v.display()));
+                }
+                Ok((unit(), new_env))
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                with_editor_mut(|st| st.set_minibuffer_message(&msg));
+                ok_unit(env)
+            }
+        }
     });
     b!("command-cancel", 0, |_, env| {
         apply(Action::CommandCancel);
@@ -577,6 +595,24 @@ mod tests {
             KeyModifiers::NONE,
         ))
         .unwrap();
+        assert!(s.quit_requested());
+    }
+
+    #[test]
+    fn command_submit_via_minibuffer_does_not_recurse() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut s = test_state();
+        for (code, mods) in [
+            (KeyCode::Char(':'), KeyModifiers::NONE),
+            (KeyCode::Char('q'), KeyModifiers::NONE),
+            (KeyCode::Char('u'), KeyModifiers::NONE),
+            (KeyCode::Char('i'), KeyModifiers::NONE),
+            (KeyCode::Char('t'), KeyModifiers::NONE),
+            (KeyCode::Enter, KeyModifiers::NONE),
+        ] {
+            s.handle_key_event(crossterm::event::KeyEvent::new(code, mods))
+                .unwrap();
+        }
         assert!(s.quit_requested());
     }
 

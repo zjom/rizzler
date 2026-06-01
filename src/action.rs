@@ -23,7 +23,6 @@ pub enum Action {
     DeleteChar,
     MoveCursor(MoveKind),
 
-    CommandSubmit,
     CommandCancel,
 
     BufCreate {

@@ -10,7 +10,7 @@ use crate::{
     action::Action,
     buffer::{Buffer, BufferKind},
     keymap::KeymapRegistry,
-    lisp::{EditorGuard, LispRuntime, init_script_path, wrap_shell_style},
+    lisp::{EditorGuard, LispRuntime, init_script_path},
     mode::EditingMode,
     position::Position,
     render::{CursorStyle, Renderer, StateSnapshot},
@@ -155,6 +155,16 @@ impl State {
         }
     }
 
+    /// Read the current minibuffer text and leave the minibuffer. Used by the
+    /// `command-submit` lisp builtin, which then evaluates the text inline
+    /// using the env already in scope (calling back into `eval_lisp` from here
+    /// would re-take `self.lisp` and panic).
+    pub(crate) fn take_minibuffer_command(&mut self) -> String {
+        let cmd = self.bufs[self.minibuffer].text();
+        self.exit_minibuffer();
+        cmd
+    }
+
     /// The buffer currently receiving key events.
     fn focused_bufno(&self) -> usize {
         if self.focus_minibuffer {
@@ -221,16 +231,6 @@ impl State {
                 Action::MoveCursor(m) => {
                     let f = self.focused_bufno();
                     self.bufs[f].move_cursor(*m);
-                }
-                Action::CommandSubmit => {
-                    let cmd = self.bufs[self.minibuffer].text();
-                    self.exit_minibuffer();
-                    let src = wrap_shell_style(&cmd);
-                    match self.eval_lisp(&src) {
-                        Ok(v) if !v.is_unit() => self.set_minibuffer_message(&v.display()),
-                        Err(e) => self.set_minibuffer_message(&e.to_string()),
-                        _ => {}
-                    }
                 }
                 Action::CommandCancel => self.exit_minibuffer(),
                 Action::BufCreate { path, set_active } => {

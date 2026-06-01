@@ -9,6 +9,7 @@ mod render;
 mod render_ratatui;
 mod state;
 mod terminal;
+mod window;
 
 use std::{io, time::Duration};
 

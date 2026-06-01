@@ -8,28 +8,35 @@ use ratatui::{
 };
 
 use crate::{
-    components::{Component, EditorView, StatusLine},
+    components::{Component, EditorView, MinibufferLine, StatusLine},
     render::{CursorStyle, Renderer, StateSnapshot},
 };
 
+/// Bottom-of-screen strip components, rendered in order below the editor
+/// window tree. The renderer always reserves one row per component here.
 pub struct RatatuiRenderer {
     term: Terminal<CrosstermBackend<Stdout>>,
-    components: Vec<Box<dyn Component>>,
+    editor: EditorView,
+    bottom: Vec<Box<dyn Component>>,
 }
 
 impl RatatuiRenderer {
     pub fn new() -> io::Result<Self> {
-        Self::with_components(vec![
-            Box::new(EditorView::default()),
-            Box::new(StatusLine::default()),
-        ])
+        Self::with_parts(
+            EditorView::default(),
+            vec![Box::new(StatusLine::default()), Box::new(MinibufferLine)],
+        )
     }
 
-    pub fn with_components(components: Vec<Box<dyn Component>>) -> io::Result<Self> {
+    pub fn with_parts(
+        editor: EditorView,
+        bottom: Vec<Box<dyn Component>>,
+    ) -> io::Result<Self> {
         let backend = CrosstermBackend::new(io::stdout());
         Ok(Self {
             term: Terminal::new(backend)?,
-            components,
+            editor,
+            bottom,
         })
     }
 }
@@ -44,19 +51,40 @@ impl Renderer for RatatuiRenderer {
         };
         execute!(io::stdout(), style)?;
 
+        let editor = &self.editor;
+        let bottom = &self.bottom;
+
         self.term.draw(|f| {
-            let constraints: Vec<Constraint> =
-                self.components.iter().map(|c| c.constraint()).collect();
+            // Vertical layout: window-tree area on top, then one row per
+            // bottom component.
+            let mut constraints = vec![Constraint::Min(1)];
+            for c in bottom {
+                constraints.push(c.constraint());
+            }
             let rects = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints(constraints)
                 .split(f.area());
+            let editor_area = rects[0];
 
-            // Render each component into its assigned rect; pick up the
-            // cursor from whichever component owns it (last `Some` wins, so
-            // a floating component drawn on top can override).
+            // Walk the window tree, render each leaf with EditorView. The
+            // focused leaf publishes the cursor (unless focus is in the
+            // minibuffer, in which case MinibufferLine will override below).
             let mut cursor = None;
-            for (c, area) in self.components.iter().zip(rects.iter()) {
+            let focused_path = snap.windows.focused_path();
+            for leaf in snap.windows.layout(editor_area) {
+                let buf = match snap.bufs.get(leaf.bufno) {
+                    Some(b) => b,
+                    None => continue,
+                };
+                editor.render(buf, leaf.area, f);
+                if !snap.focus_minibuffer && &leaf.path == focused_path {
+                    cursor = Some(editor.cursor(buf, leaf.area));
+                }
+            }
+
+            // Bottom strip — each component gets its assigned row.
+            for (c, area) in bottom.iter().zip(rects.iter().skip(1)) {
                 c.render(*area, &snap, f);
                 if let Some(pos) = c.cursor(*area, &snap) {
                     cursor = Some(pos);
@@ -69,3 +97,4 @@ impl Renderer for RatatuiRenderer {
         Ok(())
     }
 }
+

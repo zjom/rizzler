@@ -27,7 +27,7 @@ impl StatusLine {
 impl Default for StatusLine {
     fn default() -> Self {
         Self::new(
-            vec![Box::new(ModeGlyph), Box::new(CommandBuf)],
+            vec![Box::new(ModeGlyph)],
             vec![Box::new(LastKey), Box::new(Spacer(2)), Box::new(BufferNo)],
         )
     }
@@ -59,19 +59,12 @@ impl Component for StatusLine {
 pub struct ModeGlyph;
 impl Segment for ModeGlyph {
     fn render(&self, snap: &StateSnapshot<'_>) -> Span<'static> {
-        Span::raw(match snap.mode {
+        Span::raw(match snap.focused().mode() {
             EditingMode::Insert => "i",
             EditingMode::Normal => "n",
             EditingMode::Visual => "v",
             EditingMode::Command => ":",
         })
-    }
-}
-
-pub struct CommandBuf;
-impl Segment for CommandBuf {
-    fn render(&self, snap: &StateSnapshot<'_>) -> Span<'static> {
-        Span::raw(snap.command_buf.to_string())
     }
 }
 

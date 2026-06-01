@@ -170,6 +170,7 @@ dependencies = [
 name = "editor"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "crossterm 0.29.0",
  "ratatui",
  "ropey",

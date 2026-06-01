@@ -7,3 +7,9 @@ pub enum EditingMode {
     Visual,
     Command,
 }
+
+impl Default for EditingMode {
+    fn default() -> Self {
+        Self::Normal
+    }
+}

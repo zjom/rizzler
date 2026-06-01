@@ -5,6 +5,7 @@ use std::rc::Rc;
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
 use crate::position::Position;
+use crate::window::SplitDir;
 
 /// Every input source (keymap, command line, scripted automation) ultimately
 /// produces an [`Action`]. [`crate::state::State::apply`] is the single point
@@ -21,8 +22,6 @@ pub enum Action {
     DeleteChar,
     MoveCursor(MoveKind),
 
-    CommandPush(char),
-    CommandPop,
     CommandSubmit,
     CommandCancel,
 
@@ -35,6 +34,13 @@ pub enum Action {
     BufNext,
     BufPrev,
     BufWrite(Option<Rc<Path>>),
+
+    /// Split the focused window; the new pane gets a fresh scratch buffer.
+    WindowSplit(SplitDir),
+    /// Close the focused window. No-op when only one window remains.
+    WindowClose,
+    /// Move focus to the next window in tree order, wrapping.
+    WindowFocusNext,
 
     KeymapSet {
         mode: EditingMode,

@@ -1,3 +1,4 @@
+use bitflags::bitflags;
 use ropey::{Rope, RopeSlice, iter::Lines};
 use std::{
     io::{self},
@@ -6,8 +7,33 @@ use std::{
     str::FromStr,
 };
 
-use crate::{action::MoveKind, position::Position};
+use crate::{action::MoveKind, mode::EditingMode, position::Position};
 
+/// What sort of buffer this is. Drives default mode and gates operations like
+/// BufDelete/BufNext — the minibuffer participates in everything a file
+/// buffer does but is excluded from user-visible buffer cycling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BufferKind {
+    #[default]
+    File,
+    Minibuffer,
+}
+
+// bitflags! {
+//     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+//     pub struct Permissions: u8 {
+//         const FOCUS = 0b1;
+//         const EDIT = 0b11;
+//         const WRITE = 0b111;
+//     }
+// }
+//
+// impl Default for Permissions {
+//     fn default() -> Self {
+//         Self::empty()
+//     }
+// }
+//
 #[derive(Debug, Clone, Default)]
 pub struct Buffer {
     pub(crate) buf: Rope,
@@ -18,11 +44,49 @@ pub struct Buffer {
     /// movement scrolls `file_pos` to keep the cursor in view. Default zero
     /// means "no viewport" — scrolling is a no-op (useful in tests).
     pub(crate) viewport: Position<u16>,
+    pub(crate) kind: BufferKind,
+    pub(crate) mode: EditingMode,
+    // pub(crate) permissions: Permissions,
 }
 
 impl Buffer {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Construct the editor's minibuffer — single-line, starts in Command mode,
+    /// used as the destination for `:`-style command input.
+    pub fn minibuffer() -> Self {
+        Self {
+            kind: BufferKind::Minibuffer,
+            mode: EditingMode::Command,
+            ..Self::default()
+        }
+    }
+
+    pub fn kind(&self) -> BufferKind {
+        self.kind
+    }
+
+    pub fn mode(&self) -> EditingMode {
+        self.mode
+    }
+
+    pub fn set_mode(&mut self, mode: EditingMode) {
+        self.mode = mode;
+    }
+
+    /// Reset rope content and cursor — used when the minibuffer finishes
+    /// processing a command and needs to be empty again.
+    pub fn clear(&mut self) {
+        self.buf = Rope::new();
+        self.cursor_pos = Position::default();
+        self.file_pos = Position::default();
+    }
+
+    /// Owned snapshot of the rope text — used by command parsing.
+    pub fn text(&self) -> String {
+        self.buf.to_string()
     }
 
     pub fn from_reader(r: impl io::Read) -> io::Result<Self> {
@@ -43,7 +107,7 @@ impl Buffer {
         buf
     }
 
-    /// Writes the contents of the buffer to disk.
+    /// Writes the contents of the buffer to disk
     ///
     /// Sets [Self::fs_path] to whichever path was sucessful.
     /// Priority:
@@ -52,6 +116,9 @@ impl Buffer {
     ///
     /// Noop if both are None (returns Ok)
     pub fn write(&mut self, path: Option<Rc<Path>>) -> io::Result<()> {
+        // if !self.permissions.contains(Permissions::WRITE) {
+        //     return Ok(());
+        // }
         let resolved = path.or_else(|| self.fs_path.take());
 
         if let Some(path) = resolved {

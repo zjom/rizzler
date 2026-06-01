@@ -6,18 +6,21 @@ use crossterm::event::KeyEvent;
 
 use crate::{
     action::Action,
-    buffer::Buffer,
+    buffer::{Buffer, BufferKind},
     command::{CommandRegistry, DefaultCommands},
     keymap::KeymapRegistry,
     mode::EditingMode,
     position::Position,
     render::{CursorStyle, Renderer, StateSnapshot},
     render_ratatui::RatatuiRenderer,
+    window::{SplitDir, WindowTree},
 };
 
-/// The status line takes one row at the bottom. Subtract it from the
-/// terminal height to get the editor view's visible row count.
+/// Bottom-of-screen reservation: one row for the status line, one for the
+/// minibuffer. Subtracted from the terminal height when sizing the editor
+/// area for the window tree.
 const STATUS_LINE_ROWS: u16 = 1;
+const MINIBUFFER_ROWS: u16 = 1;
 
 /// Bundle of plugin points injected into [`State`]. Swap any field to
 /// customise the editor without touching `State`'s internals.
@@ -36,10 +39,17 @@ impl Config {
 }
 
 pub struct State {
+    /// All live buffers. Index 0 is the minibuffer by construction; file
+    /// buffers occupy index 1..
     bufs: Vec<Buffer>,
-    bufno: usize,
-    mode: EditingMode,
-    command_buf: String,
+    /// Tree of editor windows. Leaves point at indices into `bufs`. The
+    /// minibuffer is not part of this tree.
+    windows: WindowTree,
+    /// When true, key events route to the minibuffer instead of the focused
+    /// editor window.
+    focus_minibuffer: bool,
+    /// Index of the minibuffer (always kind = Minibuffer).
+    minibuffer: usize,
     quit: bool,
     keymap: KeymapRegistry,
     commands: Box<dyn CommandRegistry>,
@@ -53,11 +63,13 @@ impl State {
     }
 
     pub fn with_config(config: Config) -> io::Result<Self> {
+        // Layout: [minibuffer, first file buffer]. The window tree starts as
+        // a single leaf pointing at the file buffer.
         let mut state = Self {
-            bufs: vec![Buffer::new()],
-            bufno: 0,
-            mode: EditingMode::Normal,
-            command_buf: String::new(),
+            bufs: vec![Buffer::minibuffer(), Buffer::new()],
+            windows: WindowTree::new(1),
+            focus_minibuffer: false,
+            minibuffer: 0,
             quit: false,
             keymap: KeymapRegistry::new(),
             commands: config.commands,
@@ -68,15 +80,31 @@ impl State {
         Ok(state)
     }
 
-    /// Update the active buffer's viewport size from the current terminal
-    /// dimensions. Called before clamp_cursor so scrolling reacts to resizes
-    /// between key events. Silently ignores terminal::size errors so tests
-    /// without a real TTY still work.
-    fn refresh_viewport(&mut self) {
-        if let Ok((cols, rows)) = crossterm::terminal::size() {
-            self.bufs[self.bufno].viewport =
-                Position::new(cols, rows.saturating_sub(STATUS_LINE_ROWS));
+    /// The buffer currently receiving key events.
+    fn focused_bufno(&self) -> usize {
+        if self.focus_minibuffer {
+            self.minibuffer
+        } else {
+            self.windows.focused_bufno()
         }
+    }
+
+    /// Update viewports of all buffers currently displayed in a window plus
+    /// the minibuffer. Per-leaf rect comes from the window tree layout.
+    /// Silently ignores terminal::size errors so tests without a real TTY
+    /// still work.
+    fn refresh_viewport(&mut self) {
+        let Ok((cols, rows)) = crossterm::terminal::size() else {
+            return;
+        };
+        let editor_h = rows.saturating_sub(STATUS_LINE_ROWS + MINIBUFFER_ROWS);
+        let editor_area = ratatui::layout::Rect::new(0, 0, cols, editor_h);
+        for leaf in self.windows.layout(editor_area) {
+            if let Some(buf) = self.bufs.get_mut(leaf.bufno) {
+                buf.viewport = Position::new(leaf.area.width, leaf.area.height);
+            }
+        }
+        self.bufs[self.minibuffer].viewport = Position::new(cols, MINIBUFFER_ROWS);
     }
 
     pub fn quit_requested(&self) -> bool {
@@ -85,14 +113,15 @@ impl State {
 
     pub fn handle_key_event(&mut self, event: KeyEvent) -> io::Result<()> {
         self.keyevent = Some(event);
-        if let Some(action) = self.keymap.resolve(self.mode, event.into()) {
+        let mode = self.bufs[self.focused_bufno()].mode();
+        if let Some(action) = self.keymap.resolve(mode, event.into()) {
             self.apply(&action)?;
         }
-        // Refresh after apply: BufCreate/BufEdit may have switched the
-        // active buffer, and we want clamp_cursor to scroll using the
-        // viewport of the buffer that's about to be drawn.
+        // Refresh after apply: window splits/closes and buffer switches may
+        // have changed which buffer occupies which viewport.
         self.refresh_viewport();
-        self.bufs[self.bufno].clamp_cursor();
+        let focused = self.focused_bufno();
+        self.bufs[focused].clamp_cursor();
         self.render()
     }
 
@@ -101,35 +130,46 @@ impl State {
             match action.as_ref() {
                 Action::Noop => {}
                 Action::Quit => self.quit = true,
-                Action::SetMode(m) => self.mode = *m,
-                Action::InsertChar(c) => self.bufs[self.bufno].insert_char(*c),
-                Action::InsertNewline => self.bufs[self.bufno].insert_char('\n'),
-                Action::DeleteChar => self.bufs[self.bufno].delete_char(),
-                Action::MoveCursor(m) => self.bufs[self.bufno].move_cursor(*m),
-                Action::CommandPush(c) => self.command_buf.push(*c),
-                Action::CommandPop => {
-                    self.command_buf.pop();
+                Action::SetMode(m) => self.set_mode(*m),
+                Action::InsertChar(c) => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].insert_char(*c);
+                }
+                Action::InsertNewline => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].insert_char('\n');
+                }
+                Action::DeleteChar => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].delete_char();
+                }
+                Action::MoveCursor(m) => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].move_cursor(*m);
                 }
                 Action::CommandSubmit => {
-                    let next = self.commands.parse(&self.command_buf);
-                    self.command_buf.clear();
-                    self.mode = EditingMode::Normal;
+                    let cmd = self.bufs[self.minibuffer].text();
+                    self.exit_minibuffer();
+                    let next = self.commands.parse(&cmd);
                     self.apply(&[Rc::new(next)])?;
                 }
-                Action::CommandCancel => {
-                    self.command_buf.clear();
-                    self.mode = EditingMode::Normal;
-                }
+                Action::CommandCancel => self.exit_minibuffer(),
                 Action::BufCreate { path, set_active } => {
                     self.create_buf(*set_active, path.clone())?;
                 }
-                Action::BufDelete => self.delete_buf(self.bufno),
+                Action::BufDelete => {
+                    let editor = self.windows.focused_bufno();
+                    self.delete_buf(editor);
+                }
                 Action::BufNext => self.next_buffer(),
                 Action::BufPrev => self.previous_buffer(),
                 Action::BufEdit(path) => {
                     self.edit_buf(path.clone())?;
                 }
                 Action::BufWrite(path) => self.write_buf(path.clone())?,
+                Action::WindowSplit(dir) => self.window_split(*dir),
+                Action::WindowClose => self.window_close(),
+                Action::WindowFocusNext => self.windows.focus_next(),
                 Action::KeymapSet { mode, lhs, rhs } => {
                     self.keymap.set(*mode, lhs, rhs.clone());
                 }
@@ -139,6 +179,28 @@ impl State {
             }
         }
         Ok(())
+    }
+
+    /// Apply a SetMode action. Command is special: it moves focus to the
+    /// minibuffer instead of changing an editor buffer's mode.
+    fn set_mode(&mut self, mode: EditingMode) {
+        if mode == EditingMode::Command {
+            self.bufs[self.minibuffer].set_mode(EditingMode::Command);
+            self.focus_minibuffer = true;
+        } else {
+            let f = self.focused_bufno();
+            self.bufs[f].set_mode(mode);
+        }
+    }
+
+    /// Clear the minibuffer, drop focus from it, and reset the focused
+    /// editor buffer to Normal mode.
+    fn exit_minibuffer(&mut self) {
+        self.bufs[self.minibuffer].clear();
+        self.bufs[self.minibuffer].set_mode(EditingMode::Command);
+        self.focus_minibuffer = false;
+        let editor = self.windows.focused_bufno();
+        self.bufs[editor].set_mode(EditingMode::Normal);
     }
 
     fn create_buf(&mut self, set_active: bool, path: Option<Rc<Path>>) -> io::Result<usize> {
@@ -155,7 +217,7 @@ impl State {
         self.bufs.push(buf);
         let bufno = self.bufs.len() - 1;
         if set_active {
-            self.bufno = bufno;
+            self.windows.set_focused_bufno(bufno);
         }
         Ok(bufno)
     }
@@ -167,67 +229,114 @@ impl State {
             .position(|b| b.fs_path.as_ref() == Some(&path));
         match idx {
             Some(idx) => {
-                self.bufno = idx - 1;
-                Ok(self.bufno)
+                self.windows.set_focused_bufno(idx);
+                Ok(idx)
             }
             None => {
                 self.bufs.push(Buffer::with_path(path));
-                self.bufno = self.bufs.len() - 1;
-                Ok(self.bufno)
+                let idx = self.bufs.len() - 1;
+                self.windows.set_focused_bufno(idx);
+                Ok(idx)
             }
         }
     }
 
     fn write_buf(&mut self, path: Option<Rc<Path>>) -> io::Result<()> {
-        self.bufs[self.bufno].write(path)
+        let editor = self.windows.focused_bufno();
+        self.bufs[editor].write(path)
     }
 
+    /// Refuses to delete the minibuffer; keeps at least one file buffer alive.
     fn delete_buf(&mut self, bufno: usize) {
-        if bufno >= self.bufs.len() {
+        if bufno >= self.bufs.len() || self.bufs[bufno].kind() == BufferKind::Minibuffer {
             return;
         }
 
-        // Never drop the final buffer — just reset it to an empty one.
-        if self.bufs.len() == 1 {
-            self.bufs[0] = Buffer::new();
-            self.bufno = 0;
+        if self.file_buf_count() == 1 {
+            // Last file buffer: reset it in place instead of removing.
+            self.bufs[bufno] = Buffer::new();
+            self.windows.for_each_leaf_mut(|b| *b = bufno);
             return;
         }
 
         self.bufs.remove(bufno);
-
-        if self.bufno > bufno {
-            self.bufno -= 1;
-        } else if self.bufno >= self.bufs.len() {
-            self.bufno = self.bufs.len() - 1;
+        if self.minibuffer > bufno {
+            self.minibuffer -= 1;
         }
+        // Reindex every leaf that pointed past the removed buffer; any leaf
+        // that pointed AT the removed buffer falls back to the first file buf.
+        let first = self.first_file_buf();
+        self.windows.for_each_leaf_mut(|b| {
+            if *b == bufno {
+                *b = first;
+            } else if *b > bufno {
+                *b -= 1;
+            }
+        });
     }
 
+    fn window_split(&mut self, dir: SplitDir) {
+        // New pane gets a fresh scratch buffer.
+        self.bufs.push(Buffer::new());
+        let new_bufno = self.bufs.len() - 1;
+        self.windows.split(dir, new_bufno);
+    }
+
+    fn window_close(&mut self) {
+        self.windows.close_focused();
+    }
+
+    fn file_buf_count(&self) -> usize {
+        self.bufs
+            .iter()
+            .filter(|b| b.kind() != BufferKind::Minibuffer)
+            .count()
+    }
+
+    fn first_file_buf(&self) -> usize {
+        self.bufs
+            .iter()
+            .position(|b| b.kind() != BufferKind::Minibuffer)
+            .expect("at least one file buffer always exists")
+    }
+
+    /// Cycle the focused window to the previous file buffer in `bufs`,
+    /// skipping the minibuffer.
     fn previous_buffer(&mut self) {
-        if self.bufno == 0 {
-            self.bufno = self.bufs.len() - 1;
-            return;
+        let n = self.bufs.len();
+        let mut i = self.windows.focused_bufno();
+        for _ in 0..n {
+            i = if i == 0 { n - 1 } else { i - 1 };
+            if self.bufs[i].kind() != BufferKind::Minibuffer {
+                self.windows.set_focused_bufno(i);
+                return;
+            }
         }
-        self.bufno -= 1;
     }
 
     fn next_buffer(&mut self) {
-        if self.bufno == self.bufs.len() - 1 {
-            self.bufno = 0;
-            return;
+        let n = self.bufs.len();
+        let mut i = self.windows.focused_bufno();
+        for _ in 0..n {
+            i = if i + 1 >= n { 0 } else { i + 1 };
+            if self.bufs[i].kind() != BufferKind::Minibuffer {
+                self.windows.set_focused_bufno(i);
+                return;
+            }
         }
-        self.bufno += 1;
     }
 
     pub fn render(&mut self) -> io::Result<()> {
+        let focused = self.focused_bufno();
         let snap = StateSnapshot {
-            buffer: &self.bufs[self.bufno],
-            mode: self.mode,
-            command_buf: self.command_buf.as_str(),
-            bufno: self.bufno,
+            bufs: &self.bufs,
+            windows: &self.windows,
+            minibuffer: &self.bufs[self.minibuffer],
+            focus_minibuffer: self.focus_minibuffer,
+            bufno: self.windows.focused_bufno(),
             keyevent: self.keyevent.map(|e| e.into()),
-            cursor_style: match self.mode {
-                EditingMode::Insert => CursorStyle::Bar,
+            cursor_style: match self.bufs[focused].mode() {
+                EditingMode::Insert | EditingMode::Command => CursorStyle::Bar,
                 _ => CursorStyle::Block,
             },
         };
@@ -258,6 +367,15 @@ mod tests {
     #[test]
     fn render_does_not_panic_on_empty_buffer() {
         let mut s = test_state();
+        s.render().unwrap();
+    }
+
+    #[test]
+    fn split_then_close_returns_to_single_window() {
+        let mut s = test_state();
+        s.apply(&[Rc::new(Action::WindowSplit(SplitDir::Horizontal))])
+            .unwrap();
+        s.apply(&[Rc::new(Action::WindowClose)]).unwrap();
         s.render().unwrap();
     }
 }

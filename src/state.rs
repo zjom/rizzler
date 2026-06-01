@@ -1,6 +1,6 @@
-use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::{io, process};
 
 use crossterm::event::KeyEvent;
 use rizz::RizzError;
@@ -66,6 +66,7 @@ pub struct State {
     /// line decorators, bottom-strip components). Owned, not RefCell — only
     /// the lisp builtins that hold `&mut State` mutate it.
     slots: SlotRegistry,
+    workdir: Rc<Path>,
 }
 
 impl State {
@@ -74,6 +75,7 @@ impl State {
     }
 
     pub fn with_config(config: Config) -> io::Result<Self> {
+        let workdir = std::env::current_dir()?;
         // Layout: [minibuffer, first file buffer]. The window tree starts as
         // a single leaf pointing at the file buffer.
         let mut state = Self {
@@ -88,6 +90,7 @@ impl State {
             lisp: Some(LispRuntime::new()),
             theme: ThemeCell::default(),
             slots: SlotRegistry::new(),
+            workdir: workdir.into(),
         };
         state.refresh_viewport();
 
@@ -189,6 +192,10 @@ impl State {
         let cmd = self.bufs[self.minibuffer].text();
         self.exit_minibuffer();
         cmd
+    }
+
+    pub(crate) fn workdir(&self) -> Rc<Path> {
+        self.workdir.clone()
     }
 
     /// The buffer currently receiving key events.

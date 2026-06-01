@@ -586,6 +586,15 @@ fn builtins() -> Env {
         Ok((Rc::new(Value::Str(s.into())), env.clone()))
     });
 
+    // the directory that the editor was started in
+    b!("work-dir", 0, |_, env| {
+        let d: Rc<str> = with_editor_mut(|st| st.workdir())
+            .to_string_lossy()
+            .as_ref()
+            .into();
+        Ok((Rc::new(d.into()), env.clone()))
+    });
+
     b!("read-dir", 1, |args, env| {
         let path = as_str(&args[0], "read-dir")?;
         let dirs = std::fs::read_dir(path.as_ref())?

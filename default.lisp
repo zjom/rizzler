@@ -44,3 +44,5 @@
 (keymap-set 'command "<enter>"     '(command-submit))
 (keymap-set 'command "<backspace>" '(delete-char))
 (keymap-set 'command "<esc>"       '(command-cancel))
+(keymap-set 'command "<left>"      '(move-cursor 'left))
+(keymap-set 'command "<right>"     '(move-cursor 'right))

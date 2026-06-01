@@ -68,6 +68,7 @@
 ;; visual (characterwise)
 (fn bind-visual-motions (mode)
     (do
+      (keymap-set mode ":"        '(set-mode 'command))
       (keymap-set mode "<esc>"    '(set-mode 'normal))
       (keymap-set mode "v"        '(set-mode 'normal))
       (keymap-set mode "V"        '(set-mode 'visual-line))

@@ -587,7 +587,7 @@ fn builtins() -> Env {
     });
 
     // the directory that the editor was started in
-    b!("dir-work", 0, |_, env| {
+    b!("dir-root", 0, |_, env| {
         let d: Rc<str> = with_editor_mut(|st| st.workdir())
             .to_string_lossy()
             .as_ref()

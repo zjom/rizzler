@@ -1,4 +1,3 @@
-use bitflags::bitflags;
 use ropey::{Rope, RopeSlice, iter::Lines};
 use std::{
     io::{self},
@@ -7,7 +6,7 @@ use std::{
     str::FromStr,
 };
 
-use crate::{action::MoveKind, mode::EditingMode, position::Position};
+use crate::{mode::EditingMode, position::Position};
 
 /// What sort of buffer this is. Drives default mode and gates operations like
 /// BufDelete/BufNext — the minibuffer participates in everything a file
@@ -19,21 +18,23 @@ pub enum BufferKind {
     Minibuffer,
 }
 
-// bitflags! {
-//     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-//     pub struct Permissions: u8 {
-//         const FOCUS = 0b1;
-//         const EDIT = 0b11;
-//         const WRITE = 0b111;
-//     }
-// }
-//
-// impl Default for Permissions {
-//     fn default() -> Self {
-//         Self::empty()
-//     }
-// }
-//
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+pub enum MoveKind {
+    LineStart,
+    LineEnd,
+    FileStart,
+    FileEnd,
+    WordStart,
+    WordEnd,
+    Relative(Position<i16>),   // up, down, left, right of cursor
+    Absolute(Position<usize>), // position in file
+    LineNum(usize),
+    HalfPageDown,
+    HalfPageUp,
+    /// Vim's `zz` — re-center the viewport on the cursor without moving it.
+    Center,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Buffer {
     pub(crate) buf: Rope,

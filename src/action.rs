@@ -1,10 +1,10 @@
 #![allow(dead_code)]
+use crate::buffer::MoveKind;
 use std::path::Path;
 use std::rc::Rc;
 
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
-use crate::position::Position;
 use crate::window::{FocusDir, SplitDir};
 
 /// Every input source (keymap, command line, scripted automation) ultimately
@@ -54,21 +54,4 @@ pub enum Action {
         mode: EditingMode,
         lhs: Vec<KeyEvent>,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
-pub enum MoveKind {
-    LineStart,
-    LineEnd,
-    FileStart,
-    FileEnd,
-    WordStart,
-    WordEnd,
-    Relative(Position<i16>),   // up, down, left, right of cursor
-    Absolute(Position<usize>), // position in file
-    LineNum(usize),
-    HalfPageDown,
-    HalfPageUp,
-    /// Vim's `zz` — re-center the viewport on the cursor without moving it.
-    Center,
 }

@@ -1,6 +1,6 @@
 use std::{path::PathBuf, str::FromStr};
 
-use crate::action::{Action, MoveKind};
+use crate::{action::Action, buffer::MoveKind};
 
 /// Maps a typed `:command` string to an [`Action`]. Implement this trait to
 /// provide alternate or extended command sets.

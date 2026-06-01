@@ -1,4 +1,4 @@
-use crate::action::MoveKind as MK;
+use crate::buffer::MoveKind as MK;
 use crate::keymap::{KeyCode as KC, KeyEvent, KeyModifiers, trie::Trie};
 use crate::position::Position;
 use crate::window::{FocusDir, SplitDir};

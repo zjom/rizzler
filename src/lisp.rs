@@ -392,12 +392,12 @@ fn builtins() -> Env {
     });
 
     // queries
-    b!("buffer-text", 0, |_, env| {
+    b!("buf-text", 0, |_, env| {
         let s = with_editor_mut(|st| st.focused_buf().text());
         Ok((Rc::new(s.into()), env.clone()))
     });
 
-    b!("buffer-path", 0, |_, env| {
+    b!("buf-path", 0, |_, env| {
         let v: Value = with_editor_mut(|st| st.focused_buf().fs_path())
             .map(|p| p.to_string_lossy().as_ref().into())
             .map(|s: Rc<str>| Value::Str(s))
@@ -617,7 +617,8 @@ fn builtins() -> Env {
             .collect::<Result<Vector<Value>, std::io::Error>>()?;
         Ok((Rc::new(dirs.into()), env.clone()))
     });
-    alias!("ls"=>"dir-read");
+    alias!("ls"=>"fs-readdir");
+    alias!("readdir"=>"fs-readdir");
 
     b!("exec", 1, |args, env| {
         let cmd_args = as_str(&args[0], "exec")?;

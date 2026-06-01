@@ -592,10 +592,20 @@ mod tests {
     #[test]
     fn line_end_does_not_land_on_newline() {
         let mut s = mk("abc\ndef");
+        s.mode = EditingMode::Insert;
         s.cursor_pos = Position::<u16>::new(0, 0);
         s.move_cursor(MoveKind::LineEnd);
         assert_eq!(s.cursor_pos.row, 0);
         assert_eq!(s.cursor_pos.col, 3); // just past 'c', not on '\n'
+    }
+    #[test]
+    fn line_end_lands_on_last_char_in_normal_mode() {
+        let mut s = mk("abc\ndef");
+        s.mode = EditingMode::Normal;
+        s.cursor_pos = Position::<u16>::new(0, 0);
+        s.move_cursor(MoveKind::LineEnd);
+        assert_eq!(s.cursor_pos.row, 0);
+        assert_eq!(s.cursor_pos.col, 2); // on 'c'
     }
 
     #[test]
@@ -750,6 +760,7 @@ mod tests {
     #[test]
     fn clamp_does_not_allow_landing_on_newline() {
         let mut s = mk("abc\ndef");
+        s.mode = EditingMode::Insert;
         s.cursor_pos = Position::<u16>::new(10, 0);
         s.clamp_cursor();
         assert_eq!(s.cursor_pos.row, 0);

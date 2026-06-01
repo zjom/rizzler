@@ -165,7 +165,7 @@ pub fn init_script_path() -> Option<PathBuf> {
 /// * Anything else is wrapped in parens.
 ///   `head arg1 arg2 ...` and becomes `(head arg1 arg2 ...)`.
 /// * Empty input becomes `()` (a no-op).
-pub fn wrap_shell_style(input: &str) -> String {
+fn wrap_shell_style(input: &str) -> String {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return "()".into();

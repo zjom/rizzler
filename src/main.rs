@@ -20,6 +20,7 @@ use crossterm::event::{self, Event};
 use crate::{state::State, terminal::TerminalGuard};
 
 fn main() -> io::Result<()> {
+    terminal::install_panic_hook();
     let _guard = TerminalGuard::new()?;
     let mut state = State::new()?;
     state.render()?; // initial render

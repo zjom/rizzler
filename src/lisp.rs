@@ -190,8 +190,9 @@ pub fn init_script_path() -> Option<PathBuf> {
 ///
 /// * `(...)` passes through as-is.
 /// * A bare integer becomes `(line N)` — preserves the legacy `:42` jump.
-/// * Anything else is `head arg1 arg2 ...` and becomes
-///   `(head "arg1" "arg2" ...)`. Empty input becomes `()` (a no-op).
+/// * Anything else is wrapped in parens.
+///   `head arg1 arg2 ...` and becomes `(head arg1 arg2 ...)`.
+/// * Empty input becomes `()` (a no-op).
 pub fn wrap_shell_style(input: &str) -> String {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -210,14 +211,7 @@ pub fn wrap_shell_style(input: &str) -> String {
     out.push_str(head);
     for arg in parts {
         out.push(' ');
-        out.push('"');
-        for c in arg.chars() {
-            if c == '\\' || c == '"' {
-                out.push('\\');
-            }
-            out.push(c);
-        }
-        out.push('"');
+        out.push_str(arg);
     }
     out.push(')');
     out
@@ -625,8 +619,9 @@ mod tests {
     #[test]
     fn wrap_shell_style_translates_input() {
         assert_eq!(wrap_shell_style("quit"), "(quit)");
-        assert_eq!(wrap_shell_style("edit foo.txt"), "(edit \"foo.txt\")");
+        assert_eq!(wrap_shell_style("edit foo.txt"), "(edit foo.txt)");
         assert_eq!(wrap_shell_style("(+ 1 2)"), "(+ 1 2)");
+        assert_eq!(wrap_shell_style("+ 1 2"), "(+ 1 2)");
         assert_eq!(wrap_shell_style("42"), "(line 42)");
         assert_eq!(wrap_shell_style("   "), "()");
     }

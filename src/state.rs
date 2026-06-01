@@ -3,8 +3,8 @@ use std::path::Path;
 use std::rc::Rc;
 
 use crossterm::event::KeyEvent;
-use risp::RispError;
-use risp::runtime::Value;
+use rizz::RizzError;
+use rizz::runtime::Value;
 
 use crate::{
     action::Action,
@@ -111,7 +111,7 @@ impl State {
 
     /// Parse `src` as one lisp form and evaluate it in the embedded runtime.
     /// Re-entrant calls panic — see [`crate::lisp::EditorGuard`].
-    pub fn eval_lisp(&mut self, src: &str) -> Result<Rc<Value>, RispError> {
+    pub fn eval_lisp(&mut self, src: &str) -> Result<Rc<Value>, RizzError> {
         let mut lisp = self
             .lisp
             .take()
@@ -125,7 +125,7 @@ impl State {
     }
 
     /// Evaluate an already-parsed form. Used to dispatch keymap-bound lisp.
-    pub fn eval_lisp_value(&mut self, form: Rc<Value>) -> Result<Rc<Value>, RispError> {
+    pub fn eval_lisp_value(&mut self, form: Rc<Value>) -> Result<Rc<Value>, RizzError> {
         let mut lisp = self
             .lisp
             .take()
@@ -139,7 +139,7 @@ impl State {
     }
 
     /// Evaluate a multi-form script (e.g. `default.lisp`, `init.lisp`).
-    pub fn eval_lisp_script(&mut self, src: &str) -> Result<(), RispError> {
+    pub fn eval_lisp_script(&mut self, src: &str) -> Result<(), RizzError> {
         let mut lisp = self
             .lisp
             .take()
@@ -486,7 +486,7 @@ impl State {
         let env = lisp.env().clone();
 
         let mut error_chunks: Vec<String> = Vec::new();
-        let record = |chunks: &mut Vec<String>, slot_name: &str, err: risp::RispError| {
+        let record = |chunks: &mut Vec<String>, slot_name: &str, err: rizz::RizzError| {
             if chunks.len() < 3 {
                 chunks.push(format!("[{slot_name}] {err}"));
             }
@@ -578,7 +578,6 @@ impl State {
         )
     }
 }
-
 
 #[cfg(test)]
 pub(crate) mod test_support {

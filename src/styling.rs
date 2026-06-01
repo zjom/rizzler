@@ -2,12 +2,12 @@
 //!
 //! - [`Style`] / [`Color`] are the renderer-agnostic style representation.
 //! - [`Theme`] holds named [`Style`]s registered from lisp (`face-define`).
-//! - `*_from_value` helpers convert risp [`Value`]s into a `Style`/`Color`
+//! - `*_from_value` helpers convert rizz [`Value`]s into a `Style`/`Color`
 //!   so any builtin or render path can accept the lisp shapes uniformly.
 //!
 //! Conventions for style maps from lisp:
 //!
-//! * Map keys must be strings — risp's parser doesn't terminate idents at `:`,
+//! * Map keys must be strings — rizz's parser doesn't terminate idents at `:`,
 //!   so `{fg: ...}` and `{'fg: ...}` parse incorrectly. Use `{"fg": ...}`.
 //! * Recognized keys: `fg`, `bg`, `bold`, `italic`, `underline`, `reverse`.
 //! * Color values: a named ident (`'red`, `'dark-gray`), an int (xterm
@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use risp::runtime::{RuntimeError, Value};
+use rizz::runtime::{RuntimeError, Value};
 
 // ---------------------------------------------------------------------------
 // Style
@@ -316,9 +316,9 @@ fn map_u8(m: &im::HashMap<Rc<Value>, Rc<Value>>, field: &str) -> Result<u8, Runt
             expected: format!("\"{field}\" field").into(),
             got: "missing".into(),
         })?;
-    let n = v.as_int().ok_or_else(|| {
-        RuntimeError::type_mismatch(&format!("rgb '{field}"), "int 0..=255", v)
-    })?;
+    let n = v
+        .as_int()
+        .ok_or_else(|| RuntimeError::type_mismatch(&format!("rgb '{field}"), "int 0..=255", v))?;
     u8::try_from(n).map_err(|_| RuntimeError::TypeMismatch {
         name: "rgb".into(),
         expected: "0..=255".into(),
@@ -332,7 +332,7 @@ pub fn rgb_value(r: u8, g: u8, b: u8) -> Rc<Value> {
 }
 
 /// Normalize a user-supplied style expression into a form that survives
-/// risp's post-call re-evaluation: face references collapse to `Value::Str`
+/// rizz's post-call re-evaluation: face references collapse to `Value::Str`
 /// (the face name), inline maps are routed through [`style_from_value`] and
 /// [`style_to_value`] so every leaf becomes a string or int. `Unit` passes
 /// through.
@@ -513,7 +513,7 @@ mod tests {
     use super::*;
 
     fn run(src: &str) -> Rc<Value> {
-        let (v, _) = risp::parse_and_run(src.as_bytes()).expect("eval failed");
+        let (v, _) = rizz::parse_and_run(src.as_bytes()).expect("eval failed");
         v
     }
 
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     fn color_from_rgb_via_builtin_shape() {
         // The `(rgb r g b)` builtin returns a tagged map with ident keys;
-        // construct an equivalent value directly here (risp's parser can't
+        // construct an equivalent value directly here (rizz's parser can't
         // express ident-keyed literals).
         let v = rgb_value(60, 90, 130);
         let c = color_from_value(&v).unwrap();

@@ -1,4 +1,4 @@
-//! Embedded lisp runtime (risp) bridged to the editor.
+//! Embedded lisp runtime (rizz) bridged to the editor.
 //!
 //! The runtime owns a persistent [`Env`] of bindings — including every editor
 //! primitive exposed as a native function — and is threaded through one entry
@@ -13,8 +13,8 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::str::FromStr;
 
-use risp::RispError;
-use risp::runtime::{self, Env, NativeFn, RuntimeError, Value};
+use rizz::RizzError;
+use rizz::runtime::{self, Env, NativeFn, RuntimeError, Value};
 
 use crate::action::Action;
 use crate::buffer::MoveKind;
@@ -104,21 +104,21 @@ pub struct LispRuntime {
 
 impl LispRuntime {
     pub fn new() -> Self {
-        let env = risp::prelude::install(builtins());
+        let env = rizz::prelude::install(builtins());
         Self { env }
     }
 
     /// Parse `src` as one top-level form, evaluate it, and update `self.env`
     /// with any new bindings the form introduced.
-    pub fn eval_str(&mut self, src: &str) -> Result<Rc<Value>, RispError> {
-        let (v, env) = risp::parse_and_run_with_env(src.as_bytes(), &self.env)?;
+    pub fn eval_str(&mut self, src: &str) -> Result<Rc<Value>, RizzError> {
+        let (v, env) = rizz::parse_and_run_with_env(src.as_bytes(), &self.env)?;
         self.env = env;
         Ok(v)
     }
 
     /// Evaluate an already-parsed form. Used by `Action::EvalLisp` so that
     /// keybindings don't re-parse on every keystroke.
-    pub fn eval_value(&mut self, form: Rc<Value>) -> Result<Rc<Value>, RispError> {
+    pub fn eval_value(&mut self, form: Rc<Value>) -> Result<Rc<Value>, RizzError> {
         let (v, env) = runtime::eval(form, &self.env)?;
         self.env = env;
         Ok(v)
@@ -127,7 +127,7 @@ impl LispRuntime {
     /// Evaluate a multi-form script: `;`-introduced line comments are stripped
     /// and each top-level form is parsed and evaluated in sequence. Stops on
     /// the first error and returns it.
-    pub fn eval_script(&mut self, src: &str) -> Result<(), RispError> {
+    pub fn eval_script(&mut self, src: &str) -> Result<(), RizzError> {
         self.eval_str(src)?;
         Ok(())
     }
@@ -375,7 +375,7 @@ fn builtins() -> Env {
     b!("command-submit", 0, |_, env| {
         let cmd = with_editor_mut(|st| st.take_minibuffer_command());
         let src = wrap_shell_style(&cmd);
-        match risp::parse_and_run_with_env(src.as_bytes(), env) {
+        match rizz::parse_and_run_with_env(src.as_bytes(), env) {
             Ok((v, new_env)) => {
                 if !v.is_unit() {
                     with_editor_mut(|st| st.set_minibuffer_message(&v.display()));
@@ -401,7 +401,7 @@ fn builtins() -> Env {
                 .selected_text()
                 .unwrap_or_else(|| st.focused_buf().text())
         });
-        match risp::parse_and_run_with_env(src.as_bytes(), env) {
+        match rizz::parse_and_run_with_env(src.as_bytes(), env) {
             Ok((v, new_env)) => {
                 if !v.is_unit() {
                     with_editor_mut(|st| st.set_minibuffer_message(&v.display()));
@@ -487,7 +487,7 @@ fn builtins() -> Env {
     b!("span", 2, |args, env| {
         use im::HashMap as ImHashMap;
         let text = as_str(&args[0], "span")?;
-        // Normalize the style argument before storing — risp re-evaluates a
+        // Normalize the style argument before storing — rizz re-evaluates a
         // native fn's return, so any Ident still in the returned map would
         // be resolved as a variable lookup.
         let style_val = with_editor_mut(|st| {
@@ -605,7 +605,7 @@ fn builtins() -> Env {
             EditingMode::VisualBlock => "visual-block",
             EditingMode::Command => "command",
         };
-        // Return Str (not Ident) — risp re-evaluates a native fn's return
+        // Return Str (not Ident) — rizz re-evaluates a native fn's return
         // and a raw ident would try to resolve as a variable.
         Ok((Rc::new(Value::Str(s.into())), env.clone()))
     });
@@ -864,7 +864,7 @@ mod tests {
                     .get(&Rc::new(Value::Str("style".into())))
                     .expect("style field");
                 // Face references are normalized to Str so they survive
-                // risp's post-call re-eval.
+                // rizz's post-call re-eval.
                 assert!(matches!(&**style, Value::Str(s) if s.as_ref() == "header"));
             }
             other => panic!("expected map, got {other:?}"),
@@ -874,7 +874,8 @@ mod tests {
     #[test]
     fn status_segment_add_via_lisp_changes_frame() {
         let mut s = test_state();
-        s.eval_lisp(r#"(status-segment-add 'star 'right "★")"#).unwrap();
+        s.eval_lisp(r#"(status-segment-add 'star 'right "★")"#)
+            .unwrap();
         let (frame, err) = s.precompute_frame();
         assert!(err.is_none(), "no slot errors: {err:?}");
         let texts: Vec<&str> = frame
@@ -905,10 +906,8 @@ mod tests {
         s.eval_lisp("(status-segment-remove 'mode)").unwrap();
         s.eval_lisp("(status-segment-remove 'brand)").unwrap();
         s.eval_lisp("(status-segment-remove 'sel-hint)").unwrap();
-        s.eval_lisp(
-            r#"(status-segment-add 'probe 'left (fn _p () (focused-mode)))"#,
-        )
-        .unwrap();
+        s.eval_lisp(r#"(status-segment-add 'probe 'left (fn _p () (focused-mode)))"#)
+            .unwrap();
         let (frame, _err) = s.precompute_frame();
         let s_left: Vec<&str> = frame
             .status_left
@@ -929,7 +928,8 @@ mod tests {
             s.eval_lisp(&format!("(status-segment-remove '{name})"))
                 .unwrap();
         }
-        s.eval_lisp(r#"(status-segment-add 'cjk 'right "漢字")"#).unwrap();
+        s.eval_lisp(r#"(status-segment-add 'cjk 'right "漢字")"#)
+            .unwrap();
         let (frame, _) = s.precompute_frame();
         let total: usize = frame
             .status_right

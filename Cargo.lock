@@ -189,7 +189,7 @@ dependencies = [
  "crossterm 0.29.0",
  "im",
  "ratatui",
- "risp",
+ "rizz",
  "ropey",
  "thiserror",
  "unicode-width 0.2.0",
@@ -468,8 +468,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "risp"
+name = "rizz"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d90873f9d6e6fdc57b403d516d18615df22770194b6557ea585214edbaa5fa12"
 dependencies = [
  "im",
  "ordered-float",

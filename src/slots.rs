@@ -16,8 +16,8 @@
 use std::rc::Rc;
 
 use ratatui::text::{Line, Span};
-use risp::RispError;
-use risp::runtime::{self, Env, Value};
+use rizz::RizzError;
+use rizz::runtime::{self, Env, Value};
 
 use crate::buffer::Buffer;
 use crate::mode::EditingMode;
@@ -200,7 +200,12 @@ impl SlotRegistry {
 
     /// Replace an entire ordered list (status segments per side, gutters,
     /// decorators, bottom rows) with `new_slots` in source order.
-    pub fn replace(&mut self, category: SlotCategory, side: Option<SegmentSide>, new_slots: Vec<Slot>) {
+    pub fn replace(
+        &mut self,
+        category: SlotCategory,
+        side: Option<SegmentSide>,
+        new_slots: Vec<Slot>,
+    ) {
         let list = match (category, side) {
             (SlotCategory::StatusSegment, Some(SegmentSide::Left)) => &mut self.status_left,
             (SlotCategory::StatusSegment, Some(SegmentSide::Right)) => &mut self.status_right,
@@ -231,8 +236,12 @@ impl SlotRegistry {
 
     fn list_mut(&mut self, kind: &SlotKind) -> &mut Vec<Slot> {
         match kind {
-            SlotKind::StatusSegment { side: SegmentSide::Left } => &mut self.status_left,
-            SlotKind::StatusSegment { side: SegmentSide::Right } => &mut self.status_right,
+            SlotKind::StatusSegment {
+                side: SegmentSide::Left,
+            } => &mut self.status_left,
+            SlotKind::StatusSegment {
+                side: SegmentSide::Right,
+            } => &mut self.status_right,
             SlotKind::Gutter { .. } => &mut self.gutters,
             SlotKind::Decorator => &mut self.decorators,
             SlotKind::Bottom { .. } => &mut self.bottom,
@@ -264,7 +273,7 @@ pub fn produce_status_segment(
     snap: &StateSnapshot<'_>,
     theme: &Theme,
     env: &Env,
-) -> Result<Vec<Span<'static>>, RispError> {
+) -> Result<Vec<Span<'static>>, RizzError> {
     match &slot.renderable {
         LispRenderable::Static(v) => Ok(spans_from_value(v, theme)?),
         LispRenderable::Callable(f) => {
@@ -282,8 +291,11 @@ pub fn produce_gutter(
     buf: &Buffer,
     theme: &Theme,
     env: &Env,
-) -> Result<RenderedGutter, RispError> {
-    let SlotKind::Gutter { width: registered_width } = slot.kind else {
+) -> Result<RenderedGutter, RizzError> {
+    let SlotKind::Gutter {
+        width: registered_width,
+    } = slot.kind
+    else {
         return Ok(RenderedGutter {
             width: 0,
             rows: vec![],
@@ -326,7 +338,7 @@ pub fn produce_decorator(
     buf: &Buffer,
     theme: &Theme,
     env: &Env,
-) -> Result<DecoratorRanges, RispError> {
+) -> Result<DecoratorRanges, RizzError> {
     match &slot.renderable {
         LispRenderable::Builtin(b) => Ok(builtin_decorator(*b, buf, theme)),
         LispRenderable::Static(v) => Ok(DecoratorRanges {
@@ -347,7 +359,7 @@ pub fn produce_bottom(
     snap: &StateSnapshot<'_>,
     theme: &Theme,
     env: &Env,
-) -> Result<Vec<Vec<Span<'static>>>, RispError> {
+) -> Result<Vec<Vec<Span<'static>>>, RizzError> {
     let _ = snap; // no builtin bottom components yet
     match &slot.renderable {
         LispRenderable::Builtin(_) => Ok(vec![]),
@@ -529,21 +541,21 @@ fn order(a: usize, b: usize) -> (usize, usize) {
 // Decorator slots return a sequence of `{row col len style pad}` maps.
 // Each map's keys are strings (per the project-wide convention).
 
-fn ranges_from_value(v: &Rc<Value>, theme: &Theme) -> Result<Vec<StyledRange>, RispError> {
+fn ranges_from_value(v: &Rc<Value>, theme: &Theme) -> Result<Vec<StyledRange>, RizzError> {
     let mut out = Vec::new();
     for entry in entries(v) {
         let Value::Map(m) = &*entry else {
-            return Err(RispError::from(risp::runtime::RuntimeError::type_mismatch(
+            return Err(RizzError::from(rizz::runtime::RuntimeError::type_mismatch(
                 "decorator",
                 "map with row|col|len|style fields",
                 &entry,
             )));
         };
         let key = |k: &str| Rc::new(Value::Str(k.into()));
-        let int_field = |name: &str| -> Result<usize, RispError> {
+        let int_field = |name: &str| -> Result<usize, RizzError> {
             let v = m.get(&key(name)).cloned().unwrap_or(Rc::new(Value::Int(0)));
             let n = v.as_int().ok_or_else(|| {
-                risp::runtime::RuntimeError::type_mismatch("decorator", "int", &v)
+                rizz::runtime::RuntimeError::type_mismatch("decorator", "int", &v)
             })?;
             Ok(n.max(0) as usize)
         };
@@ -575,7 +587,7 @@ fn ranges_from_value(v: &Rc<Value>, theme: &Theme) -> Result<Vec<StyledRange>, R
 // turn anything `spans_from_value` accepts. So `[(span "x") "y" {"text":"z"}]`
 // is a three-row component.
 
-fn rows_from_value(v: &Rc<Value>, theme: &Theme) -> Result<Vec<Vec<Span<'static>>>, RispError> {
+fn rows_from_value(v: &Rc<Value>, theme: &Theme) -> Result<Vec<Vec<Span<'static>>>, RizzError> {
     let mut out = Vec::new();
     for row in entries(v) {
         out.push(spans_from_value(&row, theme)?);
@@ -583,7 +595,7 @@ fn rows_from_value(v: &Rc<Value>, theme: &Theme) -> Result<Vec<Vec<Span<'static>
     Ok(out)
 }
 
-/// Iterate entries of either an `Array` or a `Cons` list. Risp's
+/// Iterate entries of either an `Array` or a `Cons` list. Rizz's
 /// [`Value::iter`] only walks cons chains; arrays would otherwise be
 /// returned as a single opaque entry.
 fn entries(v: &Rc<Value>) -> Box<dyn Iterator<Item = Rc<Value>> + '_> {
@@ -631,7 +643,10 @@ mod tests {
 
     #[test]
     fn builtin_parse_round_trips() {
-        assert_eq!(BuiltinId::parse("line-numbers"), Some(BuiltinId::LineNumbers));
+        assert_eq!(
+            BuiltinId::parse("line-numbers"),
+            Some(BuiltinId::LineNumbers)
+        );
         assert_eq!(
             BuiltinId::parse("current-line-highlight"),
             Some(BuiltinId::CurrentLineHighlight)
@@ -663,11 +678,7 @@ mod tests {
     #[test]
     fn add_with_existing_name_replaces_in_place() {
         let mut r = SlotRegistry::new();
-        r.add(slot(
-            "a",
-            SlotKind::Decorator,
-            BuiltinId::BaseFg,
-        ));
+        r.add(slot("a", SlotKind::Decorator, BuiltinId::BaseFg));
         r.add(slot(
             "b",
             SlotKind::Decorator,
@@ -692,11 +703,19 @@ mod tests {
     fn replace_swaps_entire_list() {
         let mut r = SlotRegistry::new();
         r.add(slot("a", SlotKind::Decorator, BuiltinId::BaseFg));
-        r.add(slot("b", SlotKind::Decorator, BuiltinId::CurrentLineHighlight));
+        r.add(slot(
+            "b",
+            SlotKind::Decorator,
+            BuiltinId::CurrentLineHighlight,
+        ));
         r.replace(
             SlotCategory::Decorator,
             None,
-            vec![slot("c", SlotKind::Decorator, BuiltinId::SelectionHighlight)],
+            vec![slot(
+                "c",
+                SlotKind::Decorator,
+                BuiltinId::SelectionHighlight,
+            )],
         );
         let ds = r.decorators();
         assert_eq!(ds.len(), 1);
@@ -708,12 +727,16 @@ mod tests {
         let mut r = SlotRegistry::new();
         r.add(slot(
             "mode",
-            SlotKind::StatusSegment { side: SegmentSide::Left },
+            SlotKind::StatusSegment {
+                side: SegmentSide::Left,
+            },
             BuiltinId::ModeGlyph,
         ));
         r.add(slot(
             "key",
-            SlotKind::StatusSegment { side: SegmentSide::Right },
+            SlotKind::StatusSegment {
+                side: SegmentSide::Right,
+            },
             BuiltinId::LastKey,
         ));
         assert_eq!(r.status_segments(SegmentSide::Left).len(), 1);

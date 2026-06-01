@@ -6,7 +6,7 @@ use std::rc::Rc;
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
 use crate::window::{FocusDir, SplitDir};
-use risp::runtime::Value;
+use rizz::runtime::Value;
 
 /// Every input source (keymap, command line, scripted automation) ultimately
 /// produces an [`Action`]. [`crate::state::State::apply`] is the single point

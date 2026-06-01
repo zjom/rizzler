@@ -64,7 +64,7 @@
 ;; selection anchor is captured by `set-mode` when entering a visual mode
 ;; and preserved when switching between visual submodes — so `v`/`V`/`<c-v>`
 ;; inside a visual mode just changes the selection geometry. The motion set
-;; is duplicated per mode because risp has no implicit sequencing form.
+;; is duplicated per mode because rizz has no implicit sequencing form.
 
 ;; visual (characterwise)
 (fn bind-visual-motions (mode)

@@ -92,6 +92,72 @@ impl Buffer {
         self.selection_anchor
     }
 
+    /// Text covered by the current visual selection. Inclusive on both ends;
+    /// `VisualLine` includes the trailing newline of the last selected row,
+    /// and `VisualBlock` joins each row's column slice with `\n`.
+    pub fn selected_text(&self) -> Option<String> {
+        let anchor = self.selection_anchor?;
+        let cursor = self.abs_pos();
+
+        match self.mode {
+            EditingMode::Visual => {
+                let (start, end) = if (anchor.row, anchor.col) <= (cursor.row, cursor.col) {
+                    (anchor, cursor)
+                } else {
+                    (cursor, anchor)
+                };
+                let s = self.buf.line_to_char(start.row) + start.col;
+                let e = (self.buf.line_to_char(end.row) + end.col + 1).min(self.buf.len_chars());
+                Some(self.buf.slice(s..e).to_string())
+            }
+            EditingMode::VisualLine => {
+                let (lo, hi) = if anchor.row <= cursor.row {
+                    (anchor.row, cursor.row)
+                } else {
+                    (cursor.row, anchor.row)
+                };
+                let s = self.buf.line_to_char(lo);
+                let last_line = self.buf.len_lines().saturating_sub(1);
+                let e = if hi >= last_line {
+                    self.buf.len_chars()
+                } else {
+                    self.buf.line_to_char(hi + 1)
+                };
+                Some(self.buf.slice(s..e).to_string())
+            }
+            EditingMode::VisualBlock => {
+                let (lo_row, hi_row) = if anchor.row <= cursor.row {
+                    (anchor.row, cursor.row)
+                } else {
+                    (cursor.row, anchor.row)
+                };
+                let (lo_col, hi_col) = if anchor.col <= cursor.col {
+                    (anchor.col, cursor.col)
+                } else {
+                    (cursor.col, anchor.col)
+                };
+                let mut out = String::new();
+                for row in lo_row..=hi_row {
+                    let line = self.buf.line(row);
+                    let mut len = line.len_chars();
+                    if len > 0 && line.char(len - 1) == '\n' {
+                        len -= 1;
+                    }
+                    let s = lo_col.min(len);
+                    let e = (hi_col + 1).min(len);
+                    if s < e {
+                        out.push_str(&line.slice(s..e).to_string());
+                    }
+                    if row != hi_row {
+                        out.push('\n');
+                    }
+                }
+                Some(out)
+            }
+            _ => None,
+        }
+    }
+
     /// Cursor's absolute file position (file_pos + cursor_pos).
     pub fn abs_pos(&self) -> Position<usize> {
         Position::new(

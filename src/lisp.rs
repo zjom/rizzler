@@ -347,9 +347,32 @@ fn builtins() -> Env {
             }
         }
     });
+
     b!("command-cancel", 0, |_, env| {
         apply(Action::CommandCancel);
         ok_unit(env)
+    });
+
+    // eval
+    b!("eval-buffer", 0, |_, env| {
+        let src = with_editor_mut(|st| {
+            st.focused_buf()
+                .selected_text()
+                .unwrap_or_else(|| st.focused_buf().text())
+        });
+        match risp::parse_and_run_with_env(src.as_bytes(), env) {
+            Ok((v, new_env)) => {
+                if !v.is_unit() {
+                    with_editor_mut(|st| st.set_minibuffer_message(&v.display()));
+                }
+                Ok((unit(), new_env))
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                with_editor_mut(|st| st.set_minibuffer_message(&msg));
+                ok_unit(env)
+            }
+        }
     });
 
     // user-facing messaging
@@ -362,22 +385,30 @@ fn builtins() -> Env {
     // queries
     b!("buffer-text", 0, |_, env| {
         let s = with_editor_mut(|st| st.focused_buf().text());
-        Ok((Rc::new(Value::Str(s.into())), env.clone()))
+        Ok((Rc::new(s.into()), env.clone()))
     });
+
+    b!("selected-text", 0, |_, env| {
+        let s = with_editor_mut(|st| st.focused_buf().selected_text());
+        Ok((Rc::new(s.into()), env.clone()))
+    });
+
     b!("cursor-line", 0, |_, env| {
         let n = with_editor_mut(|st| {
             let b = st.focused_buf();
             b.cursor_pos().row as i64 + b.file_pos().row as i64
         });
-        Ok((Rc::new(Value::Int(n)), env.clone()))
+        Ok((Rc::new(n.into()), env.clone()))
     });
+
     b!("cursor-col", 0, |_, env| {
         let n = with_editor_mut(|st| {
             let b = st.focused_buf();
             b.cursor_pos().col as i64 + b.file_pos().col as i64
         });
-        Ok((Rc::new(Value::Int(n)), env.clone()))
+        Ok((Rc::new(n.into()), env.clone()))
     });
+
     b!("focused-mode", 0, |_, env| {
         let m = with_editor_mut(|st| st.focused_buf().mode());
         let s: &str = match m {

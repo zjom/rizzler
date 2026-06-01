@@ -162,22 +162,24 @@ pub fn wrap_shell_style(input: &str) -> String {
 
 fn builtins() -> Env {
     let mut entries: Vec<(&str, NativeFn)> = Vec::new();
+    let mut aliases: Vec<(&str, &str)> = Vec::new();
     macro_rules! b {
         ($name:expr, $nargs:expr, $f:expr) => {
             entries.push(($name, NativeFn::impure($name.into(), $nargs, $f)));
         };
     }
+    macro_rules! alias {
+        ($a:expr => $t:expr) => {
+            aliases.push(($a, $t));
+        };
+    }
 
     // mode + lifecycle
-    b!("q", 0, |_, env| {
-        apply(Action::Quit);
-        ok_unit(env)
-    });
-
     b!("quit", 0, |_, env| {
         apply(Action::Quit);
         ok_unit(env)
     });
+    alias!("q" => "quit");
 
     b!("set-mode", 1, |args, env| {
         let mode = parse_mode_ident(&args[0])?;
@@ -242,28 +244,34 @@ fn builtins() -> Env {
         });
         ok_unit(env)
     });
+    alias!("bc" => "buf-create");
     b!("buf-delete", 0, |_, env| {
         apply(Action::BufDelete);
         ok_unit(env)
     });
+    alias!("bd" => "buf-delete");
     b!("buf-next", 0, |_, env| {
         apply(Action::BufNext);
         ok_unit(env)
     });
+    alias!("bn" => "buf-next");
     b!("buf-prev", 0, |_, env| {
         apply(Action::BufPrev);
         ok_unit(env)
     });
+    alias!("bp" => "buf-prev");
     b!("edit", 1, |args, env| {
         let p = as_str(&args[0], "edit")?;
         let path = std::path::PathBuf::from_str(&p).unwrap();
         apply(Action::BufEdit(path.into()));
         ok_unit(env)
     });
+    alias!("e" => "edit");
     b!("write", 0, |_, env| {
         apply(Action::BufWrite(None));
         ok_unit(env)
     });
+    alias!("w" => "write");
     b!("write-as", 1, |args, env| {
         let p = as_str(&args[0], "write-as")?;
         let path = std::path::PathBuf::from_str(&p).unwrap();
@@ -421,7 +429,12 @@ fn builtins() -> Env {
         Ok((Rc::new(Value::Ident(s.into())), env.clone()))
     });
 
-    Env::of_builtins(entries)
+    let mut env = Env::of_builtins(entries);
+    for (a, t) in aliases {
+        let v = env.get(&Rc::<str>::from(t)).expect("alias target").clone();
+        env = env.update(a.into(), v);
+    }
+    env
 }
 
 // ---------------------------------------------------------------------------

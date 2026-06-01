@@ -9,10 +9,13 @@
 
 use std::cell::Cell;
 use std::path::PathBuf;
+use std::process;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::str::FromStr;
 
+use anyhow::anyhow;
+use im::{HashMap as ImHashMap, Vector};
 use rizz::RizzError;
 use rizz::runtime::{self, Env, NativeFn, RuntimeError, Value};
 
@@ -394,6 +397,14 @@ fn builtins() -> Env {
         Ok((Rc::new(s.into()), env.clone()))
     });
 
+    b!("buffer-path", 0, |_, env| {
+        let v: Value = with_editor_mut(|st| st.focused_buf().fs_path())
+            .map(|p| p.to_string_lossy().as_ref().into())
+            .map(|s: Rc<str>| Value::Str(s))
+            .unwrap_or(Value::Unit);
+        Ok((Rc::new(v), env.clone()))
+    });
+
     b!("selected-text", 0, |_, env| {
         let s = with_editor_mut(|st| st.focused_buf().selected_text());
         Ok((Rc::new(s.into()), env.clone()))
@@ -574,6 +585,50 @@ fn builtins() -> Env {
         // and a raw ident would try to resolve as a variable.
         Ok((Rc::new(Value::Str(s.into())), env.clone()))
     });
+
+    b!("read-dir", 1, |args, env| {
+        let path = as_str(&args[0], "read-dir")?;
+        let dirs = std::fs::read_dir(path.as_ref())?
+            .map(|res| res.map(|e| e.path().to_string_lossy().as_ref().into()))
+            .map(|res| res.map(|p: Rc<str>| Rc::new(Value::Str(p))))
+            .collect::<Result<Vector<Rc<Value>>, std::io::Error>>()?;
+        Ok((Rc::new(Value::Array(dirs)), env.clone()))
+    });
+    alias!("ls"=>"read-dir");
+
+    b!("exec", 1, |args, env| {
+        let cmd_args = as_str(&args[0], "exec")?;
+        let mut prog = cmd_args.split_ascii_whitespace();
+
+        let cmd = prog.next().unwrap_or("");
+        if cmd.is_empty() {
+            return Err(RuntimeError::type_mismatch(
+                "exec",
+                "non-empty string",
+                &args[0],
+            ));
+        }
+        let output = process::Command::new(cmd).args(prog).output()?;
+        let stderr = String::from_utf8(output.stderr).map_err(|e| anyhow!(e))?;
+        let stdout = String::from_utf8(output.stdout).map_err(|e| anyhow!(e))?;
+        let code = output
+            .status
+            .code()
+            .map(|c| Value::Int(c as i64))
+            .unwrap_or(Value::Unit);
+
+        let m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::from_iter([
+            (
+                Rc::new("success?".into()),
+                Rc::new(output.status.success().into()),
+            ),
+            (Rc::new("stdout".into()), Rc::new(stdout.into())),
+            (Rc::new("stderr".into()), Rc::new(stderr.into())),
+            (Rc::new("code".into()), Rc::new(code)),
+        ]);
+        Ok((Rc::new(Value::Map(m)), env.clone()))
+    });
+    alias!("!"=>"exec");
 
     let mut env = Env::of_builtins(entries);
     for (a, t) in aliases {

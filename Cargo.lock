@@ -9,6 +9,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "anyhow"
+version = "1.0.102"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -455,10 +461,11 @@ dependencies = [
 
 [[package]]
 name = "rizz"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d90873f9d6e6fdc57b403d516d18615df22770194b6557ea585214edbaa5fa12"
+checksum = "1d8b620c661bbfa455e0dc5d32f25098013baae822f2c08e3d13ff18b2918b2b"
 dependencies = [
+ "anyhow",
  "im",
  "ordered-float",
  "thiserror",
@@ -468,6 +475,7 @@ dependencies = [
 name = "rizzler"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bitflags",
  "crossterm 0.29.0",
  "im",

@@ -91,6 +91,10 @@ impl Buffer {
         }
     }
 
+    pub fn fs_path(&self) -> Option<Rc<Path>> {
+        self.fs_path.clone()
+    }
+
     pub fn kind(&self) -> BufferKind {
         self.kind
     }

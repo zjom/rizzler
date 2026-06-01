@@ -101,70 +101,9 @@ impl LispRuntime {
     /// and each top-level form is parsed and evaluated in sequence. Stops on
     /// the first error and returns it.
     pub fn eval_script(&mut self, src: &str) -> Result<(), RispError> {
-        for form in split_top_forms(src) {
-            self.eval_str(form)?;
-        }
+        self.eval_str(src)?;
         Ok(())
     }
-}
-
-/// Slice `src` into substrings, one per top-level paren-balanced form. Bare
-/// atoms at the top level are tolerated but currently unused. Strings and
-/// `;;` line comments are respected so a `(` or `)` inside `"..."` or after
-/// `;;` doesn't fool the scanner.
-fn split_top_forms(src: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut depth: i32 = 0;
-    let mut start: Option<usize> = None;
-    let mut in_str = false;
-    let mut in_comment = false;
-    let mut escape = false;
-    let bytes = src.as_bytes();
-    for (i, c) in src.char_indices() {
-        if in_comment {
-            if c == '\n' {
-                in_comment = false;
-            }
-            continue;
-        }
-        if escape {
-            escape = false;
-            continue;
-        }
-        if in_str {
-            if c == '\\' {
-                escape = true;
-            } else if c == '"' {
-                in_str = false;
-            }
-            continue;
-        }
-        if c == ';' && bytes.get(i + 1) == Some(&b';') {
-            in_comment = true;
-            continue;
-        }
-        if c == '"' {
-            if start.is_none() {
-                start = Some(i);
-            }
-            in_str = true;
-            continue;
-        }
-        if c == '(' {
-            if depth == 0 && start.is_none() {
-                start = Some(i);
-            }
-            depth += 1;
-        } else if c == ')' {
-            depth -= 1;
-            if depth == 0
-                && let Some(s) = start.take()
-            {
-                out.push(&src[s..i + c.len_utf8()]);
-            }
-        }
-    }
-    out
 }
 
 impl Default for LispRuntime {

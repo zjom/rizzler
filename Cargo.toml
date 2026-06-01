@@ -5,6 +5,7 @@ edition = "2024"
 authors = ["zjom"]
 description = "the rizz editor"
 license = "Unlicense"
+repository = "https://github.com/zjom/rizzler"
 
 [dependencies]
 bitflags = "2.11.1"

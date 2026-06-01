@@ -1,7 +1,10 @@
 [package]
-name = "editor"
+name = "rizzler"
 version = "0.1.0"
 edition = "2024"
+authors = ["zjom"]
+description = "the rizz editor"
+license = "Unlicense"
 
 [dependencies]
 bitflags = "2.11.1"

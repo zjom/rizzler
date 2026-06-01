@@ -101,62 +101,32 @@ impl LispRuntime {
     /// and each top-level form is parsed and evaluated in sequence. Stops on
     /// the first error and returns it.
     pub fn eval_script(&mut self, src: &str) -> Result<(), RispError> {
-        let cleaned = strip_line_comments(src);
-        for form in split_top_forms(&cleaned) {
+        for form in split_top_forms(src) {
             self.eval_str(form)?;
         }
         Ok(())
     }
 }
 
-/// Strip `;`-to-end-of-line comments while respecting string literals.
-fn strip_line_comments(src: &str) -> String {
-    let mut out = String::with_capacity(src.len());
-    for line in src.split_inclusive('\n') {
-        let (code, _) = split_off_comment(line);
-        out.push_str(code);
-        if !code.ends_with('\n') {
-            out.push('\n');
-        }
-    }
-    out
-}
-
-fn split_off_comment(line: &str) -> (&str, &str) {
-    let mut in_str = false;
-    let mut escape = false;
-    for (i, c) in line.char_indices() {
-        if escape {
-            escape = false;
-            continue;
-        }
-        if in_str {
-            if c == '\\' {
-                escape = true;
-            } else if c == '"' {
-                in_str = false;
-            }
-            continue;
-        }
-        if c == '"' {
-            in_str = true;
-        } else if c == ';' {
-            return (&line[..i], &line[i..]);
-        }
-    }
-    (line, "")
-}
-
 /// Slice `src` into substrings, one per top-level paren-balanced form. Bare
-/// atoms at the top level are tolerated but currently unused. Strings are
-/// respected so a `(` or `;` inside `"..."` doesn't fool the scanner.
+/// atoms at the top level are tolerated but currently unused. Strings and
+/// `;;` line comments are respected so a `(` or `)` inside `"..."` or after
+/// `;;` doesn't fool the scanner.
 fn split_top_forms(src: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut depth: i32 = 0;
     let mut start: Option<usize> = None;
     let mut in_str = false;
+    let mut in_comment = false;
     let mut escape = false;
+    let bytes = src.as_bytes();
     for (i, c) in src.char_indices() {
+        if in_comment {
+            if c == '\n' {
+                in_comment = false;
+            }
+            continue;
+        }
         if escape {
             escape = false;
             continue;
@@ -167,6 +137,10 @@ fn split_top_forms(src: &str) -> Vec<&str> {
             } else if c == '"' {
                 in_str = false;
             }
+            continue;
+        }
+        if c == ';' && bytes.get(i + 1) == Some(&b';') {
+            in_comment = true;
             continue;
         }
         if c == '"' {
@@ -579,6 +553,25 @@ mod tests {
         use crossterm::event::{KeyCode, KeyModifiers};
         let mut s = test_state();
         s.eval_lisp("(keymap-set 'normal \"q\" '(quit))").unwrap();
+        s.handle_key_event(crossterm::event::KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+        ))
+        .unwrap();
+        assert!(s.quit_requested());
+    }
+
+    #[test]
+    fn keymap_set_from_lisp_binds_modified_key() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut s = test_state();
+        s.eval_lisp(r#"(keymap-set 'normal "<c-w>q" '(quit))"#)
+            .unwrap();
+        s.handle_key_event(crossterm::event::KeyEvent::new(
+            KeyCode::Char('w'),
+            KeyModifiers::CONTROL,
+        ))
+        .unwrap();
         s.handle_key_event(crossterm::event::KeyEvent::new(
             KeyCode::Char('q'),
             KeyModifiers::NONE,

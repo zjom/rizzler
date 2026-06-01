@@ -353,8 +353,7 @@ fn builtins() -> Env {
         ok_unit(env)
     });
 
-    // eval
-    b!("eval-buffer", 0, |_, env| {
+    b!("eval", 0, |_, env| {
         let src = with_editor_mut(|st| {
             st.focused_buf()
                 .selected_text()

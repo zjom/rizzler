@@ -966,7 +966,7 @@ mod tests {
         let mut s = test_state();
         // Clear every default left segment so we can check removal works.
         s.eval_lisp("(status-segment-remove 'mode)").unwrap();
-        s.eval_lisp("(status-segment-remove 'brand)").unwrap();
+        s.eval_lisp("(status-segment-remove 'buffer-path)").unwrap();
         s.eval_lisp("(status-segment-remove 'sel-hint)").unwrap();
         let (frame, err) = s.precompute_frame();
         assert!(err.is_none());
@@ -979,7 +979,7 @@ mod tests {
         // Strip out the theme's left segments so our test segment is the
         // sole content on the left.
         s.eval_lisp("(status-segment-remove 'mode)").unwrap();
-        s.eval_lisp("(status-segment-remove 'brand)").unwrap();
+        s.eval_lisp("(status-segment-remove 'buffer-path)").unwrap();
         s.eval_lisp("(status-segment-remove 'sel-hint)").unwrap();
         s.eval_lisp(r#"(status-segment-add 'probe 'left (fn _p () (focused-mode)))"#)
             .unwrap();

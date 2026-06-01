@@ -15,6 +15,8 @@ use crate::{
     position::Position,
     render::{CursorStyle, Renderer, StateSnapshot},
     render_ratatui::RatatuiRenderer,
+    slots::SlotRegistry,
+    styling::ThemeCell,
     window::{SplitDir, WindowTree},
 };
 
@@ -57,6 +59,13 @@ pub struct State {
     /// Embedded lisp runtime. Held as `Option` so `eval_lisp*` can `take` it
     /// for the duration of an eval — this also blocks re-entrant evaluation.
     lisp: Option<LispRuntime>,
+    /// Named styles registered by lisp (`face-define`). `RefCell` so render
+    /// callbacks can introspect without holding `&mut State`.
+    theme: ThemeCell,
+    /// Ordered registry of customization slots (status segments, gutters,
+    /// line decorators, bottom-strip components). Owned, not RefCell — only
+    /// the lisp builtins that hold `&mut State` mutate it.
+    slots: SlotRegistry,
 }
 
 impl State {
@@ -77,13 +86,18 @@ impl State {
             renderer: config.renderer,
             keyevent: None,
             lisp: Some(LispRuntime::new()),
+            theme: ThemeCell::default(),
+            slots: SlotRegistry::new(),
         };
         state.refresh_viewport();
 
-        // Bundled defaults: every key binding lives in `default.lisp` rather
-        // than Rust code. Then layer the user's `init.lisp` on top if present.
+        // Bundled defaults: keybindings, then visual configuration, then
+        // (optional) user `init.lisp`. Each layer can override the previous.
         if let Err(e) = state.eval_lisp_script(include_str!("../default.lisp")) {
             eprintln!("default.lisp eval failed: {e}");
+        }
+        if let Err(e) = state.eval_lisp_script(include_str!("../default-style.lisp")) {
+            eprintln!("default-style.lisp eval failed: {e}");
         }
         if let Some(path) = init_script_path()
             && let Ok(src) = std::fs::read_to_string(&path)
@@ -143,6 +157,18 @@ impl State {
     pub(crate) fn focused_buf(&self) -> &Buffer {
         let i = self.focused_bufno();
         &self.bufs[i]
+    }
+
+    /// Accessor for the [`crate::styling::Theme`] cell. Used by `face-define`
+    /// / `face-of` builtins.
+    pub(crate) fn theme(&self) -> &ThemeCell {
+        &self.theme
+    }
+
+    /// Mutable accessor for the slot registry. Used by the `*-add`/`*-remove`
+    /// builtins.
+    pub(crate) fn slots_mut(&mut self) -> &mut SlotRegistry {
+        &mut self.slots
     }
 
     /// Write `msg` into the minibuffer as a status line. Used by lisp's
@@ -415,6 +441,10 @@ impl State {
 
     pub fn render(&mut self) -> io::Result<()> {
         let focused = self.focused_bufno();
+        // Build the precomputed frame first. This installs an `EditorGuard`
+        // so lisp render callbacks can reach back into `State` for queries,
+        // and runs each slot to a plain value the renderer can consume.
+        let (frame, error_msg) = self.precompute_frame();
         let snap = StateSnapshot {
             bufs: &self.bufs,
             windows: &self.windows,
@@ -427,9 +457,128 @@ impl State {
                 _ => CursorStyle::Block,
             },
         };
-        self.renderer.render(snap)
+        let result = self.renderer.render(snap, &frame);
+        // Surface any render-callback error to the minibuffer *after* the
+        // frame draws so the message itself isn't part of the failing pass.
+        if let Some(msg) = error_msg {
+            self.set_minibuffer_message(&msg);
+        }
+        result
+    }
+
+    /// Run every slot under an `EditorGuard`, packing the results into a
+    /// `RenderedFrame` the renderer can consume without ever touching lisp.
+    /// Returns the frame plus an optional error message (concatenated from
+    /// the first few slot failures) to surface to the minibuffer.
+    pub(crate) fn precompute_frame(&mut self) -> (crate::render::RenderedFrame, Option<String>) {
+        use crate::render::{RenderedBottom, RenderedBuffer, RenderedFrame};
+        use crate::slots::{
+            SegmentSide, produce_bottom, produce_decorator, produce_gutter, produce_status_segment,
+        };
+
+        let lisp = self.lisp.take().expect("recursive render is not supported");
+        let _editor_guard = crate::lisp::EditorGuard::new(self);
+        let _phase_guard = crate::lisp::RenderPhaseGuard::enter();
+
+        // Snapshot the theme so callbacks that mutate it (`face-define`) only
+        // affect the next frame.
+        let theme = self.theme.borrow().clone();
+        let env = lisp.env().clone();
+
+        let mut error_chunks: Vec<String> = Vec::new();
+        let record = |chunks: &mut Vec<String>, slot_name: &str, err: risp::RispError| {
+            if chunks.len() < 3 {
+                chunks.push(format!("[{slot_name}] {err}"));
+            }
+        };
+
+        // Build a synthetic snapshot for status/bottom slots. They take a
+        // `&StateSnapshot`, which is just a read-only window onto fields
+        // we already own.
+        let snap = StateSnapshot {
+            bufs: &self.bufs,
+            windows: &self.windows,
+            minibuffer: &self.bufs[self.minibuffer],
+            focus_minibuffer: self.focus_minibuffer,
+            bufno: self.windows.focused_bufno(),
+            keyevent: self.keyevent.map(|e| e.into()),
+            cursor_style: CursorStyle::Block, // placeholder; segments don't use it
+        };
+
+        // Status segments
+        let mut status_left = Vec::new();
+        for s in self.slots.status_segments(SegmentSide::Left) {
+            match produce_status_segment(s, &snap, &theme, &env) {
+                Ok(spans) => status_left.extend(spans),
+                Err(e) => record(&mut error_chunks, &s.name, e),
+            }
+        }
+        let mut status_right = Vec::new();
+        for s in self.slots.status_segments(SegmentSide::Right) {
+            match produce_status_segment(s, &snap, &theme, &env) {
+                Ok(spans) => status_right.extend(spans),
+                Err(e) => record(&mut error_chunks, &s.name, e),
+            }
+        }
+
+        // Bottom rows (user-added only — status line and minibuffer are
+        // hardcoded into the renderer's layout).
+        let mut bottom_extra = Vec::new();
+        for s in self.slots.bottom() {
+            match produce_bottom(s, &snap, &theme, &env) {
+                Ok(lines) => bottom_extra.push(RenderedBottom { lines }),
+                Err(e) => record(&mut error_chunks, &s.name, e),
+            }
+        }
+
+        // Per-buffer gutters and decorators.
+        let mut per_buf = Vec::with_capacity(self.bufs.len());
+        for (i, buf) in self.bufs.iter().enumerate() {
+            // Skip the minibuffer — it has its own component.
+            if i == self.minibuffer {
+                per_buf.push(RenderedBuffer::default());
+                continue;
+            }
+            let mut rb = RenderedBuffer::default();
+            for s in self.slots.gutters() {
+                match produce_gutter(s, buf, &theme, &env) {
+                    Ok(g) => rb.gutters.push(g),
+                    Err(e) => record(&mut error_chunks, &s.name, e),
+                }
+            }
+            for s in self.slots.decorators() {
+                match produce_decorator(s, buf, &theme, &env) {
+                    Ok(d) => rb.decorators.push(d),
+                    Err(e) => record(&mut error_chunks, &s.name, e),
+                }
+            }
+            per_buf.push(rb);
+        }
+
+        // `runtime::apply` discards a callee's local bindings, so the env
+        // hasn't moved. Drop both guards before restoring lisp.
+        drop(_phase_guard);
+        drop(_editor_guard);
+        self.lisp = Some(lisp);
+
+        let error_msg = if error_chunks.is_empty() {
+            None
+        } else {
+            Some(error_chunks.join("; "))
+        };
+
+        (
+            RenderedFrame {
+                status_left,
+                status_right,
+                bottom_extra,
+                per_buf,
+            },
+            error_msg,
+        )
     }
 }
+
 
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -438,7 +587,11 @@ pub(crate) mod test_support {
     /// A renderer that does nothing — used in tests that don't want to touch a terminal.
     pub struct NullRenderer;
     impl Renderer for NullRenderer {
-        fn render(&mut self, _snap: StateSnapshot<'_>) -> io::Result<()> {
+        fn render(
+            &mut self,
+            _snap: StateSnapshot<'_>,
+            _frame: &crate::render::RenderedFrame,
+        ) -> io::Result<()> {
             Ok(())
         }
     }
@@ -469,5 +622,24 @@ mod tests {
             .unwrap();
         s.apply(&[Rc::new(Action::WindowClose)]).unwrap();
         s.render().unwrap();
+    }
+
+    #[test]
+    fn default_precompute_produces_expected_slots() {
+        // Confirms the bundled `default-style.lisp` loads cleanly and
+        // produces a populated frame. We assert structural invariants only
+        // (no slot errors, at least one gutter, the standard decorators,
+        // both status sides have content). The exact shape is theme-defined.
+        let mut s = test_state();
+        let (frame, err) = s.precompute_frame();
+        assert!(err.is_none(), "no slot errors expected: {err:?}");
+        assert!(!frame.status_left.is_empty(), "expected left segments");
+        assert!(!frame.status_right.is_empty(), "expected right segments");
+        let bufno = s.windows.focused_bufno();
+        let bf = &frame.per_buf[bufno];
+        assert!(!bf.gutters.is_empty());
+        assert!(bf.decorators.len() >= 3);
+        // The bundled theme adds one bottom hint bar.
+        assert!(!frame.bottom_extra.is_empty());
     }
 }

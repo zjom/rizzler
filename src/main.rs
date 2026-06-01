@@ -7,7 +7,9 @@ mod mode;
 mod position;
 mod render;
 mod render_ratatui;
+mod slots;
 mod state;
+mod styling;
 mod terminal;
 mod window;
 

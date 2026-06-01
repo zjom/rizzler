@@ -21,7 +21,9 @@ use crate::buffer::MoveKind;
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
 use crate::position::Position;
+use crate::slots::{BuiltinId, LispRenderable, SegmentSide, Slot, SlotCategory, SlotKind};
 use crate::state::State;
+use crate::styling::{normalize_style_value, rgb_value, style_from_value, style_to_value};
 use crate::window::{FocusDir, SplitDir};
 
 // ---------------------------------------------------------------------------
@@ -30,6 +32,31 @@ use crate::window::{FocusDir, SplitDir};
 
 thread_local! {
     static EDITOR: Cell<Option<NonNull<State>>> = const { Cell::new(None) };
+    /// True while `State::precompute_frame` is walking the slot registry.
+    /// Lisp builtins that would mutate buffer state error out, so a render
+    /// callback can't corrupt the in-flight frame.
+    static RENDER_PHASE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// RAII guard that flips `RENDER_PHASE` to true for the duration of the
+/// precompute pass. Constructed inside [`State::precompute_frame`].
+pub(crate) struct RenderPhaseGuard;
+
+impl RenderPhaseGuard {
+    pub(crate) fn enter() -> Self {
+        RENDER_PHASE.with(|c| c.set(true));
+        Self
+    }
+}
+
+impl Drop for RenderPhaseGuard {
+    fn drop(&mut self) {
+        RENDER_PHASE.with(|c| c.set(false));
+    }
+}
+
+fn in_render_phase() -> bool {
+    RENDER_PHASE.with(|c| c.get())
 }
 
 /// RAII guard: stashes `state` in the thread-local for the lifetime of the
@@ -104,6 +131,12 @@ impl LispRuntime {
         self.eval_str(src)?;
         Ok(())
     }
+
+    /// Borrow the current environment. Used by the precompute pass to feed
+    /// render callbacks (`runtime::apply`) against the live bindings.
+    pub fn env(&self) -> &Env {
+        &self.env
+    }
 }
 
 impl Default for LispRuntime {
@@ -176,14 +209,14 @@ fn builtins() -> Env {
 
     // mode + lifecycle
     b!("quit", 0, |_, env| {
-        apply(Action::Quit);
+        apply(Action::Quit)?;
         ok_unit(env)
     });
     alias!("q" => "quit");
 
     b!("set-mode", 1, |args, env| {
         let mode = parse_mode_ident(&args[0])?;
-        apply(Action::SetMode(mode));
+        apply(Action::SetMode(mode))?;
         ok_unit(env)
     });
 
@@ -194,7 +227,7 @@ fn builtins() -> Env {
             .chars()
             .next()
             .ok_or_else(|| str_mismatch("insert-char", "non-empty str"))?;
-        apply(Action::InsertChar(c));
+        apply(Action::InsertChar(c))?;
         ok_unit(env)
     });
     b!("insert", 1, |args, env| {
@@ -207,32 +240,33 @@ fn builtins() -> Env {
         ok_unit(env)
     });
     b!("delete-char", 0, |_, env| {
-        apply(Action::DeleteChar);
+        apply(Action::DeleteChar)?;
         ok_unit(env)
     });
     b!("newline", 0, |_, env| {
-        apply(Action::InsertNewline);
+        apply(Action::InsertNewline)?;
         ok_unit(env)
     });
 
     // cursor movement
     b!("move-cursor", 1, |args, env| {
         let sym = as_ident(&args[0], "move-cursor")?;
-        let mk = move_kind(&sym)?;
-        apply(Action::MoveCursor(mk));
+        let mk = MoveKind::from_str(&sym).map_err(|_| unknown_variant("move-cursor", &sym))?;
+
+        apply(Action::MoveCursor(mk))?;
         ok_unit(env)
     });
     b!("move-cursor-rel", 2, |args, env| {
         let dx = as_int(&args[0], "move-cursor-rel")?;
         let dy = as_int(&args[1], "move-cursor-rel")?;
         let mk = MoveKind::Relative(Position::new(dx as i16, dy as i16));
-        apply(Action::MoveCursor(mk));
+        apply(Action::MoveCursor(mk))?;
         ok_unit(env)
     });
     b!("line", 1, |args, env| {
         let n = as_int(&args[0], "line")?;
         let mk = MoveKind::LineNum(n.max(0) as usize);
-        apply(Action::MoveCursor(mk));
+        apply(Action::MoveCursor(mk))?;
         ok_unit(env)
     });
 
@@ -241,41 +275,41 @@ fn builtins() -> Env {
         apply(Action::BufCreate {
             set_active: true,
             path: None,
-        });
+        })?;
         ok_unit(env)
     });
     alias!("bc" => "buf-create");
     b!("buf-delete", 0, |_, env| {
-        apply(Action::BufDelete);
+        apply(Action::BufDelete)?;
         ok_unit(env)
     });
     alias!("bd" => "buf-delete");
     b!("buf-next", 0, |_, env| {
-        apply(Action::BufNext);
+        apply(Action::BufNext)?;
         ok_unit(env)
     });
     alias!("bn" => "buf-next");
     b!("buf-prev", 0, |_, env| {
-        apply(Action::BufPrev);
+        apply(Action::BufPrev)?;
         ok_unit(env)
     });
     alias!("bp" => "buf-prev");
     b!("edit", 1, |args, env| {
         let p = as_str(&args[0], "edit")?;
         let path = std::path::PathBuf::from_str(&p).unwrap();
-        apply(Action::BufEdit(path.into()));
+        apply(Action::BufEdit(path.into()))?;
         ok_unit(env)
     });
     alias!("e" => "edit");
     b!("write", 0, |_, env| {
-        apply(Action::BufWrite(None));
+        apply(Action::BufWrite(None))?;
         ok_unit(env)
     });
     alias!("w" => "write");
     b!("write-as", 1, |args, env| {
         let p = as_str(&args[0], "write-as")?;
         let path = std::path::PathBuf::from_str(&p).unwrap();
-        apply(Action::BufWrite(Some(path.into())));
+        apply(Action::BufWrite(Some(path.into())))?;
         ok_unit(env)
     });
 
@@ -286,11 +320,11 @@ fn builtins() -> Env {
             "horizontal" => SplitDir::Horizontal,
             other => return Err(unknown_variant("window-split", other)),
         };
-        apply(Action::WindowSplit(dir));
+        apply(Action::WindowSplit(dir))?;
         ok_unit(env)
     });
     b!("window-close", 0, |_, env| {
-        apply(Action::WindowClose);
+        apply(Action::WindowClose)?;
         ok_unit(env)
     });
     b!("window-focus", 1, |args, env| {
@@ -301,11 +335,11 @@ fn builtins() -> Env {
             "down" => FocusDir::Down,
             other => return Err(unknown_variant("window-focus", other)),
         };
-        apply(Action::WindowFocus(dir));
+        apply(Action::WindowFocus(dir))?;
         ok_unit(env)
     });
     b!("window-focus-next", 0, |_, env| {
-        apply(Action::WindowFocusNext);
+        apply(Action::WindowFocusNext)?;
         ok_unit(env)
     });
 
@@ -320,7 +354,7 @@ fn builtins() -> Env {
             mode,
             lhs,
             rhs: Rc::new(Action::EvalLisp(form)),
-        });
+        })?;
         ok_unit(env)
     });
     b!("keymap-remove", 2, |args, env| {
@@ -328,7 +362,7 @@ fn builtins() -> Env {
         let lhs_str = as_str(&args[1], "keymap-remove")?;
         let lhs = KeyEvent::parse_sequence(&lhs_str)
             .map_err(|e| str_mismatch_msg("keymap-remove", &e))?;
-        apply(Action::KeymapRemove { mode, lhs });
+        apply(Action::KeymapRemove { mode, lhs })?;
         ok_unit(env)
     });
 
@@ -357,7 +391,7 @@ fn builtins() -> Env {
     });
 
     b!("command-cancel", 0, |_, env| {
-        apply(Action::CommandCancel);
+        apply(Action::CommandCancel)?;
         ok_unit(env)
     });
 
@@ -416,6 +450,151 @@ fn builtins() -> Env {
         Ok((Rc::new(n.into()), env.clone()))
     });
 
+    // styling: faces + colors
+    b!("face-define", 2, |args, env| {
+        let name = as_ident_or_str(&args[0], "face-define")?;
+        let style = with_editor_mut(|st| {
+            let theme = st.theme().borrow();
+            style_from_value(&args[1], &theme)
+        })?;
+        with_editor_mut(|st| {
+            st.theme().borrow_mut().insert(name, style);
+        });
+        ok_unit(env)
+    });
+    b!("face-of", 1, |args, env| {
+        let name = as_ident_or_str(&args[0], "face-of")?;
+        let v = with_editor_mut(|st| {
+            st.theme()
+                .borrow()
+                .lookup(&name)
+                .map(style_to_value)
+                .unwrap_or_else(|| Rc::new(Value::Unit))
+        });
+        Ok((v, env.clone()))
+    });
+    b!("rgb", 3, |args, env| {
+        let r = as_u8(&args[0], "rgb")?;
+        let g = as_u8(&args[1], "rgb")?;
+        let b = as_u8(&args[2], "rgb")?;
+        Ok((rgb_value(r, g, b), env.clone()))
+    });
+    // span constructor used by render slots. Two forms:
+    //   (span "text")              -> {text: "text"}
+    //   (span "text" face-or-map)  -> {text: "text" style: ...}
+    // We don't resolve the style here — slot precompute does, holding a
+    // theme snapshot.
+    b!("span", 2, |args, env| {
+        use im::HashMap as ImHashMap;
+        let text = as_str(&args[0], "span")?;
+        // Normalize the style argument before storing — risp re-evaluates a
+        // native fn's return, so any Ident still in the returned map would
+        // be resolved as a variable lookup.
+        let style_val = with_editor_mut(|st| {
+            let theme = st.theme().borrow();
+            normalize_style_value(&args[1], &theme)
+        })?;
+        let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+        m.insert(
+            Rc::new(Value::Str("text".into())),
+            Rc::new(Value::Str(text)),
+        );
+        if !style_val.is_unit() {
+            m.insert(Rc::new(Value::Str("style".into())), style_val);
+        }
+        Ok((Rc::new(Value::Map(m)), env.clone()))
+    });
+
+    // slot registration. All `*-add` forms accept a handler that's either a
+    // Value::Ident (resolved to a Rust builtin via BuiltinId::parse), a
+    // callable (closure or native fn — called each frame), or any other
+    // value (stored as Static and converted at render time).
+    b!("status-segment-add", 3, |args, env| {
+        let name = as_ident_or_str(&args[0], "status-segment-add")?;
+        let side = parse_segment_side(&args[1])?;
+        let renderable =
+            parse_handler(&args[2], "status-segment-add", SlotCategory::StatusSegment)?;
+        with_editor_mut(|st| {
+            st.slots_mut().add(Slot {
+                name,
+                kind: SlotKind::StatusSegment { side },
+                renderable,
+            });
+        });
+        ok_unit(env)
+    });
+    b!("status-segment-remove", 1, |args, env| {
+        let name = as_ident_or_str(&args[0], "status-segment-remove")?;
+        with_editor_mut(|st| {
+            st.slots_mut().remove(SlotCategory::StatusSegment, &name);
+        });
+        ok_unit(env)
+    });
+
+    b!("gutter-add", 3, |args, env| {
+        let name = as_ident_or_str(&args[0], "gutter-add")?;
+        let width = as_int(&args[1], "gutter-add")?;
+        let width = u16::try_from(width.max(0)).unwrap_or(0);
+        let renderable = parse_handler(&args[2], "gutter-add", SlotCategory::Gutter)?;
+        with_editor_mut(|st| {
+            st.slots_mut().add(Slot {
+                name,
+                kind: SlotKind::Gutter { width },
+                renderable,
+            });
+        });
+        ok_unit(env)
+    });
+    b!("gutter-remove", 1, |args, env| {
+        let name = as_ident_or_str(&args[0], "gutter-remove")?;
+        with_editor_mut(|st| {
+            st.slots_mut().remove(SlotCategory::Gutter, &name);
+        });
+        ok_unit(env)
+    });
+
+    b!("decorator-add", 2, |args, env| {
+        let name = as_ident_or_str(&args[0], "decorator-add")?;
+        let renderable = parse_handler(&args[1], "decorator-add", SlotCategory::Decorator)?;
+        with_editor_mut(|st| {
+            st.slots_mut().add(Slot {
+                name,
+                kind: SlotKind::Decorator,
+                renderable,
+            });
+        });
+        ok_unit(env)
+    });
+    b!("decorator-remove", 1, |args, env| {
+        let name = as_ident_or_str(&args[0], "decorator-remove")?;
+        with_editor_mut(|st| {
+            st.slots_mut().remove(SlotCategory::Decorator, &name);
+        });
+        ok_unit(env)
+    });
+
+    b!("bottom-add", 3, |args, env| {
+        let name = as_ident_or_str(&args[0], "bottom-add")?;
+        let rows = as_int(&args[1], "bottom-add")?.max(1);
+        let rows = u16::try_from(rows).unwrap_or(1);
+        let renderable = parse_handler(&args[2], "bottom-add", SlotCategory::Bottom)?;
+        with_editor_mut(|st| {
+            st.slots_mut().add(Slot {
+                name,
+                kind: SlotKind::Bottom { rows },
+                renderable,
+            });
+        });
+        ok_unit(env)
+    });
+    b!("bottom-remove", 1, |args, env| {
+        let name = as_ident_or_str(&args[0], "bottom-remove")?;
+        with_editor_mut(|st| {
+            st.slots_mut().remove(SlotCategory::Bottom, &name);
+        });
+        ok_unit(env)
+    });
+
     b!("focused-mode", 0, |_, env| {
         let m = with_editor_mut(|st| st.focused_buf().mode());
         let s: &str = match m {
@@ -426,7 +605,9 @@ fn builtins() -> Env {
             EditingMode::VisualBlock => "visual-block",
             EditingMode::Command => "command",
         };
-        Ok((Rc::new(Value::Ident(s.into())), env.clone()))
+        // Return Str (not Ident) — risp re-evaluates a native fn's return
+        // and a raw ident would try to resolve as a variable.
+        Ok((Rc::new(Value::Str(s.into())), env.clone()))
     });
 
     let mut env = Env::of_builtins(entries);
@@ -449,10 +630,22 @@ fn ok_unit(env: &Env) -> Result<(Rc<Value>, Env), RuntimeError> {
     Ok((unit(), env.clone()))
 }
 
-fn apply(action: Action) {
+/// Run `action` against the live `State`. Errors when called from inside a
+/// render-phase callback — a slot that tries to mutate the buffer it's
+/// drawing would corrupt the frame and is almost always a bug. The slot
+/// name surrounding the error gets attached upstream by the precompute pass.
+fn apply(action: Action) -> Result<(), RuntimeError> {
+    if in_render_phase() {
+        return Err(RuntimeError::TypeMismatch {
+            name: "editor-action".into(),
+            expected: "non-mutating call".into(),
+            got: "called from a render callback".into(),
+        });
+    }
     with_editor_mut(|st| {
         let _ = st.apply(&[Rc::new(action)]);
     });
+    Ok(())
 }
 
 fn as_str(v: &Rc<Value>, name: &str) -> Result<Rc<str>, RuntimeError> {
@@ -472,37 +665,65 @@ fn as_ident(v: &Rc<Value>, name: &str) -> Result<Rc<str>, RuntimeError> {
     }
 }
 
-fn parse_mode_ident(v: &Rc<Value>) -> Result<EditingMode, RuntimeError> {
-    let s = as_ident(v, "mode")?;
-    Ok(match s.as_ref() {
-        "normal" => EditingMode::Normal,
-        "insert" => EditingMode::Insert,
-        "visual" => EditingMode::Visual,
-        "visual-line" => EditingMode::VisualLine,
-        "visual-block" => EditingMode::VisualBlock,
-        "command" => EditingMode::Command,
-        other => return Err(unknown_variant("mode", other)),
+fn as_ident_or_str(v: &Rc<Value>, name: &str) -> Result<Rc<str>, RuntimeError> {
+    match &**v {
+        Value::Ident(s) | Value::Str(s) => Ok(s.clone()),
+        _ => Err(RuntimeError::type_mismatch(name, "ident|str", v)),
+    }
+}
+
+fn as_u8(v: &Rc<Value>, name: &str) -> Result<u8, RuntimeError> {
+    let n = as_int(v, name)?;
+    u8::try_from(n).map_err(|_| RuntimeError::TypeMismatch {
+        name: name.into(),
+        expected: "0..=255".into(),
+        got: n.to_string().into(),
     })
 }
 
-fn move_kind(sym: &str) -> Result<MoveKind, RuntimeError> {
-    use MoveKind as M;
-    Ok(match sym {
-        "down" => M::Relative(Position::new(0, 1)),
-        "up" => M::Relative(Position::new(0, -1)),
-        "left" => M::Relative(Position::new(-1, 0)),
-        "right" => M::Relative(Position::new(1, 0)),
-        "line-start" => M::LineStart,
-        "line-end" => M::LineEnd,
-        "file-start" => M::FileStart,
-        "file-end" => M::FileEnd,
-        "word-start" => M::WordStart,
-        "word-end" => M::WordEnd,
-        "half-page-down" => M::HalfPageDown,
-        "half-page-up" => M::HalfPageUp,
-        "center" => M::Center,
-        other => return Err(unknown_variant("move-cursor", other)),
+fn parse_segment_side(v: &Rc<Value>) -> Result<SegmentSide, RuntimeError> {
+    let s = as_ident(v, "segment-side")?;
+    Ok(match s.as_ref() {
+        "left" => SegmentSide::Left,
+        "right" => SegmentSide::Right,
+        other => return Err(unknown_variant("segment-side", other)),
     })
+}
+
+/// Interpret a user-supplied handler:
+///
+/// * `Value::Ident(s)` — try `BuiltinId::parse(s)`; if it matches and its
+///   category matches the slot's, use the builtin. Otherwise treat the
+///   ident as a Static value (less common, but harmless).
+/// * Callable — `LispRenderable::Callable(...)`.
+/// * Anything else — `LispRenderable::Static(...)`.
+fn parse_handler(
+    v: &Rc<Value>,
+    name: &str,
+    expected: SlotCategory,
+) -> Result<LispRenderable, RuntimeError> {
+    if let Value::Ident(s) = &**v
+        && let Some(b) = BuiltinId::parse(s)
+    {
+        if b.category() != expected {
+            return Err(RuntimeError::TypeMismatch {
+                name: name.into(),
+                expected: format!("builtin for {:?}", expected).into(),
+                got: format!("builtin for {:?}", b.category()).into(),
+            });
+        }
+        return Ok(LispRenderable::Builtin(b));
+    }
+    if v.is_callable() {
+        Ok(LispRenderable::Callable(v.clone()))
+    } else {
+        Ok(LispRenderable::Static(v.clone()))
+    }
+}
+
+fn parse_mode_ident(v: &Rc<Value>) -> Result<EditingMode, RuntimeError> {
+    let s = as_ident(v, "mode")?;
+    s.parse().map_err(|_| unknown_variant("mode", &s))
 }
 
 fn unknown_variant(name: &str, got: &str) -> RuntimeError {
@@ -610,6 +831,130 @@ mod tests {
         assert_eq!(wrap_shell_style("+ 1 2"), "(+ 1 2)");
         assert_eq!(wrap_shell_style("42"), "(line 42)");
         assert_eq!(wrap_shell_style("   "), "()");
+    }
+
+    #[test]
+    fn face_define_then_face_of_round_trips() {
+        let mut s = test_state();
+        s.eval_lisp(r#"(face-define "header" {"fg": 'cyan "bold": 1})"#)
+            .unwrap();
+        let v = s.eval_lisp(r#"(face-of "header")"#).unwrap();
+        assert!(matches!(&*v, Value::Map(m) if !m.is_empty()));
+    }
+
+    #[test]
+    fn rgb_builtin_round_trips_through_color_from_value() {
+        let mut s = test_state();
+        let v = s.eval_lisp("(rgb 60 90 130)").unwrap();
+        let c = crate::styling::color_from_value(&v).unwrap();
+        assert_eq!(c, Some(crate::styling::Color::Rgb(60, 90, 130)));
+    }
+
+    #[test]
+    fn span_builtin_emits_text_and_style_fields() {
+        let mut s = test_state();
+        let v = s.eval_lisp(r#"(span "hi" 'header)"#).unwrap();
+        match &*v {
+            Value::Map(m) => {
+                let text = m
+                    .get(&Rc::new(Value::Str("text".into())))
+                    .expect("text field");
+                assert_eq!(text.as_str().as_deref(), Some("hi"));
+                let style = m
+                    .get(&Rc::new(Value::Str("style".into())))
+                    .expect("style field");
+                // Face references are normalized to Str so they survive
+                // risp's post-call re-eval.
+                assert!(matches!(&**style, Value::Str(s) if s.as_ref() == "header"));
+            }
+            other => panic!("expected map, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn status_segment_add_via_lisp_changes_frame() {
+        let mut s = test_state();
+        s.eval_lisp(r#"(status-segment-add 'star 'right "★")"#).unwrap();
+        let (frame, err) = s.precompute_frame();
+        assert!(err.is_none(), "no slot errors: {err:?}");
+        let texts: Vec<&str> = frame
+            .status_right
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(texts.contains(&"★"), "star segment missing: {texts:?}");
+    }
+
+    #[test]
+    fn status_segment_remove_via_lisp_drops_segment() {
+        let mut s = test_state();
+        // Clear every default left segment so we can check removal works.
+        s.eval_lisp("(status-segment-remove 'mode)").unwrap();
+        s.eval_lisp("(status-segment-remove 'brand)").unwrap();
+        s.eval_lisp("(status-segment-remove 'sel-hint)").unwrap();
+        let (frame, err) = s.precompute_frame();
+        assert!(err.is_none());
+        assert!(frame.status_left.is_empty());
+    }
+
+    #[test]
+    fn callable_status_segment_runs_each_frame() {
+        let mut s = test_state();
+        // Strip out the theme's left segments so our test segment is the
+        // sole content on the left.
+        s.eval_lisp("(status-segment-remove 'mode)").unwrap();
+        s.eval_lisp("(status-segment-remove 'brand)").unwrap();
+        s.eval_lisp("(status-segment-remove 'sel-hint)").unwrap();
+        s.eval_lisp(
+            r#"(status-segment-add 'probe 'left (fn _p () (focused-mode)))"#,
+        )
+        .unwrap();
+        let (frame, _err) = s.precompute_frame();
+        let s_left: Vec<&str> = frame
+            .status_left
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(s_left, vec!["normal"]);
+    }
+
+    #[test]
+    fn status_segment_with_cjk_uses_display_width() {
+        // A wide-char segment must contribute its display width, not its
+        // char count. Strip the theme's right segments so the math is easy
+        // to follow.
+        use unicode_width::UnicodeWidthStr;
+        let mut s = test_state();
+        for name in ["cursor", "pip", "last-key", "spacer", "bufno"] {
+            s.eval_lisp(&format!("(status-segment-remove '{name})"))
+                .unwrap();
+        }
+        s.eval_lisp(r#"(status-segment-add 'cjk 'right "漢字")"#).unwrap();
+        let (frame, _) = s.precompute_frame();
+        let total: usize = frame
+            .status_right
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+            .sum();
+        // "漢字" — two wide characters → 4 columns.
+        assert_eq!(total, 4);
+    }
+
+    #[test]
+    fn render_phase_blocks_mutating_builtins() {
+        // A render callback that calls `(insert-char "x")` must error out and
+        // leave the buffer alone.
+        let mut s = test_state();
+        s.eval_lisp(
+            r#"(status-segment-add 'naughty 'left
+                  (fn _naughty () (do (insert-char "x") "")))"#,
+        )
+        .unwrap();
+        let pre = s.focused_buf().text();
+        let (_, err) = s.precompute_frame();
+        assert!(err.is_some(), "expected a render-phase error");
+        let after = s.focused_buf().text();
+        assert_eq!(pre, after, "render callback must not mutate the buffer");
     }
 
     #[test]

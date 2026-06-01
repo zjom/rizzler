@@ -35,6 +35,29 @@ pub enum MoveKind {
     Center,
 }
 
+impl FromStr for MoveKind {
+    type Err = &'static str;
+    fn from_str(sym: &str) -> Result<Self, Self::Err> {
+        use MoveKind as M;
+        Ok(match sym {
+            "down" => M::Relative(Position::new(0, 1)),
+            "up" => M::Relative(Position::new(0, -1)),
+            "left" => M::Relative(Position::new(-1, 0)),
+            "right" => M::Relative(Position::new(1, 0)),
+            "line-start" => M::LineStart,
+            "line-end" => M::LineEnd,
+            "file-start" => M::FileStart,
+            "file-end" => M::FileEnd,
+            "word-start" => M::WordStart,
+            "word-end" => M::WordEnd,
+            "half-page-down" => M::HalfPageDown,
+            "half-page-up" => M::HalfPageUp,
+            "center" => M::Center,
+            _ => return Err("unknown MoveKind"),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Buffer {
     pub(crate) buf: Rope,

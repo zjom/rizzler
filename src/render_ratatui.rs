@@ -4,42 +4,38 @@ use crossterm::{cursor::SetCursorStyle, execute};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
+    text::Line,
+    widgets::Paragraph,
 };
 
 use crate::{
-    components::{Component, EditorView, MinibufferLine, StatusLine},
-    render::{CursorStyle, Renderer, StateSnapshot},
+    components::{EditorView, MinibufferLine, StatusLine},
+    render::{CursorStyle, RenderedFrame, Renderer, StateSnapshot},
 };
 
-/// Bottom-of-screen strip components, rendered in order below the editor
-/// window tree. The renderer always reserves one row per component here.
+/// Concrete ratatui renderer. Stateless wrt customization — every gutter,
+/// segment, decorator, and bottom row is fed by `RenderedFrame`. The
+/// renderer just lays out rectangles and copies pre-styled spans onto the
+/// terminal.
+///
+/// Layout, top to bottom: editor area (window tree) → status line → any
+/// user-added bottom rows in order → minibuffer.
 pub struct RatatuiRenderer {
     term: Terminal<CrosstermBackend<Stdout>>,
-    editor: EditorView,
-    bottom: Vec<Box<dyn Component>>,
 }
 
 impl RatatuiRenderer {
     pub fn new() -> io::Result<Self> {
-        Self::with_parts(
-            EditorView::default(),
-            vec![Box::new(StatusLine::default()), Box::new(MinibufferLine)],
-        )
-    }
-
-    pub fn with_parts(editor: EditorView, bottom: Vec<Box<dyn Component>>) -> io::Result<Self> {
         let backend = CrosstermBackend::new(io::stdout());
         Ok(Self {
             term: Terminal::new(backend)?,
-            editor,
-            bottom,
         })
     }
 }
 
 impl Renderer for RatatuiRenderer {
-    fn render(&mut self, snap: StateSnapshot<'_>) -> io::Result<()> {
+    fn render(&mut self, snap: StateSnapshot<'_>, frame_data: &RenderedFrame) -> io::Result<()> {
         // Cursor style is a terminal escape, not a ratatui widget — emit it
         // out-of-band before the frame draw.
         let style = match snap.cursor_style {
@@ -48,49 +44,69 @@ impl Renderer for RatatuiRenderer {
         };
         execute!(io::stdout(), style)?;
 
-        let editor = &self.editor;
-        let bottom = &self.bottom;
-
         self.term.draw(|f| {
-            // Vertical layout: window-tree area on top, then one row per
-            // bottom component.
-            let mut constraints = vec![Constraint::Min(1)];
-            for c in bottom {
-                constraints.push(c.constraint());
+            // Vertical layout: editor, status (1), each extra bottom row,
+            // minibuffer (1).
+            let mut constraints = vec![Constraint::Min(1), Constraint::Length(1)];
+            for b in &frame_data.bottom_extra {
+                constraints.push(Constraint::Length(b.lines.len() as u16));
             }
+            constraints.push(Constraint::Length(1));
             let rects = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints(constraints)
                 .split(f.area());
-            let editor_area = rects[0];
 
-            // Walk the window tree, render each leaf with EditorView. The
-            // focused leaf publishes the cursor (unless focus is in the
-            // minibuffer, in which case MinibufferLine will override below).
-            let mut cursor = None;
+            let editor_area = rects[0];
+            let status_area = rects[1];
+            let minibuffer_area = *rects.last().unwrap();
+
+            let mut cursor: Option<(u16, u16)> = None;
             let focused_path = snap.windows.focused_path();
             for leaf in snap.windows.layout(editor_area) {
-                let buf = match snap.bufs.get(leaf.bufno) {
-                    Some(b) => b,
-                    None => continue,
-                };
-                editor.render(buf, leaf.area, f);
+                let Some(buf) = snap.bufs.get(leaf.bufno) else { continue };
+                let buf_frame = frame_data.per_buf.get(leaf.bufno);
+                EditorView::render(buf, leaf.area, buf_frame, f);
                 if !snap.focus_minibuffer && &leaf.path == focused_path {
-                    cursor = Some(editor.cursor(buf, leaf.area));
+                    cursor = Some(EditorView::cursor(buf, leaf.area, buf_frame));
                 }
             }
 
-            // Bottom strip — each component gets its assigned row.
-            for (c, area) in bottom.iter().zip(rects.iter().skip(1)) {
-                c.render(*area, &snap, f);
-                if let Some(pos) = c.cursor(*area, &snap) {
-                    cursor = Some(pos);
-                }
+            StatusLine::render(
+                status_area,
+                &frame_data.status_left,
+                &frame_data.status_right,
+                f,
+            );
+
+            // Extra user-added bottom rows occupy rects[2..rects.len()-1].
+            for (b, area) in frame_data
+                .bottom_extra
+                .iter()
+                .zip(rects.iter().skip(2).take(frame_data.bottom_extra.len()))
+            {
+                draw_extra_bottom(b, *area, f);
             }
+
+            MinibufferLine::render(minibuffer_area, &snap, f);
+            if let Some(pos) = MinibufferLine::cursor(minibuffer_area, &snap) {
+                cursor = Some(pos);
+            }
+
             if let Some((x, y)) = cursor {
                 f.set_cursor_position((x, y));
             }
         })?;
         Ok(())
     }
+}
+
+fn draw_extra_bottom(b: &crate::render::RenderedBottom, area: Rect, f: &mut ratatui::Frame) {
+    let rows: Vec<Line<'static>> = b
+        .lines
+        .iter()
+        .take(area.height as usize)
+        .map(|spans| Line::from(spans.clone()))
+        .collect();
+    f.render_widget(Paragraph::new(rows), area);
 }

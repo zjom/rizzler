@@ -464,19 +464,21 @@ impl Buffer {
         self.cursor_pos.row = abs_row.saturating_sub(self.file_pos.row) as u16;
 
         let line = self.buf.line(abs_row);
-        let mut line_len = line.len_chars();
-        // don't count the trailing newline as a landable column
-        if line_len > 0 && line.char(line_len - 1) == '\n' {
-            line_len = line_len.wrapping_sub(match self.mode {
-                EditingMode::Insert
-                | EditingMode::Command
-                | EditingMode::Visual
-                | EditingMode::VisualLine
-                | EditingMode::VisualBlock => 1,
-                EditingMode::Normal => 2,
-            });
-        }
-        let abs_col = (self.cursor_pos.col as usize + self.file_pos.col).min(line_len);
+        let len = line.len_chars();
+        let has_trailing_nl = len > 0 && line.char(len - 1) == '\n';
+        // Number of non-newline chars on this line.
+        let chars = if has_trailing_nl { len - 1 } else { len };
+        // In Normal mode the cursor sits ON a character, so it cannot move past
+        // the last non-newline char. In all other modes it may sit just after.
+        let max_col = match self.mode {
+            EditingMode::Normal => chars.saturating_sub(1),
+            EditingMode::Insert
+            | EditingMode::Command
+            | EditingMode::Visual
+            | EditingMode::VisualLine
+            | EditingMode::VisualBlock => chars,
+        };
+        let abs_col = (self.cursor_pos.col as usize + self.file_pos.col).min(max_col);
         self.cursor_pos.col = abs_col.saturating_sub(self.file_pos.col) as u16;
     }
 
@@ -636,7 +638,7 @@ mod tests {
         s.cursor_pos = Position::<u16>::new(0, 1);
         s.move_cursor(MoveKind::LineEnd);
         assert_eq!(s.cursor_pos.row, 1);
-        assert_eq!(s.cursor_pos.col, 3);
+        assert_eq!(s.cursor_pos.col, 2); // on 'f' (normal mode)
     }
 
     // ---- move_cursor: FileStart / FileEnd -----------------------------
@@ -767,7 +769,7 @@ mod tests {
         s.cursor_pos = Position::<u16>::new(50, 50); // way out of bounds
         s.clamp_cursor();
         assert_eq!(s.cursor_pos.row, 1); // last line
-        assert_eq!(s.cursor_pos.col, 2); // end of "cd"
+        assert_eq!(s.cursor_pos.col, 1); // on 'd' (normal mode clamps to last char)
     }
 
     #[test]

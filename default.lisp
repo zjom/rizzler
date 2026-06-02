@@ -29,7 +29,6 @@
                                   (set-mode 'insert)
                                   (delete-char)
                                   (set-mode 'normal)))
-
 (map 'normal "j"      '(move-cursor 'down))
 (map 'normal "<down>" '(move-cursor 'down))
 (map 'normal "k"      '(move-cursor 'up))
@@ -100,6 +99,11 @@
 (map 'insert "<enter>"     '(newline))
 (map 'insert "<backspace>" '(delete-char))
 (map 'insert "<esc>"       '(set-mode 'normal))
+(map 'insert "jk"          '(set-mode 'normal))
+(map 'insert "<up>"        '(move-cursor 'up))
+(map 'insert "<down>"      '(move-cursor 'down))
+(map 'insert "<left>"      '(move-cursor 'left))
+(map 'insert "<right>"     '(move-cursor 'right))
 
 ;; ----- command mode (minibuffer) ---------------------------------------
 (map 'command "<enter>"     '(command-submit))

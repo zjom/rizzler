@@ -12,11 +12,13 @@
 (map 'normal "i"      '(set-mode 'insert))
 (map 'normal "I"      '(do (move-cursor 'line-start)
                                   (set-mode 'insert)))
-(map 'normal "a"      '(do (move-cursor 'right)
-                                  (set-mode 'insert)))
-(map 'normal "A"      '(do (move-cursor 'line-end)
-                                  (move-cursor 'right)
-                                  (set-mode 'insert)))
+(map 'normal "a"      '(do
+                         (set-mode 'insert)
+                         (move-cursor 'right)))
+(map 'normal "A"      '(do
+                         (set-mode 'insert)
+                         (move-cursor 'line-end)
+                         (move-cursor 'right)))
 (map 'normal "o"      '(do (move-cursor 'line-end)
                                   (set-mode 'insert)
                                   (newline)))

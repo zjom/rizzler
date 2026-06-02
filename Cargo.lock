@@ -460,10 +460,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ringbuffer"
-version = "0.1.0"
-
-[[package]]
 name = "rizz"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -476,6 +472,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rizz_changetree"
+version = "0.1.0"
+
+[[package]]
+name = "rizz_ringbuffer"
+version = "0.1.0"
+
+[[package]]
 name = "rizzler"
 version = "0.1.0"
 dependencies = [
@@ -484,8 +488,9 @@ dependencies = [
  "crossterm 0.29.0",
  "im",
  "ratatui",
- "ringbuffer",
  "rizz",
+ "rizz_changetree",
+ "rizz_ringbuffer",
  "ropey",
  "thiserror",
  "unicode-width 0.2.0",

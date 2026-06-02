@@ -5,9 +5,9 @@ use std::time::Instant;
 use std::{io, time::Duration};
 
 use crossterm::event::KeyEvent as CTKeyEvent;
-use ringbuffer::RingBuffer;
 use rizz::RizzError;
 use rizz::runtime::Value;
+use rizz_ringbuffer::RingBuffer;
 
 use crate::{
     action::Action,

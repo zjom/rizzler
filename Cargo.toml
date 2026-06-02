@@ -17,3 +17,8 @@ rizz = "0.1.2"
 ropey = "1.6.1"
 thiserror = "2.0.18"
 unicode-width = "0.2"
+ringbuffer = { workspace = true }
+
+[workspace.dependencies]
+ringbuffer = { path = "crates/ringbuffer", version = "0.1.0" }
+

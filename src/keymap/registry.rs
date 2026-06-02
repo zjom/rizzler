@@ -1,4 +1,5 @@
 use crate::action::Action;
+use crate::keymap::trie::TrieIter;
 use crate::keymap::{
     KeyEvent,
     default::defaults,
@@ -76,5 +77,61 @@ impl KeymapRegistry {
 impl Default for KeymapRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Iterator over every binding across all modes in a [`KeymapRegistry`].
+///
+/// Each item is `(mode, path, action)`.  Modes are visited in unspecified
+/// order; bindings within a mode follow [`TrieIter`] ordering (also
+/// unspecified).
+pub struct KeymapRegistryIter<'a> {
+    /// Outer cursor — advances to the next mode once the inner one is drained.
+    modes: std::collections::hash_map::Iter<'a, Rc<str>, Rc<Trie>>,
+    /// Mode name for whatever `inner` is currently walking.
+    current_mode: Option<Rc<str>>,
+    /// Inner cursor — walks bindings within the current mode's trie.
+    inner: Option<TrieIter<'a>>,
+}
+
+impl<'a> Iterator for KeymapRegistryIter<'a> {
+    type Item = (Rc<str>, Vec<KeyEvent>, &'a Action);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // Drain the current trie before moving to the next mode.
+            if let Some(ref mut trie_iter) = self.inner
+                && let Some((path, action)) = trie_iter.next()
+            {
+                // `current_mode` is always `Some` while `inner` is `Some`.
+                let mode = self.current_mode.clone().expect("mode set with inner iter");
+                return Some((mode, path, action));
+            }
+            // Current trie exhausted (or not yet started) — advance to next mode.
+            let (mode, trie) = self.modes.next()?;
+            self.current_mode = Some(mode.clone());
+            self.inner = Some(trie.as_ref().into_iter());
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a KeymapRegistry {
+    type Item = (Rc<str>, Vec<KeyEvent>, &'a Action);
+    type IntoIter = KeymapRegistryIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        KeymapRegistryIter {
+            modes: self.children.iter(),
+            current_mode: None,
+            inner: None,
+        }
+    }
+}
+
+impl KeymapRegistry {
+    /// Returns a borrowing iterator over every `(mode, path, action)` triple
+    /// registered across all modes.
+    pub fn iter(&self) -> KeymapRegistryIter<'_> {
+        self.into_iter()
     }
 }

@@ -108,3 +108,58 @@ pub fn walk(trie: &Trie, key: KeyEvent) -> WalkOutcome {
         }
     }
 }
+
+/// Depth-first iterator over every discrete binding in a [`Trie`].
+///
+/// Each item is the full key-path to a `Leaf` and a reference to its action.
+/// `on_char` wildcard slots are **not** yielded — they have no enumerable
+/// key set.  Iteration order is unspecified (HashMap-backed).
+pub struct TrieIter<'a> {
+    // Stack of (path-so-far, node-to-expand).
+    // Paths are cloned per-child; we accept the allocation because trie depth
+    // is bounded by the length of the longest key sequence.
+    stack: Vec<(Vec<KeyEvent>, &'a Trie)>,
+}
+
+impl<'a> Iterator for TrieIter<'a> {
+    type Item = (Vec<KeyEvent>, &'a Action);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let (path, trie) = self.stack.pop()?;
+            match trie {
+                Trie::Leaf(a) => return Some((path, a.as_ref())),
+                Trie::Node { children, .. } => {
+                    // `on_char` has no enumerable keys — skipped intentionally.
+                    for (key, child) in children {
+                        let mut child_path = path.clone();
+                        child_path.push(*key);
+                        self.stack.push((child_path, child.as_ref()));
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a Trie {
+    type Item = (Vec<KeyEvent>, &'a Action);
+    type IntoIter = TrieIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        // Seed the stack with the root at an empty path.
+        // If the root is itself a Leaf (unusual but valid), the first call to
+        // `next` yields `(vec![], action)` immediately.
+        TrieIter {
+            stack: vec![(Vec::new(), self)],
+        }
+    }
+}
+
+impl Trie {
+    /// Returns a borrowing iterator over every `(path, action)` pair in this
+    /// trie.  Equivalent to `self.into_iter()` via `IntoIterator for &Trie`.
+    pub fn iter(&self) -> TrieIter<'_> {
+        self.into_iter()
+    }
+}

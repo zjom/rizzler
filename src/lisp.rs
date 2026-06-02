@@ -8,6 +8,7 @@
 //! of an eval, so there is never simultaneous aliasing of `&mut State`.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process;
 use std::ptr::NonNull;
@@ -325,6 +326,7 @@ fn builtins() -> Env {
         })?;
         ok_unit(env)
     });
+
     b!("keymap-remove", 2, |args, env| {
         let mode = parse_mode_ident(&args[0])?;
         let lhs_str = as_str(&args[1], "keymap-remove")?;
@@ -332,6 +334,28 @@ fn builtins() -> Env {
             .map_err(|e| str_mismatch_msg("keymap-remove", &e))?;
         apply(Action::KeymapRemove { mode, lhs })?;
         ok_unit(env)
+    });
+
+    b!("keymap-get", 1, |args, env| {
+        let mode = parse_mode_ident(&args[0])?.to_str();
+        let mappings = with_editor_mut(|st| {
+            st.keymap_registry()
+                .iter()
+                .filter(|(m, _, _)| m.as_ref() == mode)
+                .map(|(m, p, a)| {
+                    vec![
+                        Value::Str(m),
+                        p.iter()
+                            .map(|e| (Value::Str("code".into()), e.code.to_string().into()))
+                            .collect::<HashMap<Value, Value>>()
+                            .into(),
+                        format!("{:?}", a).into(),
+                    ]
+                    .into()
+                })
+                .collect::<Vec<Value>>()
+        });
+        Ok((Rc::new(mappings.into()), env.clone()))
     });
 
     // minibuffer flow
@@ -392,6 +416,27 @@ fn builtins() -> Env {
     });
 
     // queries
+    b!("buf-text-set", 2, |args, env| {
+        let bufno = as_int(&args[0], "buf-text-set")?;
+        if bufno < 0 {
+            return Err(RuntimeError::type_mismatch(
+                "buf-text-set",
+                "integer >= 0",
+                &args[0],
+            ));
+        }
+        let text = args[1].repr();
+        let nbufs = with_editor_mut(|st| st.nbufs());
+        if bufno as usize >= nbufs {
+            return Err(RuntimeError::Other(anyhow!(
+                "bad input. editor has {nbufs} 0-indexed buffers but you requested buffer {bufno}"
+            )));
+        }
+
+        with_editor_mut(|st| st.set_buffer_contents(bufno as usize, &text));
+        Ok((unit(), env.clone()))
+    });
+
     b!("buf-text", 0, |_, env| {
         let s = with_editor_mut(|st| st.focused_buf().text());
         Ok((Rc::new(s.into()), env.clone()))

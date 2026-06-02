@@ -185,11 +185,12 @@ impl State {
     /// Write `msg` into the minibuffer as a status line. Used by lisp's
     /// `(message ...)` and as the sink for eval errors.
     pub(crate) fn set_minibuffer_message(&mut self, msg: &str) {
-        let b = &mut self.bufs[self.minibuffer];
-        b.clear();
-        for c in msg.chars() {
-            b.insert_char(c);
-        }
+        self.set_buffer_contents(self.minibuffer, msg);
+    }
+
+    pub(crate) fn set_buffer_contents(&mut self, bufno: usize, msg: &str) {
+        let b = &mut self.bufs[bufno];
+        b.clear_with(msg);
     }
 
     /// Read the current minibuffer text and leave the minibuffer. Used by the
@@ -206,6 +207,10 @@ impl State {
         self.workdir.clone()
     }
 
+    pub(crate) fn keymap_registry(&self) -> &KeymapRegistry {
+        &self.keymap
+    }
+
     /// The buffer currently receiving key events.
     fn focused_bufno(&self) -> usize {
         if self.focus_minibuffer {
@@ -213,6 +218,10 @@ impl State {
         } else {
             self.windows.focused_bufno()
         }
+    }
+
+    pub(crate) fn nbufs(&self) -> usize {
+        self.bufs.len()
     }
 
     /// Update viewports of all buffers currently displayed in a window plus

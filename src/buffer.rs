@@ -201,6 +201,11 @@ impl Buffer {
         self.file_pos = Position::default();
     }
 
+    pub fn clear_with(&mut self, text: &str) {
+        self.buf = Rope::from_str(text);
+        self.clamp_cursor();
+    }
+
     /// Owned snapshot of the rope text — used by command parsing.
     pub fn text(&self) -> String {
         self.buf.to_string()

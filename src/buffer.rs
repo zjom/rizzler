@@ -933,6 +933,129 @@ mod tests {
         assert_eq!(cur_row(&s), 9);
     }
 
+    // ---- selected_text ------------------------------------------------
+
+    #[test]
+    fn selected_text_none_when_not_visual() {
+        let s = mk("hello");
+        assert_eq!(s.selected_text(), None);
+    }
+
+    #[test]
+    fn selected_text_none_in_visual_without_anchor() {
+        // Anchor is normally set by set_mode, but a directly-set Visual mode
+        // with no anchor (e.g. mid-construction) must still return None.
+        let mut s = mk("hello");
+        s.mode = EditingMode::Visual;
+        assert_eq!(s.selected_text(), None);
+    }
+
+    #[test]
+    fn selected_text_visual_forward_single_line() {
+        let mut s = mk("hello");
+        s.set_mode(EditingMode::Visual); // anchor at (0,0)
+        s.cursor_pos = Position::<u16>::new(2, 0);
+        assert_eq!(s.selected_text().as_deref(), Some("hel"));
+    }
+
+    #[test]
+    fn selected_text_visual_reverse_single_line() {
+        let mut s = mk("hello");
+        s.cursor_pos = Position::<u16>::new(3, 0);
+        s.set_mode(EditingMode::Visual); // anchor at col 3
+        s.cursor_pos = Position::<u16>::new(1, 0);
+        assert_eq!(s.selected_text().as_deref(), Some("ell"));
+    }
+
+    #[test]
+    fn selected_text_visual_single_char() {
+        let mut s = mk("hello");
+        s.set_mode(EditingMode::Visual);
+        assert_eq!(s.selected_text().as_deref(), Some("h"));
+    }
+
+    #[test]
+    fn selected_text_visual_multiline() {
+        let mut s = mk("abc\ndef\nghi");
+        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.set_mode(EditingMode::Visual); // anchor at (col=1, row=0)
+        s.cursor_pos = Position::<u16>::new(1, 1);
+        assert_eq!(s.selected_text().as_deref(), Some("bc\nde"));
+    }
+
+    #[test]
+    fn selected_text_visual_clamps_at_eof() {
+        let mut s = mk("ab");
+        s.set_mode(EditingMode::Visual);
+        s.cursor_pos = Position::<u16>::new(50, 0); // past end, no clamp called
+        assert_eq!(s.selected_text().as_deref(), Some("ab"));
+    }
+
+    #[test]
+    fn selected_text_visual_line_single_line() {
+        let mut s = mk("abc\ndef\nghi");
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.set_mode(EditingMode::VisualLine);
+        assert_eq!(s.selected_text().as_deref(), Some("def\n"));
+    }
+
+    #[test]
+    fn selected_text_visual_line_multiline() {
+        let mut s = mk("abc\ndef\nghi");
+        s.set_mode(EditingMode::VisualLine);
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        assert_eq!(s.selected_text().as_deref(), Some("abc\ndef\n"));
+    }
+
+    #[test]
+    fn selected_text_visual_line_reverse() {
+        // Anchor below cursor — start/end rows must swap.
+        let mut s = mk("abc\ndef\nghi");
+        s.cursor_pos = Position::<u16>::new(0, 2);
+        s.set_mode(EditingMode::VisualLine);
+        s.cursor_pos = Position::<u16>::new(0, 0);
+        assert_eq!(s.selected_text().as_deref(), Some("abc\ndef\nghi"));
+    }
+
+    #[test]
+    fn selected_text_visual_line_includes_last_line_without_newline() {
+        let mut s = mk("abc\ndef");
+        s.set_mode(EditingMode::VisualLine);
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        assert_eq!(s.selected_text().as_deref(), Some("abc\ndef"));
+    }
+
+    #[test]
+    fn selected_text_visual_block_rectangle() {
+        let mut s = mk("abcde\nfghij\nklmno");
+        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.set_mode(EditingMode::VisualBlock);
+        s.cursor_pos = Position::<u16>::new(3, 2);
+        assert_eq!(s.selected_text().as_deref(), Some("bcd\nghi\nlmn"));
+    }
+
+    #[test]
+    fn selected_text_visual_block_reverse_columns() {
+        let mut s = mk("abcde\nfghij");
+        s.cursor_pos = Position::<u16>::new(3, 0);
+        s.set_mode(EditingMode::VisualBlock);
+        s.cursor_pos = Position::<u16>::new(1, 1);
+        assert_eq!(s.selected_text().as_deref(), Some("bcd\nghi"));
+    }
+
+    #[test]
+    fn selected_text_visual_block_truncates_short_lines() {
+        let mut s = mk("ab\nfghij\nk");
+        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.set_mode(EditingMode::VisualBlock);
+        s.cursor_pos = Position::<u16>::new(3, 2);
+        // row 0 "ab"     → cols 1..3 capped to len 2 → "b"
+        // row 1 "fghij"  → cols 1..4 → "ghi"
+        // row 2 "k"      → cols capped to len 1, empty slice
+        // Trailing newline after row 1 is emitted before the empty row 2.
+        assert_eq!(s.selected_text().as_deref(), Some("b\nghi\n"));
+    }
+
     #[test]
     fn half_page_up_at_top_does_not_scroll_past_origin() {
         let mut s = mk("0\n1\n2\n3\n4\n5");

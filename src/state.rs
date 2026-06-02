@@ -1,8 +1,11 @@
-use std::io;
+use crate::keymap::KeyEvent;
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Instant;
+use std::{io, time::Duration};
 
-use crossterm::event::KeyEvent;
+use crossterm::event::KeyEvent as CTKeyEvent;
+use ringbuffer::RingBuffer;
 use rizz::RizzError;
 use rizz::runtime::Value;
 
@@ -25,17 +28,20 @@ use crate::{
 /// area for the window tree.
 const STATUS_LINE_ROWS: u16 = 1;
 const MINIBUFFER_ROWS: u16 = 1;
+const KEYCOMBO_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Bundle of plugin points injected into [`State`]. Swap any field to
 /// customise the editor without touching `State`'s internals.
 pub struct Config {
     pub renderer: Box<dyn Renderer>,
+    pub keycombo_timeout: Duration,
 }
 
 impl Config {
     pub fn new() -> io::Result<Self> {
         Ok(Self {
             renderer: Box::new(RatatuiRenderer::new()?),
+            keycombo_timeout: KEYCOMBO_TIMEOUT,
         })
     }
 }
@@ -54,8 +60,9 @@ pub struct State {
     minibuffer: usize,
     quit: bool,
     keymap: KeymapRegistry,
+    keyevents: RingBuffer<(KeyEvent, Instant), 100>,
+    keycombo_timeout: Duration,
     renderer: Box<dyn Renderer>,
-    keyevent: Option<KeyEvent>,
     /// Embedded lisp runtime. Held as `Option` so `eval_lisp*` can `take` it
     /// for the duration of an eval — this also blocks re-entrant evaluation.
     lisp: Option<LispRuntime>,
@@ -85,8 +92,9 @@ impl State {
             minibuffer: 0,
             quit: false,
             keymap: KeymapRegistry::new(),
+            keyevents: RingBuffer::new(),
+            keycombo_timeout: config.keycombo_timeout,
             renderer: config.renderer,
-            keyevent: None,
             lisp: Some(LispRuntime::new()),
             theme: ThemeCell::default(),
             slots: SlotRegistry::new(),
@@ -229,10 +237,19 @@ impl State {
         self.quit
     }
 
-    pub fn handle_key_event(&mut self, event: KeyEvent) -> io::Result<()> {
-        self.keyevent = Some(event);
+    pub fn handle_key_event(&mut self, event: CTKeyEvent) -> io::Result<()> {
+        let now = Instant::now();
+        let timedout = self
+            .keyevents
+            .peek_back()
+            .is_some_and(|(_, earlier)| now.duration_since(*earlier) > self.keycombo_timeout);
+        self.keyevents.push_back((event.into(), now));
+
         let mode = self.bufs[self.focused_bufno()].mode();
-        if let Some(action) = self.keymap.resolve(mode.to_str().into(), event.into()) {
+        if let Some(action) = self
+            .keymap
+            .resolve(mode.to_str().into(), event.into(), timedout)
+        {
             self.apply(&action)?;
         }
         // Refresh after apply: window splits/closes and buffer switches may
@@ -458,7 +475,7 @@ impl State {
             minibuffer: &self.bufs[self.minibuffer],
             focus_minibuffer: self.focus_minibuffer,
             bufno: self.windows.focused_bufno(),
-            keyevent: self.keyevent.map(|e| e.into()),
+            keyevent: self.keyevents.peek_back().map(|(e, _)| e.to_owned()),
             cursor_style: match self.bufs[focused].mode() {
                 EditingMode::Insert | EditingMode::Command => CursorStyle::Bar,
                 _ => CursorStyle::Block,
@@ -508,7 +525,7 @@ impl State {
             minibuffer: &self.bufs[self.minibuffer],
             focus_minibuffer: self.focus_minibuffer,
             bufno: self.windows.focused_bufno(),
-            keyevent: self.keyevent.map(|e| e.into()),
+            keyevent: self.keyevents.peek_back().map(|(ke, _)| ke.to_owned()),
             cursor_style: CursorStyle::Block, // placeholder; segments don't use it
         };
 
@@ -605,6 +622,7 @@ pub(crate) mod test_support {
     pub fn test_state() -> State {
         State::with_config(Config {
             renderer: Box::new(NullRenderer),
+            keycombo_timeout: Duration::from_hours(24),
         })
         .unwrap()
     }

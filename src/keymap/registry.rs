@@ -21,11 +21,16 @@ impl KeymapRegistry {
             prev_mode: None,
         }
     }
-    pub fn resolve(&mut self, mode: Rc<str>, key: KeyEvent) -> Option<Vec<Rc<Action>>> {
+    pub fn resolve(
+        &mut self,
+        mode: Rc<str>,
+        key: KeyEvent,
+        timedout: bool,
+    ) -> Option<Vec<Rc<Action>>> {
         // Continue an in-progress sequence only if the mode is unchanged;
         // otherwise restart from this mode's root keymap. `take()` clears
         // any stale sequence either way.
-        let continuing = self.prev_mode.as_ref() == Some(&mode);
+        let continuing = !timedout && self.prev_mode.as_ref() == Some(&mode);
         self.prev_mode = Some(mode.clone());
 
         let start = match self.cur.take() {

@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 pub use crossterm::event::{KeyCode, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]

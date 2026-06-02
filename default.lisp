@@ -27,10 +27,7 @@
                                   (newline)
                                   (move-cursor 'up)))
 
-(map 'normal "x"      '(do (move-cursor 'right)
-                                  (set-mode 'insert)
-                                  (delete-char)
-                                  (set-mode 'normal)))
+(map 'normal "x"      '(delete-char-at (cursor-col) (cursor-line)))
 (map 'normal "j"      '(move-cursor 'down))
 (map 'normal "<down>" '(move-cursor 'down))
 (map 'normal "k"      '(move-cursor 'up))

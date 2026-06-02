@@ -303,6 +303,23 @@ impl Buffer {
         _ = self.buf.try_remove(cidx - 1..cidx);
     }
 
+    pub fn delete_char_at(&mut self, Position { col, row }: Position<usize>) {
+        if row >= self.buf.len_lines() {
+            return;
+        }
+        let line_start = self.buf.line_to_char(row);
+        let mut line_len = self.buf.line(row).len_chars();
+        if line_len > 0 && self.buf.char(line_start + line_len - 1) == '\n' {
+            line_len -= 1;
+        }
+        if col >= line_len {
+            return;
+        }
+        let cidx = line_start + col;
+        _ = self.buf.try_remove(cidx..cidx + 1);
+        self.clamp_cursor();
+    }
+
     pub fn move_cursor(&mut self, m: MoveKind) {
         use MoveKind as MK;
         match m {

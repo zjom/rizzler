@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use crate::buffer::MoveKind;
+use crate::position::Position;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -21,6 +22,7 @@ pub enum Action {
     InsertChar(char),
     InsertNewline,
     DeleteChar,
+    DeleteCharAt(Position<usize>),
     MoveCursor(MoveKind),
 
     CommandCancel,

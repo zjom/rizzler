@@ -212,6 +212,13 @@ fn builtins() -> Env {
         apply(Action::DeleteChar)?;
         ok_unit(env)
     });
+
+    b!("delete-char-at", 2, |args, env| {
+        let col = as_usize(&args[0], "delete-char-at")?;
+        let row = as_usize(&args[1], "delete-char-at")?;
+        apply(Action::DeleteCharAt(Position::new(col, row)))?;
+        ok_unit(env)
+    });
     b!("newline", 0, |_, env| {
         apply(Action::InsertNewline)?;
         ok_unit(env)
@@ -797,6 +804,15 @@ fn as_u8(v: &Rc<Value>, name: &str) -> Result<u8, RuntimeError> {
     u8::try_from(n).map_err(|_| RuntimeError::TypeMismatch {
         name: name.into(),
         expected: "0..=255".into(),
+        got: n.to_string().into(),
+    })
+}
+
+fn as_usize(v: &Rc<Value>, name: &str) -> Result<usize, RuntimeError> {
+    let n = as_int(v, name)?;
+    usize::try_from(n).map_err(|_| RuntimeError::TypeMismatch {
+        name: name.into(),
+        expected: "0..=usize::MAX".into(),
         got: n.to_string().into(),
     })
 }

@@ -287,6 +287,11 @@ impl State {
                     let f = self.focused_bufno();
                     self.bufs[f].delete_char();
                 }
+
+                Action::DeleteCharAt(pos) => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].delete_char_at(*pos);
+                }
                 Action::MoveCursor(m) => {
                     let f = self.focused_bufno();
                     self.bufs[f].move_cursor(*m);

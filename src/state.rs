@@ -28,7 +28,7 @@ use crate::{
 /// area for the window tree.
 const STATUS_LINE_ROWS: u16 = 1;
 const MINIBUFFER_ROWS: u16 = 1;
-const KEYCOMBO_TIMEOUT: Duration = Duration::from_millis(100);
+const KEYCOMBO_TIMEOUT: Duration = Duration::from_millis(1000);
 
 /// Bundle of plugin points injected into [`State`]. Swap any field to
 /// customise the editor without touching `State`'s internals.

@@ -54,9 +54,17 @@ impl Renderer for RatatuiRenderer {
             let base_style = style_to_ratatui(&frame_data.default_style);
             f.render_widget(Block::default().style(base_style), f.area());
 
-            // Vertical layout: editor, status (1), each extra bottom row,
-            // minibuffer (1).
-            let mut constraints = vec![Constraint::Min(1), Constraint::Length(1)];
+            // Vertical layout: each top strip → editor → status (1) → each
+            // bottom strip → minibuffer (1).
+            let mut constraints = Vec::new();
+            for t in &frame_data.top_extra {
+                constraints.push(Constraint::Length(t.lines.len() as u16));
+            }
+            let editor_idx = constraints.len();
+            constraints.push(Constraint::Min(1));
+            let status_idx = constraints.len();
+            constraints.push(Constraint::Length(1));
+            let bottom_start = constraints.len();
             for b in &frame_data.bottom_extra {
                 constraints.push(Constraint::Length(b.lines.len() as u16));
             }
@@ -66,8 +74,15 @@ impl Renderer for RatatuiRenderer {
                 .constraints(constraints)
                 .split(f.area());
 
-            let editor_area = rects[0];
-            let status_area = rects[1];
+            for (t, area) in frame_data
+                .top_extra
+                .iter()
+                .zip(rects.iter().take(editor_idx))
+            {
+                draw_strip(t, *area, f);
+            }
+            let editor_area = rects[editor_idx];
+            let status_area = rects[status_idx];
             let minibuffer_area = *rects.last().unwrap();
 
             let mut cursor: Option<(u16, u16)> = None;
@@ -92,9 +107,9 @@ impl Renderer for RatatuiRenderer {
             for (b, area) in frame_data
                 .bottom_extra
                 .iter()
-                .zip(rects.iter().skip(2).take(frame_data.bottom_extra.len()))
+                .zip(rects.iter().skip(bottom_start))
             {
-                draw_extra_bottom(b, *area, f);
+                draw_strip(b, *area, f);
             }
 
             MinibufferLine::render(minibuffer_area, &snap, f);
@@ -110,7 +125,7 @@ impl Renderer for RatatuiRenderer {
     }
 }
 
-fn draw_extra_bottom(b: &crate::render::RenderedBottom, area: Rect, f: &mut ratatui::Frame) {
+fn draw_strip(b: &crate::render::RenderedStrip, area: Rect, f: &mut ratatui::Frame) {
     let rows: Vec<Line<'static>> = b
         .lines
         .iter()

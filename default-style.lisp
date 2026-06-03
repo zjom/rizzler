@@ -17,8 +17,8 @@
 ;;                 indexed int, and `(rgb r g b)` true-color).
 ;;    Helpers    — `fn` defines, `let`, `if`, `do`, `fmap`, `range`, arithmetic,
 ;;                 `str-join`, `to-str`, `=`, `!`.
-;;    Slots      — every category (status segments left + right, gutter,
-;;                 decorator, bottom strip) registered in every payload form
+;;    Regions    — `region-add` for every anchor (status-left, status-right,
+;;                 gutter, decorator, top, bottom) in every payload form
 ;;                 (Builtin / Static / Callable).
 ;; ============================================================================
 
@@ -132,7 +132,7 @@
 ;; palette above. Past-EOF rows (lnum = `()`) render as plain whitespace.
 ;;
 ;; If you want the original right-aligned bare numbers back, replace this
-;; with:  (gutter-add 'line-numbers 0 'line-numbers)
+;; with:  (region-add 'line-numbers {"gutter": 0} 'line-numbers)
 
 (fn _gutter (n)
   (if (= n ())
@@ -143,7 +143,7 @@
           (span (_pad-right (str-join ["│ " (to-str n)] "") 5)
                 "twilight.gutter"))))
 
-(gutter-add 'line-numbers 5 _gutter)
+(region-add 'line-numbers {"gutter": 5} _gutter)
 
 
 ;; ---------------------------------------------------------------------------
@@ -160,8 +160,8 @@
 ;;   * an inline style map mixed with face-name references
 ;;   * order matters — registered last, so it layers over current-line-bg.
 
-(decorator-add 'base-fg               'base-fg)
-(decorator-add 'selection-highlight   'selection-highlight)
+(region-add 'base-fg              'decorator 'base-fg)
+(region-add 'selection-highlight  'decorator 'selection-highlight)
 
 (fn _current-line ()
   [{"row":          (cursor-line)
@@ -169,7 +169,7 @@
     "len":          0
     "style":        "cursor-line"
     "pad-to-width": 1}])
-(decorator-add 'current-line-highlight _current-line)
+(region-add 'current-line-highlight 'decorator _current-line)
 
 (fn _cursor-marker ()
   ;; Single-cell array of one StyledRange map. Could be empty (`[]`) and
@@ -180,20 +180,20 @@
     "style":        "twilight.cursor-marker"
     "pad-to-width": 0}])
 
-(decorator-add 'cursor-marker _cursor-marker)
+(region-add 'cursor-marker 'decorator _cursor-marker)
 
 
 ;; ---------------------------------------------------------------------------
 ;; 5. Status line
 ;; ---------------------------------------------------------------------------
 ;;
-;; Clean slate, then rebuild. `status-segment-remove` is idempotent so user
+;; Clean slate, then rebuild. `region-remove` is idempotent so user
 ;; configs can layer further.
 
-(status-segment-remove 'mode-glyph)
-(status-segment-remove 'last-key)
-(status-segment-remove 'spacer)
-(status-segment-remove 'buffer-no)
+(region-remove 'mode-glyph)
+(region-remove 'last-key)
+(region-remove 'spacer)
+(region-remove 'buffer-no)
 
 ;; --- left: mode badge ---------------------------------------------------
 (fn _mode-segment ()
@@ -202,7 +202,7 @@
     (span (str-join [" " (_mode-glyph m) " "] "")
           (_mode-face m))))
 
-(status-segment-add 'mode 'left _mode-segment)
+(region-add 'mode 'status-left _mode-segment)
 
 ;; --- left: current buffer file path ----------------------
 (fn _buf-path ()
@@ -213,7 +213,7 @@
         "  twilight  "
         path))
     (span content "twilight.signature")))
-(status-segment-add 'buffer-path 'left _buf-path)
+(region-add 'buffer-path 'status-left _buf-path)
 
 ;; --- left: contextual hint depending on selection ----------------------
 ;; `selected-text` returns `()` when nothing's selected, otherwise the text.
@@ -225,24 +225,24 @@
         (span (str-join [" " (to-str (len sel)) " chars selected "] "")
               "twilight.accent"))))
 
-(status-segment-add 'sel-hint 'left _selection-hint)
+(region-add 'sel-hint 'status-left _selection-hint)
 
 ;; --- right: cursor position ------------------------------------------
 (fn _cursor-pos ()
   (span (str-join [(to-str (cursor-line)) ":" (to-str (cursor-col))] "")
         "twilight.accent"))
 
-(status-segment-add 'cursor 'right _cursor-pos)
+(region-add 'cursor 'status-right _cursor-pos)
 
 ;; --- right: a static dividing pip ------------------------------------
-(status-segment-add 'pip 'right
+(region-add 'pip 'status-right
   (span " • " "twilight.muted"))
 
 ;; --- right: builtin last-key reference, kept verbatim ----------------
-(status-segment-add 'last-key 'right 'last-key)
+(region-add 'last-key 'status-right 'last-key)
 
 ;; --- right: spacer (Static plain string — simplest possible payload) -
-(status-segment-add 'spacer 'right "  ")
+(region-add 'spacer 'status-right "  ")
 
 ;; --- right: builtin buffer number, styled by composing with `span`  --
 ;; `buffer-no` is a Rust builtin, but we can also wrap it in a closure to
@@ -255,7 +255,7 @@
         (span (to-str (cursor-line)) "twilight.reverse")
         (span (to-str (cursor-line)) "twilight.warn"))))
 
-(status-segment-add 'bufno 'right _bufno)
+(region-add 'bufno 'status-right _bufno)
 
 
 ;; ---------------------------------------------------------------------------
@@ -266,7 +266,7 @@
 ;; A handler that returns `[[span...] [span...] ...]` lays out N rows; here
 ;; we produce a single one-row tip line.
 ;;
-;; To remove: `(bottom-remove 'hint-bar)` in your `init.lisp`.
+;; To remove: `(region-remove 'hint-bar)` in your `init.lisp`.
 
 (fn _hint-bar ()
   (do
@@ -285,7 +285,7 @@
     ;; Returns one row, where the row is an array of spans laid left-to-right.
     [[lhs]]))
 
-(bottom-add 'hint-bar 1 _hint-bar)
+(region-add 'hint-bar 'bottom _hint-bar)
 
 
 ;; ---------------------------------------------------------------------------
@@ -307,4 +307,4 @@
            "pad-to-width": 0})
         (range 1 1)))                     ;; empty range — produces no entries
 
-(decorator-add 'phantom _phantom-ranges)
+(region-add 'phantom 'decorator _phantom-ranges)

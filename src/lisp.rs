@@ -25,7 +25,7 @@ use crate::buffer::MoveKind;
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
 use crate::position::Position;
-use crate::slots::{BuiltinId, LispRenderable, SegmentSide, Slot, SlotCategory, SlotKind};
+use crate::regions::{BuiltinId, Producer, Region, RegionAnchor};
 use crate::state::State;
 use crate::styling::{normalize_style_value, rgb_value, style_from_value, style_to_value};
 use crate::window::{FocusDir, SplitDir};
@@ -533,92 +533,36 @@ fn builtins() -> Env {
         Ok((Rc::new(Value::Map(m)), env.clone()))
     });
 
-    // slot registration. All `*-add` forms accept a handler that's either a
-    // Value::Ident (resolved to a Rust builtin via BuiltinId::parse), a
-    // callable (closure or native fn — called each frame), or any other
-    // value (stored as Static and converted at render time).
-    b!("status-segment-add", 3, |args, env| {
-        let name = as_ident_or_str(&args[0], "status-segment-add")?;
-        let side = parse_segment_side(&args[1])?;
-        let renderable =
-            parse_handler(&args[2], "status-segment-add", SlotCategory::StatusSegment)?;
+    // region registration. The anchor argument decides where the region
+    // appears on screen; the handler is one of:
+    //   * ident → resolved via `BuiltinId::parse` (must match the anchor)
+    //   * callable → invoked each frame
+    //   * any other value → stored as a Static lisp value
+    //
+    // Anchor syntax (see `parse_anchor`):
+    //   'status-left | 'status-right | 'decorator
+    //   'top         | 'bottom              (full-width strip)
+    //   {"gutter": N}                       (left column, N wide)
+    //
+    // Names are globally unique across all anchors — re-adding by the same
+    // name replaces the previous registration in place.
+    b!("region-add", 3, |args, env| {
+        let name = as_ident_or_str(&args[0], "region-add")?;
+        let anchor = parse_anchor(&args[1])?;
+        let producer = parse_handler(&args[2], "region-add", &anchor)?;
         with_editor_mut(|st| {
-            st.slots_mut().add(Slot {
+            st.regions_mut().add(Region {
                 name,
-                kind: SlotKind::StatusSegment { side },
-                renderable,
+                anchor,
+                producer,
             });
         });
         ok_unit(env)
     });
-    b!("status-segment-remove", 1, |args, env| {
-        let name = as_ident_or_str(&args[0], "status-segment-remove")?;
+    b!("region-remove", 1, |args, env| {
+        let name = as_ident_or_str(&args[0], "region-remove")?;
         with_editor_mut(|st| {
-            st.slots_mut().remove(SlotCategory::StatusSegment, &name);
-        });
-        ok_unit(env)
-    });
-
-    b!("gutter-add", 3, |args, env| {
-        let name = as_ident_or_str(&args[0], "gutter-add")?;
-        let width = as_int(&args[1], "gutter-add")?;
-        let width = u16::try_from(width.max(0)).unwrap_or(0);
-        let renderable = parse_handler(&args[2], "gutter-add", SlotCategory::Gutter)?;
-        with_editor_mut(|st| {
-            st.slots_mut().add(Slot {
-                name,
-                kind: SlotKind::Gutter { width },
-                renderable,
-            });
-        });
-        ok_unit(env)
-    });
-    b!("gutter-remove", 1, |args, env| {
-        let name = as_ident_or_str(&args[0], "gutter-remove")?;
-        with_editor_mut(|st| {
-            st.slots_mut().remove(SlotCategory::Gutter, &name);
-        });
-        ok_unit(env)
-    });
-
-    b!("decorator-add", 2, |args, env| {
-        let name = as_ident_or_str(&args[0], "decorator-add")?;
-        let renderable = parse_handler(&args[1], "decorator-add", SlotCategory::Decorator)?;
-        with_editor_mut(|st| {
-            st.slots_mut().add(Slot {
-                name,
-                kind: SlotKind::Decorator,
-                renderable,
-            });
-        });
-        ok_unit(env)
-    });
-    b!("decorator-remove", 1, |args, env| {
-        let name = as_ident_or_str(&args[0], "decorator-remove")?;
-        with_editor_mut(|st| {
-            st.slots_mut().remove(SlotCategory::Decorator, &name);
-        });
-        ok_unit(env)
-    });
-
-    b!("bottom-add", 3, |args, env| {
-        let name = as_ident_or_str(&args[0], "bottom-add")?;
-        let rows = as_int(&args[1], "bottom-add")?.max(1);
-        let rows = u16::try_from(rows).unwrap_or(1);
-        let renderable = parse_handler(&args[2], "bottom-add", SlotCategory::Bottom)?;
-        with_editor_mut(|st| {
-            st.slots_mut().add(Slot {
-                name,
-                kind: SlotKind::Bottom { rows },
-                renderable,
-            });
-        });
-        ok_unit(env)
-    });
-    b!("bottom-remove", 1, |args, env| {
-        let name = as_ident_or_str(&args[0], "bottom-remove")?;
-        with_editor_mut(|st| {
-            st.slots_mut().remove(SlotCategory::Bottom, &name);
+            st.regions_mut().remove(&name);
         });
         ok_unit(env)
     });
@@ -971,43 +915,68 @@ fn display_from_value(v: &Rc<Value>) -> Result<Option<crate::render::Display>, R
     }
 }
 
-fn parse_segment_side(v: &Rc<Value>) -> Result<SegmentSide, RuntimeError> {
-    let s = as_ident(v, "segment-side")?;
-    Ok(match s.as_ref() {
-        "left" => SegmentSide::Left,
-        "right" => SegmentSide::Right,
-        other => return Err(unknown_variant("segment-side", other)),
-    })
+/// Parse an anchor value. Accepted shapes:
+///
+/// * `'status-left` / `'status-right` / `'decorator` / `'top` / `'bottom`
+/// * `{"gutter": N}` — left-side gutter N columns wide
+fn parse_anchor(v: &Rc<Value>) -> Result<RegionAnchor, RuntimeError> {
+    match &**v {
+        Value::Ident(s) | Value::Str(s) => Ok(match s.as_ref() {
+            "status-left" => RegionAnchor::StatusLeft,
+            "status-right" => RegionAnchor::StatusRight,
+            "decorator" => RegionAnchor::Decorator,
+            "top" => RegionAnchor::Top,
+            "bottom" => RegionAnchor::Bottom,
+            other => return Err(unknown_variant("anchor", other)),
+        }),
+        Value::Map(m) => {
+            let key = |k: &str| Rc::new(Value::Str(k.into()));
+            if let Some(w) = m.get(&key("gutter")) {
+                let width = as_int(w, "anchor.gutter")?.max(0);
+                let width = u16::try_from(width).unwrap_or(0);
+                return Ok(RegionAnchor::Gutter { width });
+            }
+            Err(RuntimeError::type_mismatch(
+                "anchor",
+                "{gutter: N}",
+                v,
+            ))
+        }
+        _ => Err(RuntimeError::type_mismatch(
+            "anchor",
+            "ident|str|map",
+            v,
+        )),
+    }
 }
 
 /// Interpret a user-supplied handler:
 ///
-/// * `Value::Ident(s)` — try `BuiltinId::parse(s)`; if it matches and its
-///   category matches the slot's, use the builtin. Otherwise treat the
-///   ident as a Static value (less common, but harmless).
-/// * Callable — `LispRenderable::Callable(...)`.
-/// * Anything else — `LispRenderable::Static(...)`.
+/// * `Value::Ident(s)` — try `BuiltinId::parse(s)`; if it matches and is
+///   compatible with the anchor, use the builtin. Mismatches error out.
+/// * Callable — `Producer::Callable(...)`.
+/// * Anything else — `Producer::Static(...)`.
 fn parse_handler(
     v: &Rc<Value>,
     name: &str,
-    expected: SlotCategory,
-) -> Result<LispRenderable, RuntimeError> {
+    anchor: &RegionAnchor,
+) -> Result<Producer, RuntimeError> {
     if let Value::Ident(s) = &**v
         && let Some(b) = BuiltinId::parse(s)
     {
-        if b.category() != expected {
+        if !b.matches_anchor(anchor) {
             return Err(RuntimeError::TypeMismatch {
                 name: name.into(),
-                expected: format!("builtin for {:?}", expected).into(),
-                got: format!("builtin for {:?}", b.category()).into(),
+                expected: format!("builtin compatible with {:?}", anchor).into(),
+                got: format!("{:?}", b).into(),
             });
         }
-        return Ok(LispRenderable::Builtin(b));
+        return Ok(Producer::Builtin(b));
     }
     if v.is_callable() {
-        Ok(LispRenderable::Callable(v.clone()))
+        Ok(Producer::Callable(v.clone()))
     } else {
-        Ok(LispRenderable::Static(v.clone()))
+        Ok(Producer::Static(v.clone()))
     }
 }
 
@@ -1164,7 +1133,7 @@ mod tests {
     #[test]
     fn status_segment_add_via_lisp_changes_frame() {
         let mut s = test_state();
-        s.eval_lisp(r#"(status-segment-add 'star 'right "★")"#)
+        s.eval_lisp(r#"(region-add 'star 'status-right "★")"#)
             .unwrap();
         let (frame, err) = s.precompute_frame();
         assert!(err.is_none(), "no slot errors: {err:?}");
@@ -1180,9 +1149,9 @@ mod tests {
     fn status_segment_remove_via_lisp_drops_segment() {
         let mut s = test_state();
         // Clear every default left segment so we can check removal works.
-        s.eval_lisp("(status-segment-remove 'mode)").unwrap();
-        s.eval_lisp("(status-segment-remove 'buffer-path)").unwrap();
-        s.eval_lisp("(status-segment-remove 'sel-hint)").unwrap();
+        s.eval_lisp("(region-remove 'mode)").unwrap();
+        s.eval_lisp("(region-remove 'buffer-path)").unwrap();
+        s.eval_lisp("(region-remove 'sel-hint)").unwrap();
         let (frame, err) = s.precompute_frame();
         assert!(err.is_none());
         assert!(frame.status_left.is_empty());
@@ -1193,10 +1162,10 @@ mod tests {
         let mut s = test_state();
         // Strip out the theme's left segments so our test segment is the
         // sole content on the left.
-        s.eval_lisp("(status-segment-remove 'mode)").unwrap();
-        s.eval_lisp("(status-segment-remove 'buffer-path)").unwrap();
-        s.eval_lisp("(status-segment-remove 'sel-hint)").unwrap();
-        s.eval_lisp(r#"(status-segment-add 'probe 'left (fn _p () (focused-mode)))"#)
+        s.eval_lisp("(region-remove 'mode)").unwrap();
+        s.eval_lisp("(region-remove 'buffer-path)").unwrap();
+        s.eval_lisp("(region-remove 'sel-hint)").unwrap();
+        s.eval_lisp(r#"(region-add 'probe 'status-left (fn _p () (focused-mode)))"#)
             .unwrap();
         let (frame, _err) = s.precompute_frame();
         let s_left: Vec<&str> = frame
@@ -1215,10 +1184,10 @@ mod tests {
         use unicode_width::UnicodeWidthStr;
         let mut s = test_state();
         for name in ["cursor", "pip", "last-key", "spacer", "bufno"] {
-            s.eval_lisp(&format!("(status-segment-remove '{name})"))
+            s.eval_lisp(&format!("(region-remove '{name})"))
                 .unwrap();
         }
-        s.eval_lisp(r#"(status-segment-add 'cjk 'right "漢字")"#)
+        s.eval_lisp(r#"(region-add 'cjk 'status-right "漢字")"#)
             .unwrap();
         let (frame, _) = s.precompute_frame();
         let total: usize = frame
@@ -1236,7 +1205,7 @@ mod tests {
         // leave the buffer alone.
         let mut s = test_state();
         s.eval_lisp(
-            r#"(status-segment-add 'naughty 'left
+            r#"(region-add 'naughty 'status-left
                   (fn _naughty () (do (insert-char "x") "")))"#,
         )
         .unwrap();

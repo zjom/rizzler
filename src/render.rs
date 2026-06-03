@@ -58,22 +58,24 @@ pub struct RenderedFrame {
     /// fg/bg) if the theme doesn't define one, in which case the terminal's
     /// own defaults show through.
     pub default_style: Style,
+    /// Full-width strips above the editor area, in declaration order. Empty
+    /// in the default configuration.
+    pub top_extra: Vec<RenderedStrip>,
     /// Status line, split into the two horizontal alignment buckets. Styles
     /// from the theme have already been baked into each `Span`.
     pub status_left: Vec<Span<'static>>,
     pub status_right: Vec<Span<'static>>,
-    /// User-added bottom rows that slot in between the status line and the
-    /// minibuffer. Empty in the default configuration.
-    pub bottom_extra: Vec<RenderedBottom>,
+    /// Full-width strips between the status line and the minibuffer.
+    pub bottom_extra: Vec<RenderedStrip>,
     /// Per-buffer gutters and decorator ranges, indexed by `bufno`. Buffers
     /// not currently visible may still have entries (they're cheap to
     /// produce), but the renderer only reads entries it actually shows.
     pub per_buf: Vec<RenderedBuffer>,
 }
 
-/// A user-added bottom-strip component, fully pre-rendered. The renderer
-/// reserves `lines.len()` rows for it.
-pub struct RenderedBottom {
+/// A user-added full-width strip, fully pre-rendered. The renderer reserves
+/// `lines.len()` rows for it. Used for both top and bottom regions.
+pub struct RenderedStrip {
     pub lines: Vec<Vec<Span<'static>>>,
 }
 

@@ -18,7 +18,7 @@ use crate::{
     position::Position,
     render::{CursorStyle, Renderer, StateSnapshot},
     render_ratatui::RatatuiRenderer,
-    slots::SlotRegistry,
+    regions::RegionRegistry,
     styling::ThemeCell,
     window::{SplitDir, WindowTree},
 };
@@ -69,10 +69,10 @@ pub struct State {
     /// Named styles registered by lisp (`face-define`). `RefCell` so render
     /// callbacks can introspect without holding `&mut State`.
     theme: ThemeCell,
-    /// Ordered registry of customization slots (status segments, gutters,
-    /// line decorators, bottom-strip components). Owned, not RefCell — only
-    /// the lisp builtins that hold `&mut State` mutate it.
-    slots: SlotRegistry,
+    /// Ordered registry of customization regions (top/bottom strips, status
+    /// segments, gutters, decorators). Owned, not RefCell — only the lisp
+    /// builtins that hold `&mut State` mutate it.
+    regions: RegionRegistry,
     workdir: Rc<Path>,
 }
 
@@ -97,7 +97,7 @@ impl State {
             renderer: config.renderer,
             lisp: Some(LispRuntime::new()),
             theme: ThemeCell::default(),
-            slots: SlotRegistry::new(),
+            regions: RegionRegistry::new(),
             workdir: workdir.into(),
         };
         state.refresh_viewport();
@@ -181,10 +181,10 @@ impl State {
         &self.theme
     }
 
-    /// Mutable accessor for the slot registry. Used by the `*-add`/`*-remove`
-    /// builtins.
-    pub(crate) fn slots_mut(&mut self) -> &mut SlotRegistry {
-        &mut self.slots
+    /// Mutable accessor for the region registry. Used by the `region-add` /
+    /// `region-remove` builtins.
+    pub(crate) fn regions_mut(&mut self) -> &mut RegionRegistry {
+        &mut self.regions
     }
 
     /// Write `msg` into the minibuffer as a status line. Used by lisp's
@@ -509,15 +509,16 @@ impl State {
         result
     }
 
-    /// Run every slot under an `EditorGuard`, packing the results into a
+    /// Run every region under an `EditorGuard`, packing the results into a
     /// `RenderedFrame` the renderer can consume without ever touching lisp.
     /// Returns the frame plus an optional error message (concatenated from
-    /// the first few slot failures) to surface to the minibuffer.
+    /// the first few region failures) to surface to the minibuffer.
     pub(crate) fn precompute_frame(&mut self) -> (crate::render::RenderedFrame, Option<String>) {
-        use crate::render::{RenderedBottom, RenderedBuffer, RenderedFrame};
-        use crate::slots::{
-            SegmentSide, produce_bottom, produce_decorator, produce_gutter, produce_status_segment,
+        use crate::regions::{
+            RegionAnchor, produce_decorator, produce_gutter, produce_status_span,
+            produce_strip_rows,
         };
+        use crate::render::{RenderedBuffer, RenderedFrame, RenderedStrip};
 
         let lisp = self.lisp.take().expect("recursive render is not supported");
         let _editor_guard = crate::lisp::EditorGuard::new(self);
@@ -530,15 +531,13 @@ impl State {
         let env = lisp.env().clone();
 
         let mut error_chunks: Vec<String> = Vec::new();
-        let record = |chunks: &mut Vec<String>, slot_name: &str, err: rizz::RizzError| {
+        let record = |chunks: &mut Vec<String>, region_name: &str, err: rizz::RizzError| {
             if chunks.len() < 3 {
-                chunks.push(format!("[{slot_name}] {err}"));
+                chunks.push(format!("[{region_name}] {err}"));
             }
         };
 
-        // Build a synthetic snapshot for status/bottom slots. They take a
-        // `&StateSnapshot`, which is just a read-only window onto fields
-        // we already own.
+        // Read-only snapshot status/strip producers consume.
         let snap = StateSnapshot {
             bufs: &self.bufs,
             windows: &self.windows,
@@ -546,54 +545,60 @@ impl State {
             focus_minibuffer: self.focus_minibuffer,
             bufno: self.windows.focused_bufno(),
             keyevent: self.keyevents.peek_back().map(|(ke, _)| ke.to_owned()),
-            cursor_style: CursorStyle::Block, // placeholder; segments don't use it
+            cursor_style: CursorStyle::Block,
         };
 
-        // Status segments
-        let mut status_left = Vec::new();
-        for s in self.slots.status_segments(SegmentSide::Left) {
-            match produce_status_segment(s, &snap, &theme, &env) {
-                Ok(spans) => status_left.extend(spans),
-                Err(e) => record(&mut error_chunks, &s.name, e),
-            }
-        }
-        let mut status_right = Vec::new();
-        for s in self.slots.status_segments(SegmentSide::Right) {
-            match produce_status_segment(s, &snap, &theme, &env) {
-                Ok(spans) => status_right.extend(spans),
-                Err(e) => record(&mut error_chunks, &s.name, e),
+        // One pass over the registry, routing each region's output to the
+        // matching `RenderedFrame` bucket.
+        let mut top_extra: Vec<RenderedStrip> = Vec::new();
+        let mut bottom_extra: Vec<RenderedStrip> = Vec::new();
+        let mut status_left: Vec<ratatui::text::Span<'static>> = Vec::new();
+        let mut status_right: Vec<ratatui::text::Span<'static>> = Vec::new();
+        for region in self.regions.iter() {
+            match region.anchor {
+                RegionAnchor::Top => match produce_strip_rows(region, &theme, &env) {
+                    Ok(lines) => top_extra.push(RenderedStrip { lines }),
+                    Err(e) => record(&mut error_chunks, &region.name, e),
+                },
+                RegionAnchor::Bottom => match produce_strip_rows(region, &theme, &env) {
+                    Ok(lines) => bottom_extra.push(RenderedStrip { lines }),
+                    Err(e) => record(&mut error_chunks, &region.name, e),
+                },
+                RegionAnchor::StatusLeft => match produce_status_span(region, &snap, &theme, &env) {
+                    Ok(spans) => status_left.extend(spans),
+                    Err(e) => record(&mut error_chunks, &region.name, e),
+                },
+                RegionAnchor::StatusRight => {
+                    match produce_status_span(region, &snap, &theme, &env) {
+                        Ok(spans) => status_right.extend(spans),
+                        Err(e) => record(&mut error_chunks, &region.name, e),
+                    }
+                }
+                // Per-buffer anchors are handled in the loop below.
+                RegionAnchor::Gutter { .. } | RegionAnchor::Decorator => {}
             }
         }
 
-        // Bottom rows (user-added only — status line and minibuffer are
-        // hardcoded into the renderer's layout).
-        let mut bottom_extra = Vec::new();
-        for s in self.slots.bottom() {
-            match produce_bottom(s, &snap, &theme, &env) {
-                Ok(lines) => bottom_extra.push(RenderedBottom { lines }),
-                Err(e) => record(&mut error_chunks, &s.name, e),
-            }
-        }
-
-        // Per-buffer gutters and decorators.
+        // Per-buffer pass: gutters + decorators, in registration order
+        // (which is the renderer's left-to-right / layer order).
         let mut per_buf = Vec::with_capacity(self.bufs.len());
         for (i, buf) in self.bufs.iter().enumerate() {
-            // Skip the minibuffer — it has its own component.
             if i == self.minibuffer {
                 per_buf.push(RenderedBuffer::default());
                 continue;
             }
             let mut rb = RenderedBuffer::default();
-            for s in self.slots.gutters() {
-                match produce_gutter(s, buf, &theme, &env) {
-                    Ok(g) => rb.gutters.push(g),
-                    Err(e) => record(&mut error_chunks, &s.name, e),
-                }
-            }
-            for s in self.slots.decorators() {
-                match produce_decorator(s, buf, &theme, &env) {
-                    Ok(d) => rb.decorators.push(d),
-                    Err(e) => record(&mut error_chunks, &s.name, e),
+            for region in self.regions.iter() {
+                match region.anchor {
+                    RegionAnchor::Gutter { .. } => match produce_gutter(region, buf, &theme, &env) {
+                        Ok(g) => rb.gutters.push(g),
+                        Err(e) => record(&mut error_chunks, &region.name, e),
+                    },
+                    RegionAnchor::Decorator => match produce_decorator(region, buf, &theme, &env) {
+                        Ok(d) => rb.decorators.push(d),
+                        Err(e) => record(&mut error_chunks, &region.name, e),
+                    },
+                    _ => {}
                 }
             }
             // Text properties + overlays applied after user decorators so
@@ -621,6 +626,7 @@ impl State {
         (
             RenderedFrame {
                 default_style,
+                top_extra,
                 status_left,
                 status_right,
                 bottom_extra,

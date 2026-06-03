@@ -187,6 +187,9 @@ fn emit_clipped(
 }
 
 fn line_char_count(buf: &Buffer, row: usize) -> usize {
+    if buf.len_lines() < row {
+        return 0;
+    }
     buf.lines_at(row)
         .next()
         .map(|line| {

@@ -42,13 +42,13 @@
 (let pal-mode-c    (rgb 110 210 210))   ;; command cyan
 
 ;; --- base text + frame ---------------------------------------------------
-;; `default`, `region`, and `cursor-line` are the canonical names the Rust
+;; `default`, `selection`, and `cursor-line` are the canonical names the Rust
 ;; renderer looks up: `default` fills the whole frame as the baseline fg/bg,
-;; `region` colors the visual selection band, `cursor-line` colors the
+;; `selection` colors the visual selection band, `cursor-line` colors the
 ;; current-line band. Any face the user redefines under these names is
 ;; picked up automatically.
 (face-define "default"             {"fg": pal-fg-base "bg": pal-bg-deep})
-(face-define "region"              {"bg": pal-bg-sel})
+(face-define "selection"              {"bg": pal-bg-sel})
 (face-define "cursor-line"         {"bg": pal-bg-line "fg": pal-fg-base})
 
 (face-define "twilight.muted"      {"fg": pal-fg-dim "italic": 1})

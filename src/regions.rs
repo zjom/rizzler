@@ -352,7 +352,7 @@ fn builtin_decorator(b: BuiltinId, buf: &Buffer, theme: &Theme) -> DecoratorRang
             }
         }
         BuiltinId::SelectionHighlight => {
-            let style = theme.resolve("region").unwrap_or_else(|| Style {
+            let style = theme.resolve("selection").unwrap_or_else(|| Style {
                 bg: Some(crate::styling::Color::Rgb(60, 90, 130)),
                 ..Default::default()
             });

@@ -60,8 +60,9 @@
 
 ;; --- gutter + cursor ----------------------------------------------------
 (face-define "twilight.gutter"          {"fg": pal-fg-dim})
-(face-define "twilight.gutter-current"  {"fg": pal-accent "bold": 1})
-(face-define "twilight.cursor-marker"   {"fg": pal-bg-deep "bg": pal-accent})
+(face-define "twilight.gutter-current"  {"fg": pal-accent       "bold": 1})
+(face-define "twilight.cursor-marker"   {"fg": pal-bg-deep      "bg": pal-accent})
+(face-define "twilight.cursor-line"     {"bg": pal-bg-line      "fg": pal-fg-base })
 
 ;; --- xterm-indexed example: a soft amber, color 215 ---------------------
 (face-define "twilight.signature"  {"fg": 215 "italic": 1})
@@ -154,7 +155,14 @@
 
 (decorator-add 'base-fg               'base-fg)
 (decorator-add 'selection-highlight   'selection-highlight)
-(decorator-add 'current-line-highlight 'current-line-highlight)
+
+(fn _current-line ()
+  [{"row":          (cursor-line)
+    "col":          0
+    "len":          0
+    "style":        "twilight.cursor-line"
+    "pad-to-width": 1}])
+(decorator-add 'current-line-highlight _current-line)
 
 (fn _cursor-marker ()
   ;; Single-cell array of one StyledRange map. Could be empty (`[]`) and

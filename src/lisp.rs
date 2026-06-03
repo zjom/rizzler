@@ -292,8 +292,8 @@ fn builtins() -> Env {
     // windows
     b!("window-split", 1, |args, env| {
         let dir = match as_ident(&args[0], "window-split")?.as_ref() {
-            "vertical" => SplitDir::Vertical,
-            "horizontal" => SplitDir::Horizontal,
+            "vertical" | "v" => SplitDir::Vertical,
+            "horizontal" | "h" => SplitDir::Horizontal,
             other => return Err(unknown_variant("window-split", other)),
         };
         apply(Action::WindowSplit(dir))?;

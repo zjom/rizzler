@@ -521,6 +521,7 @@ impl State {
         // Snapshot the theme so callbacks that mutate it (`face-define`) only
         // affect the next frame.
         let theme = self.theme.borrow().clone();
+        let default_style = theme.lookup("default").cloned().unwrap_or_default();
         let env = lisp.env().clone();
 
         let mut error_chunks: Vec<String> = Vec::new();
@@ -607,6 +608,7 @@ impl State {
 
         (
             RenderedFrame {
+                default_style,
                 status_left,
                 status_right,
                 bottom_extra,

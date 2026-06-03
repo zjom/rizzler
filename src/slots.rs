@@ -22,7 +22,7 @@ use rizz::runtime::{self, Env, Value};
 use crate::buffer::Buffer;
 use crate::mode::EditingMode;
 use crate::render::{DecoratorRanges, RenderedGutter, StateSnapshot, StyledRange};
-use crate::styling::{Color, Style, Theme, rgb_value, spans_from_value, style_from_value};
+use crate::styling::{Style, Theme, rgb_value, spans_from_value, style_from_value};
 
 // ---------------------------------------------------------------------------
 // Renderable payload
@@ -432,16 +432,19 @@ fn builtin_gutter(b: BuiltinId, buf: &Buffer, _theme: &Theme) -> RenderedGutter 
 
 // --- builtin decorators ---
 
-fn builtin_decorator(b: BuiltinId, buf: &Buffer, _theme: &Theme) -> DecoratorRanges {
+fn builtin_decorator(b: BuiltinId, buf: &Buffer, theme: &Theme) -> DecoratorRanges {
     let start = buf.file_pos().row.min(buf.len_lines());
     let visible = buf.viewport.row as usize;
 
     let mut ranges = Vec::new();
     match b {
         BuiltinId::BaseFg => {
-            let style = Style {
-                fg: Some(Color::Blue),
-                ..Default::default()
+            // Apply the `default` face's full style across visible lines.
+            // If the theme doesn't define `default`, this is a no-op — the
+            // frame-wide base fill in the renderer already provides the
+            // editor's baseline colors.
+            let Some(style) = theme.lookup("default").cloned() else {
+                return DecoratorRanges { ranges };
             };
             for (i, line) in buf.lines_at(start).take(visible).enumerate() {
                 let text = line.to_string();
@@ -456,10 +459,13 @@ fn builtin_decorator(b: BuiltinId, buf: &Buffer, _theme: &Theme) -> DecoratorRan
             }
         }
         BuiltinId::SelectionHighlight => {
-            let style = Style {
-                bg: Some(Color::Rgb(60, 90, 130)),
-                ..Default::default()
-            };
+            let style = theme
+                .lookup("region")
+                .cloned()
+                .unwrap_or_else(|| Style {
+                    bg: Some(crate::styling::Color::Rgb(60, 90, 130)),
+                    ..Default::default()
+                });
             let Some(anchor) = buf.selection_anchor() else {
                 return DecoratorRanges { ranges };
             };
@@ -512,10 +518,13 @@ fn builtin_decorator(b: BuiltinId, buf: &Buffer, _theme: &Theme) -> DecoratorRan
             }
         }
         BuiltinId::CurrentLineHighlight => {
-            let style = Style {
-                bg: Some(Color::DarkGray),
-                ..Default::default()
-            };
+            let style = theme
+                .lookup("cursor-line")
+                .cloned()
+                .unwrap_or_else(|| Style {
+                    bg: Some(crate::styling::Color::DarkGray),
+                    ..Default::default()
+                });
             let cur_row = buf.file_pos().row + buf.cursor_pos().row as usize;
             ranges.push(StyledRange {
                 row: cur_row,

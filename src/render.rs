@@ -53,6 +53,11 @@ pub enum CursorStyle {
 /// ratatui-ready data. The renderer is then a pure consumer — no lisp call
 /// happens from inside `Renderer::render`.
 pub struct RenderedFrame {
+    /// Resolved style of the `default` face — the baseline fg/bg the renderer
+    /// fills the whole frame with before drawing anything else. Empty (no
+    /// fg/bg) if the theme doesn't define one, in which case the terminal's
+    /// own defaults show through.
+    pub default_style: Style,
     /// Status line, split into the two horizontal alignment buckets. Styles
     /// from the theme have already been baked into each `Span`.
     pub status_left: Vec<Span<'static>>,

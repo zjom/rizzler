@@ -6,12 +6,13 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     text::Line,
-    widgets::Paragraph,
+    widgets::{Block, Paragraph},
 };
 
 use crate::{
     components::{EditorView, MinibufferLine, StatusLine},
     render::{CursorStyle, RenderedFrame, Renderer, StateSnapshot},
+    styling::style_to_ratatui,
 };
 
 /// Concrete ratatui renderer. Stateless wrt customization — every gutter,
@@ -45,6 +46,14 @@ impl Renderer for RatatuiRenderer {
         execute!(io::stdout(), style)?;
 
         self.term.draw(|f| {
+            // Base layer: paint the whole frame with the `default` face's
+            // style so any cell not overridden by a more specific span
+            // inherits the editor background and foreground. ratatui's
+            // `Paragraph` patches cell styles, so spans with `bg: None` (the
+            // common case) preserve this fill.
+            let base_style = style_to_ratatui(&frame_data.default_style);
+            f.render_widget(Block::default().style(base_style), f.area());
+
             // Vertical layout: editor, status (1), each extra bottom row,
             // minibuffer (1).
             let mut constraints = vec![Constraint::Min(1), Constraint::Length(1)];

@@ -42,7 +42,15 @@
 (let pal-mode-c    (rgb 110 210 210))   ;; command cyan
 
 ;; --- base text + frame ---------------------------------------------------
-(face-define "twilight.base"       {"fg": pal-fg-base "bg": pal-bg-deep})
+;; `default`, `region`, and `cursor-line` are the canonical names the Rust
+;; renderer looks up: `default` fills the whole frame as the baseline fg/bg,
+;; `region` colors the visual selection band, `cursor-line` colors the
+;; current-line band. Any face the user redefines under these names is
+;; picked up automatically.
+(face-define "default"             {"fg": pal-fg-base "bg": pal-bg-deep})
+(face-define "region"              {"bg": pal-bg-sel})
+(face-define "cursor-line"         {"bg": pal-bg-line "fg": pal-fg-base})
+
 (face-define "twilight.muted"      {"fg": pal-fg-dim "italic": 1})
 (face-define "twilight.accent"     {"fg": pal-accent "bold": 1})
 
@@ -62,7 +70,6 @@
 (face-define "twilight.gutter"          {"fg": pal-fg-dim})
 (face-define "twilight.gutter-current"  {"fg": pal-accent       "bold": 1})
 (face-define "twilight.cursor-marker"   {"fg": pal-bg-deep      "bg": pal-accent})
-(face-define "twilight.cursor-line"     {"bg": pal-bg-line      "fg": pal-fg-base })
 
 ;; --- xterm-indexed example: a soft amber, color 215 ---------------------
 (face-define "twilight.signature"  {"fg": 215 "italic": 1})
@@ -160,7 +167,7 @@
   [{"row":          (cursor-line)
     "col":          0
     "len":          0
-    "style":        "twilight.cursor-line"
+    "style":        "cursor-line"
     "pad-to-width": 1}])
 (decorator-add 'current-line-highlight _current-line)
 

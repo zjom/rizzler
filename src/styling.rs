@@ -5,10 +5,6 @@
 //! - `*_from_value` helpers convert rizz [`Value`]s into a `Style`/`Color`
 //!   so any builtin or render path can accept the lisp shapes uniformly.
 //!
-//! Conventions for style maps from lisp:
-//!
-//! * Map keys must be strings — rizz's parser doesn't terminate idents at `:`,
-//!   so `{fg: ...}` and `{'fg: ...}` parse incorrectly. Use `{"fg": ...}`.
 //! * Recognized keys: `fg`, `bg`, `bold`, `italic`, `underline`, `reverse`.
 //! * Color values: a named ident (`'red`, `'dark-gray`), an int (xterm
 //!   indexed color), or the tagged map produced by `(rgb r g b)`.
@@ -189,11 +185,7 @@ fn inherit_from_value(v: &Rc<Value>) -> Result<Vec<Rc<str>>, RuntimeError> {
                 _ => Err(RuntimeError::type_mismatch("inherit-name", "ident|str", x)),
             })
             .collect(),
-        _ => Err(RuntimeError::type_mismatch(
-            "inherit",
-            "ident|str|array",
-            v,
-        )),
+        _ => Err(RuntimeError::type_mismatch("inherit", "ident|str|array", v)),
     }
 }
 
@@ -502,6 +494,16 @@ mod tests {
     #[test]
     fn style_from_map_with_string_keys() {
         let v = run(r#"{"fg": 'red "bold": 1}"#);
+        let theme = Theme::new();
+        let s = style_from_value(&v, &theme).unwrap();
+        assert_eq!(s.fg, Some(Color::Red));
+        assert_eq!(s.bold, Some(true));
+        assert_eq!(s.italic, None);
+    }
+
+    #[test]
+    fn style_from_map_with_quoted_keys() {
+        let v = run(r#"{'fg: 'red 'bold: 1}"#);
         let theme = Theme::new();
         let s = style_from_value(&v, &theme).unwrap();
         assert_eq!(s.fg, Some(Color::Red));

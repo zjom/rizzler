@@ -5,15 +5,16 @@ use ratatui::{
     Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
-    text::Line,
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 
 use crate::{
     components::{EditorView, MinibufferLine, StatusLine},
+    mode::EditingMode,
+    popup::{BorderStyle, Popup},
     render::{CursorStyle, RenderedFrame, Renderer, StateSnapshot},
-    state::MessagePopup,
-    styling::style_to_ratatui,
+    styling::{Style, Theme, style_to_ratatui},
 };
 
 /// Concrete ratatui renderer. Stateless wrt customization — every gutter,
@@ -120,12 +121,30 @@ impl Renderer for RatatuiRenderer {
                 cursor = Some(pos);
             }
 
-            // Popup is drawn last so it covers every layer below it. While
-            // it's visible the editor cursor is hidden — ratatui only shows
-            // a cursor when `set_cursor_position` is called this frame.
-            if let Some(popup) = snap.message_popup {
-                draw_popup(popup, editor_area, f);
-            } else if let Some((x, y)) = cursor {
+            // Popups draw last, bottom-up so the last entry ends up on top.
+            // While a popup is open the editor cursor is hidden — only the
+            // topmost popup may opt into showing its own cursor.
+            let mut popup_cursor: Option<(u16, u16, CursorStyle)> = None;
+            for (i, popup) in snap.popups.iter().enumerate() {
+                let is_top = i + 1 == snap.popups.len();
+                let pc = draw_popup(popup, editor_area, &snap, frame_data, is_top, f);
+                if is_top {
+                    popup_cursor = pc;
+                }
+            }
+
+            if let Some((x, y, cs)) = popup_cursor {
+                // A popup with `show_cursor` overrides the editor cursor and
+                // optionally its style — terminal-style popups want a bar.
+                let popup_style = match cs {
+                    CursorStyle::Bar => SetCursorStyle::SteadyBar,
+                    CursorStyle::Block => SetCursorStyle::SteadyBlock,
+                };
+                let _ = execute!(io::stdout(), popup_style);
+                f.set_cursor_position((x, y));
+            } else if snap.popups.is_empty()
+                && let Some((x, y)) = cursor
+            {
                 f.set_cursor_position((x, y));
             }
         })?;
@@ -133,31 +152,82 @@ impl Renderer for RatatuiRenderer {
     }
 }
 
-/// Center a `[60% × 60%]` (capped) popup over `area`, paint a bordered box,
-/// and draw the popup's wrapped text scrolled by `popup.scroll`.
-fn draw_popup(popup: &MessagePopup, area: Rect, f: &mut ratatui::Frame) {
-    let w = area.width.saturating_sub(4).clamp(20, 80);
-    let h = area.height.saturating_sub(4).clamp(5, 20);
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let rect = Rect::new(x, y, w, h);
+/// Draw a single popup. Pipeline:
+///
+///   1. `Placement::resolve` → outer rect.
+///   2. Clear + fill with the popup's background face (or `default`).
+///   3. Optional border + title, styled via `border_face` / `title_face`.
+///   4. Render the popup's backing buffer via [`EditorView`], reusing the
+///      precomputed prop_ranges in `frame_data.per_buf[bufno]`. No gutter
+///      because popup buffers skip the region phase.
+///
+/// Returns the cursor position (if `is_top && popup.show_cursor`).
+fn draw_popup(
+    popup: &Popup,
+    area: Rect,
+    snap: &StateSnapshot<'_>,
+    frame_data: &RenderedFrame,
+    is_top: bool,
+    f: &mut ratatui::Frame,
+) -> Option<(u16, u16, CursorStyle)> {
+    let outer = popup.placement.resolve(area);
+    if outer.width == 0 || outer.height == 0 {
+        return None;
+    }
+    f.render_widget(Clear, outer);
 
-    f.render_widget(Clear, rect);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" message — any key to dismiss ");
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let bg_style = resolve_face(&frame_data.theme, popup.chrome.face.as_deref())
+        .unwrap_or_else(|| frame_data.default_style.clone());
+    let border_style = resolve_face(&frame_data.theme, popup.chrome.border_face.as_deref())
+        .unwrap_or_else(|| bg_style.clone());
+    let title_style = resolve_face(&frame_data.theme, popup.chrome.title_face.as_deref())
+        .unwrap_or_else(|| border_style.clone());
 
-    let lines: Vec<Line<'static>> = popup
-        .text
-        .lines()
-        .map(|l| Line::from(l.to_string()))
-        .collect();
-    let para = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .scroll((popup.scroll, 0));
-    f.render_widget(para, inner);
+    let mut block = Block::default().style(style_to_ratatui(&bg_style));
+    if popup.chrome.border != BorderStyle::None {
+        block = block
+            .borders(Borders::ALL)
+            .border_type(border_type(popup.chrome.border))
+            .border_style(style_to_ratatui(&border_style));
+    }
+    if let Some(title) = &popup.chrome.title {
+        block = block.title(Span::styled(
+            format!(" {title} "),
+            style_to_ratatui(&title_style),
+        ));
+    }
+    let inner = block.inner(outer);
+    f.render_widget(block, outer);
+
+    let Some(buf) = snap.bufs.get(popup.bufno) else {
+        return None;
+    };
+    let buf_frame = frame_data.per_buf.get(popup.bufno);
+    EditorView::render(buf, inner, buf_frame, f);
+
+    if is_top && popup.show_cursor {
+        let (x, y) = EditorView::cursor(buf, inner, buf_frame);
+        let cs = match buf.mode() {
+            EditingMode::Insert | EditingMode::Command => CursorStyle::Bar,
+            _ => CursorStyle::Block,
+        };
+        Some((x, y, cs))
+    } else {
+        None
+    }
+}
+
+fn border_type(b: BorderStyle) -> BorderType {
+    match b {
+        BorderStyle::None | BorderStyle::Plain => BorderType::Plain,
+        BorderStyle::Rounded => BorderType::Rounded,
+        BorderStyle::Double => BorderType::Double,
+        BorderStyle::Thick => BorderType::Thick,
+    }
+}
+
+fn resolve_face(theme: &Theme, name: Option<&str>) -> Option<Style> {
+    name.and_then(|n| theme.resolve(n))
 }
 
 fn draw_strip(b: &crate::render::RenderedStrip, area: Rect, f: &mut ratatui::Frame) {

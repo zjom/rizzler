@@ -108,3 +108,33 @@
 (map 'command "<esc>"       '(command-cancel))
 (map 'command "<left>"      '(move-cursor 'left))
 (map 'command "<right>"     '(move-cursor 'right))
+
+;; ----- popup mode ------------------------------------------------------
+;; The default keymap a popup is interpreted under. While a popup is on top
+;; of the stack `handle_key_event` resolves keys against the popup's
+;; `keymap_mode` instead of the focused buffer's editing mode — so this
+;; layer is what gives the message popup (and any other popup that doesn't
+;; choose a custom mode) its scroll / dismiss behavior.
+;;
+;; Custom popups can declare their own mode (e.g. `"popup.files"`) and bind
+;; whatever keys they like; the popup's backing buffer participates in the
+;; normal editor primitives (move-cursor, insert-char, …) under that mode.
+(map 'popup "j"          '(move-cursor 'down))
+(map 'popup "<down>"     '(move-cursor 'down))
+(map 'popup "k"          '(move-cursor 'up))
+(map 'popup "<up>"       '(move-cursor 'up))
+(map 'popup "h"          '(move-cursor 'left))
+(map 'popup "<left>"     '(move-cursor 'left))
+(map 'popup "l"          '(move-cursor 'right))
+(map 'popup "<right>"    '(move-cursor 'right))
+(map 'popup "<c-d>"      '(move-cursor 'half-page-down))
+(map 'popup "<c-u>"      '(move-cursor 'half-page-up))
+(map 'popup "<pagedown>" '(move-cursor 'half-page-down))
+(map 'popup "<pageup>"   '(move-cursor 'half-page-up))
+(map 'popup "gg"         '(move-cursor 'file-start))
+(map 'popup "G"          '(move-cursor 'file-end))
+(map 'popup "0"          '(move-cursor 'line-start))
+(map 'popup "$"          '(move-cursor 'line-end))
+(map 'popup "q"          '(popup-close))
+(map 'popup "<esc>"      '(popup-close))
+(map 'popup "<enter>"    '(popup-close))

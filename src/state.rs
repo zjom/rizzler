@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::time::Instant;
 use std::{io, time::Duration};
 
-use crossterm::event::{KeyCode, KeyEvent as CTKeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent as CTKeyEvent;
 use rizz::RizzError;
 use rizz::runtime::Value;
 use rizz_ringbuffer::RingBuffer;
@@ -15,6 +15,7 @@ use crate::{
     keymap::KeymapRegistry,
     lisp::{EditorGuard, LispRuntime, init_script_path},
     mode::EditingMode,
+    popup::{Chrome, Placement, Popup},
     position::Position,
     regions::RegionRegistry,
     render::{CursorStyle, Renderer, StateSnapshot},
@@ -46,13 +47,44 @@ impl Config {
     }
 }
 
-/// Modal message overlay. Created by [`State::push_message`] (for an
-/// incoming message) or [`State::show_all_messages`] (for `:messages`).
-/// While `Some`, key events bypass the keymap: scroll keys move `scroll`,
-/// any other key clears the popup.
-pub struct MessagePopup {
-    pub text: String,
-    pub scroll: u16,
+/// Builder-style spec describing a popup to open. The lisp `popup-open`
+/// builtin builds one of these from a property map; internal callers
+/// (`push_message`, `show_all_messages`) construct one directly.
+pub struct PopupSpec {
+    pub initial_text: Option<String>,
+    pub placement: Placement,
+    pub chrome: Chrome,
+    pub keymap_mode: Rc<str>,
+    pub buffer_mode: EditingMode,
+    pub show_cursor: bool,
+}
+
+impl PopupSpec {
+    pub fn new() -> Self {
+        Self {
+            initial_text: None,
+            placement: Placement::default(),
+            chrome: Chrome::default(),
+            keymap_mode: Rc::<str>::from("popup"),
+            buffer_mode: EditingMode::Normal,
+            show_cursor: false,
+        }
+    }
+
+    /// Preset matching the legacy message popup: centered with a plain
+    /// border and the canonical message title.
+    pub fn message(text: &str) -> Self {
+        let mut spec = Self::new();
+        spec.initial_text = Some(text.to_string());
+        spec.chrome.title = Some(Rc::<str>::from("message — any key to dismiss"));
+        spec
+    }
+}
+
+impl Default for PopupSpec {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub struct State {
@@ -70,9 +102,10 @@ pub struct State {
     /// Append-only history of every user-visible message. Surfaced by
     /// `:messages`.
     messages: Vec<String>,
-    /// Active modal popup, if any. While `Some`, all key events go through
-    /// the popup (scroll or dismiss) instead of the keymap.
-    message_popup: Option<MessagePopup>,
+    /// Popup overlay stack, bottom-to-top. While non-empty, the top popup
+    /// captures key input (resolved against its `keymap_mode`) and the
+    /// focused buffer is the top popup's backing buffer.
+    popups: Vec<Popup>,
     quit: bool,
     keymap: KeymapRegistry,
     keyevents: RingBuffer<(KeyEvent, Instant), 100>,
@@ -106,7 +139,7 @@ impl State {
             focus_minibuffer: false,
             minibuffer: 0,
             messages: Vec::new(),
-            message_popup: None,
+            popups: Vec::new(),
             quit: false,
             keymap: KeymapRegistry::new(),
             keyevents: RingBuffer::new(),
@@ -207,19 +240,100 @@ impl State {
     /// Record `msg` in the message history and surface it to the user as a
     /// modal popup. Sink for `(message ...)`, eval errors, render-callback
     /// errors, and command-submit results.
+    ///
+    /// If the topmost popup is already a message popup we replace it in
+    /// place instead of stacking — that mirrors the pre-generalization
+    /// behavior where successive messages overwrote each other.
     pub(crate) fn push_message(&mut self, msg: &str) {
         self.messages.push(msg.to_string());
-        self.message_popup = Some(MessagePopup {
-            text: msg.to_string(),
-            scroll: 0,
-        });
+        self.replace_or_open_message_popup(PopupSpec::message(msg));
     }
 
     /// Open the popup with the full message history (newline-separated).
     /// Invoked by `:messages`.
     pub(crate) fn show_all_messages(&mut self) {
         let text = self.messages.join("\n");
-        self.message_popup = Some(MessagePopup { text, scroll: 0 });
+        self.replace_or_open_message_popup(PopupSpec::message(&text));
+    }
+
+    /// If the top popup is a message popup (default keymap mode), refill
+    /// its buffer and reset the cursor instead of stacking another one.
+    /// Otherwise open a fresh popup.
+    fn replace_or_open_message_popup(&mut self, spec: PopupSpec) {
+        if let Some(top) = self.popups.last()
+            && top.keymap_mode.as_ref() == "popup"
+        {
+            let bufno = top.bufno;
+            if let Some(text) = &spec.initial_text {
+                self.bufs[bufno].clear_with(text);
+            } else {
+                self.bufs[bufno].clear();
+            }
+            return;
+        }
+        self.open_popup(spec);
+    }
+
+    /// Push a popup onto the overlay stack. Creates a backing buffer of
+    /// kind [`BufferKind::Popup`], appends it to `self.bufs`, and returns
+    /// its bufno so callers (lisp `popup-open`) can populate further state.
+    pub(crate) fn open_popup(&mut self, spec: PopupSpec) -> usize {
+        let mut buf = Buffer::popup();
+        if let Some(text) = spec.initial_text {
+            buf.clear_with(&text);
+        }
+        buf.set_mode(spec.buffer_mode);
+        self.bufs.push(buf);
+        let bufno = self.bufs.len() - 1;
+        self.popups.push(Popup {
+            bufno,
+            placement: spec.placement,
+            chrome: spec.chrome,
+            keymap_mode: spec.keymap_mode,
+            show_cursor: spec.show_cursor,
+        });
+        self.refresh_viewport();
+        bufno
+    }
+
+    /// Pop the top popup. Removes its backing buffer and re-indexes any
+    /// remaining references that pointed past the deleted slot. Returns
+    /// true iff something was actually closed.
+    pub(crate) fn close_popup(&mut self) -> bool {
+        let Some(popup) = self.popups.pop() else {
+            return false;
+        };
+        let removed = popup.bufno;
+        if removed < self.bufs.len() && self.bufs[removed].kind() == BufferKind::Popup {
+            self.bufs.remove(removed);
+            if self.minibuffer > removed {
+                self.minibuffer -= 1;
+            }
+            for p in &mut self.popups {
+                if p.bufno > removed {
+                    p.bufno -= 1;
+                }
+            }
+            let first = self.first_file_buf();
+            self.windows.for_each_leaf_mut(|b| {
+                if *b == removed {
+                    *b = first;
+                } else if *b > removed {
+                    *b -= 1;
+                }
+            });
+        }
+        self.refresh_viewport();
+        true
+    }
+
+    /// Bufno of the topmost popup, if one is open.
+    pub(crate) fn top_popup_bufno(&self) -> Option<usize> {
+        self.popups.last().map(|p| p.bufno)
+    }
+
+    pub(crate) fn has_popup(&self) -> bool {
+        !self.popups.is_empty()
     }
 
     pub(crate) fn set_buffer_contents(&mut self, bufno: usize, msg: &str) {
@@ -245,8 +359,14 @@ impl State {
         &self.keymap
     }
 
-    /// The buffer currently receiving key events.
+    /// The buffer currently receiving key events. When a popup is open,
+    /// the top popup's backing buffer captures input (movement commands
+    /// scroll the popup's content; `(insert-char …)` would edit it). This
+    /// is what makes popups feel like overlayed buffers.
     pub(crate) fn focused_bufno(&self) -> usize {
+        if let Some(p) = self.popups.last() {
+            return p.bufno;
+        }
         if self.focus_minibuffer {
             self.minibuffer
         } else {
@@ -258,10 +378,12 @@ impl State {
         self.bufs.len()
     }
 
-    /// Update viewports of all buffers currently displayed in a window plus
-    /// the minibuffer. Per-leaf rect comes from the window tree layout.
-    /// Silently ignores terminal::size errors so tests without a real TTY
-    /// still work.
+    /// Update viewports of all buffers currently displayed in a window,
+    /// the minibuffer, and every popup. Per-leaf rect comes from the
+    /// window tree layout; popups derive theirs from `Placement::resolve`
+    /// against the same editor area, minus the border inset. Silently
+    /// ignores terminal::size errors so tests without a real TTY still
+    /// work.
     fn refresh_viewport(&mut self) {
         let Ok((cols, rows)) = crossterm::terminal::size() else {
             return;
@@ -274,50 +396,31 @@ impl State {
             }
         }
         self.bufs[self.minibuffer].viewport = Position::new(cols, MINIBUFFER_ROWS);
+        // Popup viewports are the inner content rect — outer placement
+        // minus the border inset on each side.
+        let popups: Vec<(usize, Position<u16>)> = self
+            .popups
+            .iter()
+            .map(|p| {
+                let outer = p.placement.resolve(editor_area);
+                let inset = p.chrome.border.inset();
+                let inner_w = outer.width.saturating_sub(2 * inset);
+                let inner_h = outer.height.saturating_sub(2 * inset);
+                (p.bufno, Position::new(inner_w, inner_h))
+            })
+            .collect();
+        for (bufno, viewport) in popups {
+            if let Some(buf) = self.bufs.get_mut(bufno) {
+                buf.viewport = viewport;
+            }
+        }
     }
 
     pub fn quit_requested(&self) -> bool {
         self.quit
     }
 
-    /// Translate a key event into a popup action: scroll or dismiss. The
-    /// popup is `Some` on entry (checked by `handle_key_event`).
-    fn handle_popup_key(&mut self, event: CTKeyEvent) {
-        let popup = self.message_popup.as_mut().expect("popup is visible");
-        let lines = popup.text.lines().count() as u16;
-        // 0 means "ignore this key for scrolling", any other delta clamps and
-        // returns. Anything below that match arm dismisses.
-        let plain = event.modifiers == KeyModifiers::NONE;
-        let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
-        let half_page: i32 = 5;
-        let delta: i32 = match event.code {
-            KeyCode::Char('j') | KeyCode::Down if plain => 1,
-            KeyCode::Char('k') | KeyCode::Up if plain => -1,
-            KeyCode::PageDown => half_page,
-            KeyCode::PageUp => -half_page,
-            KeyCode::Char('d') if ctrl => half_page,
-            KeyCode::Char('u') if ctrl => -half_page,
-            KeyCode::Char('g') | KeyCode::Home if plain => i32::MIN,
-            KeyCode::Char('G') | KeyCode::End if plain => i32::MAX,
-            _ => {
-                self.message_popup = None;
-                return;
-            }
-        };
-        let max = lines.saturating_sub(1) as i32;
-        let new = (popup.scroll as i32 + delta).clamp(0, max);
-        popup.scroll = new as u16;
-    }
-
     pub fn handle_key_event(&mut self, event: CTKeyEvent) -> io::Result<()> {
-        // Popup intercepts every key. Recognized scroll keys move the
-        // popup's scroll offset; anything else dismisses. Either way the
-        // event does not reach the keymap.
-        if self.message_popup.is_some() {
-            self.handle_popup_key(event);
-            return self.render();
-        }
-
         let now = Instant::now();
         let timedout = self
             .keyevents
@@ -325,11 +428,18 @@ impl State {
             .is_some_and(|(_, earlier)| now.duration_since(*earlier) > self.keycombo_timeout);
         self.keyevents.push_back((event.into(), now));
 
-        let mode = self.bufs[self.focused_bufno()].mode();
-        if let Some(action) = self
-            .keymap
-            .resolve(mode.as_str().into(), event.into(), timedout)
-        {
+        // When a popup is on top of the stack the keymap is resolved against
+        // its `keymap_mode` (default `"popup"`), not the focused buffer's
+        // editing mode. That decouples popup interaction from the underlying
+        // buffer mode — a popup buffer may still be in Normal/Insert, but
+        // pop-up-specific bindings (j/k scroll, q dismiss, …) live in their
+        // own mode keymap.
+        let mode_name: Rc<str> = if let Some(p) = self.popups.last() {
+            p.keymap_mode.clone()
+        } else {
+            self.bufs[self.focused_bufno()].mode().as_str().into()
+        };
+        if let Some(action) = self.keymap.resolve(mode_name, event.into(), timedout) {
             self.apply(&action)?;
         }
         // Refresh after apply: window splits/closes and buffer switches may
@@ -386,10 +496,10 @@ impl State {
                 Action::WindowFocusNext => self.windows.focus_next(),
                 Action::WindowFocus(d) => self.windows.focus_dir(*d),
                 Action::KeymapSet { mode, lhs, rhs } => {
-                    self.keymap.set(mode.as_str().into(), lhs, rhs.clone());
+                    self.keymap.set(mode.clone(), lhs, rhs.clone());
                 }
                 Action::KeymapRemove { mode, lhs } => {
-                    self.keymap.remove(mode.as_str().into(), lhs);
+                    self.keymap.remove(mode.clone(), lhs);
                 }
                 Action::EvalLisp(form) => {
                     if let Err(e) = self.eval_lisp_value(form.clone()) {
@@ -565,7 +675,7 @@ impl State {
                 EditingMode::Insert | EditingMode::Command => CursorStyle::Bar,
                 _ => CursorStyle::Block,
             },
-            message_popup: self.message_popup.as_ref(),
+            popups: &self.popups,
         };
         let result = self.renderer.render(snap, &frame);
         // Surface any render-callback error via the popup *after* the frame
@@ -613,7 +723,7 @@ impl State {
             bufno: self.windows.focused_bufno(),
             keyevent: self.keyevents.peek_back().map(|(ke, _)| ke.to_owned()),
             cursor_style: CursorStyle::Block,
-            message_popup: None,
+            popups: &[],
         };
 
         // One pass over the registry, routing each region's output to the
@@ -650,35 +760,43 @@ impl State {
         }
 
         // Per-buffer pass: gutters + decorators, in registration order
-        // (which is the renderer's left-to-right / layer order).
+        // (which is the renderer's left-to-right / layer order). Popup and
+        // minibuffer kinds skip the region phase — their visual shell is
+        // owned by their chrome / the minibuffer line — but they still get
+        // a `prop_ranges` pass so text-property / overlay APIs work on a
+        // popup buffer's content the same way they do on a file buffer.
         let mut per_buf = Vec::with_capacity(self.bufs.len());
         for (i, buf) in self.bufs.iter().enumerate() {
-            if i == self.minibuffer {
-                per_buf.push(RenderedBuffer::default());
-                continue;
-            }
             let mut rb = RenderedBuffer::default();
-            for region in self.regions.iter() {
-                match region.anchor {
-                    RegionAnchor::Gutter { .. } => {
-                        match produce_gutter(region, buf, &theme, &env) {
-                            Ok(g) => rb.gutters.push(g),
-                            Err(e) => record(&mut error_chunks, &region.name, e),
+            let participates_in_regions =
+                i != self.minibuffer && buf.kind() != crate::buffer::BufferKind::Popup;
+            if participates_in_regions {
+                for region in self.regions.iter() {
+                    match region.anchor {
+                        RegionAnchor::Gutter { .. } => {
+                            match produce_gutter(region, buf, &theme, &env) {
+                                Ok(g) => rb.gutters.push(g),
+                                Err(e) => record(&mut error_chunks, &region.name, e),
+                            }
                         }
+                        RegionAnchor::Decorator => {
+                            match produce_decorator(region, buf, &theme, &env) {
+                                Ok(d) => rb.decorators.push(d),
+                                Err(e) => record(&mut error_chunks, &region.name, e),
+                            }
+                        }
+                        _ => {}
                     }
-                    RegionAnchor::Decorator => match produce_decorator(region, buf, &theme, &env) {
-                        Ok(d) => rb.decorators.push(d),
-                        Err(e) => record(&mut error_chunks, &region.name, e),
-                    },
-                    _ => {}
                 }
             }
             // Text properties + overlays applied after user decorators so
             // they layer on top — overlays themselves are priority-ordered
-            // inside `build_prop_ranges`.
-            let prop_ranges = crate::props::build_prop_ranges(buf, &theme);
-            if !prop_ranges.ranges.is_empty() {
-                rb.decorators.push(prop_ranges);
+            // inside `build_prop_ranges`. Run for popups too.
+            if i != self.minibuffer {
+                let prop_ranges = crate::props::build_prop_ranges(buf, &theme);
+                if !prop_ranges.ranges.is_empty() {
+                    rb.decorators.push(prop_ranges);
+                }
             }
             per_buf.push(rb);
         }
@@ -698,6 +816,7 @@ impl State {
         (
             RenderedFrame {
                 default_style,
+                theme,
                 top_extra,
                 status_left,
                 status_right,
@@ -745,36 +864,49 @@ mod tests {
         s.render().unwrap();
     }
 
+    /// Helper for popup tests — pull the current text out of the topmost
+    /// popup's backing buffer. Replaces the old `popup.text` field access.
+    fn top_popup_text(s: &State) -> String {
+        let bufno = s.top_popup_bufno().expect("popup is visible");
+        s.bufs[bufno].text()
+    }
+
     #[test]
     fn message_pushes_history_and_shows_popup() {
         let mut s = test_state();
         s.push_message("hello");
         assert_eq!(s.messages, vec!["hello".to_string()]);
-        assert!(s.message_popup.is_some());
+        assert!(s.has_popup());
+        assert_eq!(top_popup_text(&s), "hello");
     }
 
     #[test]
-    fn any_key_dismisses_popup() {
+    fn q_dismisses_popup() {
+        // `q` is bound to (popup-close) in the bundled `popup` keymap mode.
         use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
         let mut s = test_state();
         s.push_message("oops");
-        assert!(s.message_popup.is_some());
-        // 'q' isn't bound to anything in particular; with no popup it would
-        // hit the keymap, but here it just dismisses.
+        assert!(s.has_popup());
         s.handle_key_event(CT::new(KeyCode::Char('q'), KeyModifiers::NONE))
             .unwrap();
-        assert!(s.message_popup.is_none());
+        assert!(!s.has_popup());
     }
 
     #[test]
-    fn j_scrolls_popup_without_dismissing() {
+    fn j_moves_popup_cursor_without_dismissing() {
+        // `j` in popup mode is (move-cursor 'down) — same shape as a normal
+        // editor binding, exercising the "popup is just a buffer" model.
         use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
         let mut s = test_state();
         s.push_message("line1\nline2\nline3");
         s.handle_key_event(CT::new(KeyCode::Char('j'), KeyModifiers::NONE))
             .unwrap();
-        let popup = s.message_popup.as_ref().expect("still visible");
-        assert_eq!(popup.scroll, 1);
+        assert!(s.has_popup(), "popup must still be visible");
+        let bufno = s.top_popup_bufno().unwrap();
+        let buf = &s.bufs[bufno];
+        // Absolute cursor row advanced by one (either by scrolling or by the
+        // in-viewport cursor moving down — either is correct).
+        assert_eq!(buf.cursor_pos().row as usize + buf.file_pos().row, 1);
     }
 
     #[test]
@@ -785,22 +917,20 @@ mod tests {
         // Showing the latest message popped open after each push. Now
         // request the full history.
         s.show_all_messages();
-        let popup = s.message_popup.as_ref().unwrap();
-        assert_eq!(popup.text, "a\nb");
+        assert_eq!(top_popup_text(&s), "a\nb");
     }
 
     #[test]
     fn messages_builtin_opens_popup_with_history() {
         let mut s = test_state();
-        s.eval_lisp(r#"(message "first")"#).unwrap();
+        s.eval_lisp(r#"(notify "first")"#).unwrap();
         // Dismiss the popup the `message` call opened so we can re-check
         // that `(messages)` reopens with the joined history.
-        s.message_popup = None;
-        s.eval_lisp(r#"(message "second")"#).unwrap();
-        s.message_popup = None;
+        s.close_popup();
+        s.eval_lisp(r#"(notify "second")"#).unwrap();
+        s.close_popup();
         s.eval_lisp("(messages)").unwrap();
-        let popup = s.message_popup.as_ref().expect("popup visible");
-        assert_eq!(popup.text, "first\nsecond");
+        assert_eq!(top_popup_text(&s), "first\nsecond");
     }
 
     #[test]

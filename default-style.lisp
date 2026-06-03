@@ -474,3 +474,115 @@
     (clear-text-properties)
     (buf-text-set (buf-no) "")
     (message "overlays-clear: text-properties cleared, buffer reset")))
+
+
+;; ---------------------------------------------------------------------------
+;; 10. Popups
+;; ---------------------------------------------------------------------------
+;;
+;; The same primitive that drives `(notify ...)` exposes a generalized
+;; overlay: a popup is conceptually a buffer drawn on top of the editor area,
+;; with chrome (border / title), placement, and a keymap mode that captures
+;; input while the popup is on top of the stack. That means a popup terminal,
+;; file explorer, completion list, or hover-doc is each just `(popup-open …)`
+;; with a different `mode` and different content fed into the popup's buffer.
+;;
+;; Faces, placement, and the keymap registry are reused as-is — popup chrome
+;; references face names like any other styled span, and `keymap-set` on a
+;; popup mode uses the same surface as `'normal` or `'insert`.
+
+;; --- chrome faces, reusing the palette above ---------------------------
+(face-define "popup.default"     {"fg": pal-fg-base "bg": pal-bg-panel})
+(face-define "popup.border"      {"fg": pal-accent  "bg": pal-bg-panel})
+(face-define "popup.title"       {"fg": pal-warn    "bg": pal-bg-panel "bold": 1})
+(face-define "popup.dir"         {"fg": pal-accent  "bold": 1})
+(face-define "popup.file"        {"fg": pal-fg-base})
+
+;; --- (popup-help)  bottom-anchored cheat-sheet popup -------------------
+;; Demonstrates the `side` placement, a rounded border, and a custom title
+;; — but uses the default `'popup` keymap mode so `j/k/q/<esc>` work without
+;; any extra binding.
+(fn popup-help ()
+  (popup-open
+    {"text": (str-join
+              ["popup cheat-sheet"
+               "──────────────────────────"
+               "j / k         scroll one line"
+               "<c-d> / <c-u> half page"
+               "g / G         top / bottom"
+               "q / <esc>     dismiss"
+               ""
+               "tip: any popup defaulting to mode 'popup picks up these keys."]
+              "\n")
+     "placement":   {"kind": "side" "side": "bottom" "size": 12}
+     "border":      "rounded"
+     "title":       " help "
+     "face":        "popup.default"
+     "border-face": "popup.border"
+     "title-face":  "popup.title"}))
+
+(keymap-set 'normal "?" '(popup-help))
+
+
+;; --- (popup-files)  centered file-explorer popup -----------------------
+;; Reuses the buffer machinery (the popup buffer holds the directory
+;; listing as plain text) and a *custom* keymap mode (`'popup.files`) so we
+;; can attach explorer-specific bindings without conflicting with the
+;; default popup mode. Pressing `<enter>` on a row opens that path; `q`
+;; dismisses.
+
+;; Snapshot of the directory we listed, indexed by line number. Updated on
+;; each `(popup-files)` invocation so `<enter>` knows which path the cursor
+;; is on without parsing the buffer text back.
+(let _popup-files-entries (ref []))
+
+(fn _popup-files-render (dir)
+  (do
+    (let entries (fs-readdir dir))
+    (set! _popup-files-entries entries)
+    (str-join
+      (fmap (fn _row (p) (to-str p)) entries)
+      "\n")))
+
+(fn popup-files ()
+  (do
+    (let dir (workdir))
+    (popup-open
+      {"text":        (_popup-files-render dir)
+       "mode":        'popup.files
+       "buffer-mode": 'normal
+       "placement":   {"kind": "center" "w": 0.5 "h": 0.5}
+       "border":      "rounded"
+       "title":       (str-join [" files: " (to-str dir) " "] "")
+       "face":        "popup.default"
+       "border-face": "popup.border"
+       "title-face":  "popup.title"
+       "show-cursor": 1})))
+
+;; Bind the explorer to `<space>f`. Movement keys are shared with the
+;; default popup mode, but `q`/`<esc>` still need to be wired up since
+;; `'popup.files` has its own keymap.
+(keymap-set 'normal "<space>f" '(popup-files))
+
+(keymap-set 'popup.files "j"        '(move-cursor 'down))
+(keymap-set 'popup.files "k"        '(move-cursor 'up))
+(keymap-set 'popup.files "<down>"   '(move-cursor 'down))
+(keymap-set 'popup.files "<up>"     '(move-cursor 'up))
+(keymap-set 'popup.files "<c-d>"    '(move-cursor 'half-page-down))
+(keymap-set 'popup.files "<c-u>"    '(move-cursor 'half-page-up))
+(keymap-set 'popup.files "gg"       '(move-cursor 'file-start))
+(keymap-set 'popup.files "G"        '(move-cursor 'file-end))
+(keymap-set 'popup.files "q"        '(popup-close))
+(keymap-set 'popup.files "<esc>"    '(popup-close))
+;; `<enter>` reads the current line out of the popup buffer (via
+;; `selected-text`/`buf-text`) and asks the editor to edit it. The popup
+;; closes first so the new buffer takes focus cleanly.
+(keymap-set 'popup.files "<enter>"
+  '(do
+     (let line (cursor-line))
+     (let entries (deref _popup-files-entries))
+     (let target (get entries line))
+     (popup-close)
+     (if (= target ())
+         ()
+         (edit (to-str target)))))

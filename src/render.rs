@@ -3,7 +3,11 @@ use std::io;
 use ratatui::text::{Line, Span};
 
 use crate::{
-    buffer::Buffer, keymap::KeyEvent, state::MessagePopup, styling::Style, window::WindowTree,
+    buffer::Buffer,
+    keymap::KeyEvent,
+    popup::Popup,
+    styling::{Style, Theme},
+    window::WindowTree,
 };
 
 /// Read-only view of the editor passed to renderers. Decoupling this from
@@ -24,9 +28,11 @@ pub struct StateSnapshot<'a> {
     pub bufno: usize,
     pub keyevent: Option<KeyEvent>,
     pub cursor_style: CursorStyle,
-    /// Active modal message popup. When `Some`, the renderer draws it as a
-    /// centered overlay on top of the editor area and the cursor is hidden.
-    pub message_popup: Option<&'a MessagePopup>,
+    /// Popup stack, bottom-to-top. The renderer paints them in order, so the
+    /// last entry ends up on top. The cursor of the focused editor window
+    /// is hidden while this slice is non-empty; the topmost popup may opt
+    /// into showing its own cursor via `Popup::show_cursor`.
+    pub popups: &'a [Popup],
 }
 
 impl StateSnapshot<'_> {
@@ -63,6 +69,12 @@ pub struct RenderedFrame {
     /// fg/bg) if the theme doesn't define one, in which case the terminal's
     /// own defaults show through.
     pub default_style: Style,
+    /// Snapshot of the theme as of the precompute pass. The popup renderer
+    /// reads it to resolve `face` / `border_face` / `title_face` references
+    /// on each popup's `Chrome`. Snapshotting (rather than borrowing from
+    /// `State`) keeps the renderer pure and means a face redefined by a
+    /// region callback can't shift popup colors mid-frame.
+    pub theme: Theme,
     /// Full-width strips above the editor area, in declaration order. Empty
     /// in the default configuration.
     pub top_extra: Vec<RenderedStrip>,

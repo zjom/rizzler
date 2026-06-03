@@ -16,6 +16,9 @@ pub enum BufferKind {
     #[default]
     File,
     Minibuffer,
+    /// Backing buffer of a [`crate::popup::Popup`]. Excluded from
+    /// user-visible buffer cycling and from `BufDelete`.
+    Popup,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
@@ -91,6 +94,15 @@ impl Buffer {
         Self {
             kind: BufferKind::Minibuffer,
             mode: EditingMode::Command,
+            ..Self::default()
+        }
+    }
+
+    /// Construct a popup's backing buffer. Same as a default buffer, just
+    /// tagged so cycling/deletion code can skip it.
+    pub fn popup() -> Self {
+        Self {
+            kind: BufferKind::Popup,
             ..Self::default()
         }
     }

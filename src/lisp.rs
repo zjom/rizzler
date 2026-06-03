@@ -24,9 +24,10 @@ use crate::action::Action;
 use crate::buffer::MoveKind;
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
+use crate::popup::{BorderStyle, Dim, Placement, Side};
 use crate::position::Position;
 use crate::regions::{BuiltinId, Producer, Region, RegionAnchor};
-use crate::state::State;
+use crate::state::{PopupSpec, State};
 use crate::styling::{normalize_style_value, rgb_value, style_from_value, style_to_value};
 use crate::window::{FocusDir, SplitDir};
 
@@ -319,9 +320,13 @@ fn builtins() -> Env {
         ok_unit(env)
     });
 
-    // keymap (lisp owns the keymap; lhs is parsed via `KeyEvent::parse_sequence`)
+    // keymap (lisp owns the keymap; lhs is parsed via `KeyEvent::parse_sequence`).
+    //
+    // `mode` is a free-form string here, not an `EditingMode`. That's what lets
+    // user-defined popup modes (`'popup`, `'popup.files`, …) bind keys the
+    // same way as `'normal` / `'insert` do.
     b!("keymap-set", 3, |args, env| {
-        let mode = parse_mode_ident(&args[0])?;
+        let mode = parse_mode_name(&args[0])?;
         let lhs_str = as_str(&args[1], "keymap-set")?;
         let lhs =
             KeyEvent::parse_sequence(&lhs_str).map_err(|e| str_mismatch_msg("keymap-set", &e))?;
@@ -335,7 +340,7 @@ fn builtins() -> Env {
     });
 
     b!("keymap-remove", 2, |args, env| {
-        let mode = parse_mode_ident(&args[0])?;
+        let mode = parse_mode_name(&args[0])?;
         let lhs_str = as_str(&args[1], "keymap-remove")?;
         let lhs = KeyEvent::parse_sequence(&lhs_str)
             .map_err(|e| str_mismatch_msg("keymap-remove", &e))?;
@@ -344,11 +349,11 @@ fn builtins() -> Env {
     });
 
     b!("keymap-get", 1, |args, env| {
-        let mode = parse_mode_ident(&args[0])?.as_str();
+        let mode = parse_mode_name(&args[0])?;
         let mappings = with_editor_mut(|st| {
             st.keymap_registry()
                 .iter()
-                .filter(|(m, _, _)| m.as_ref() == mode)
+                .filter(|(m, _, _)| m == &mode)
                 .map(|(m, p, a)| {
                     vec![
                         Value::Str(m),
@@ -425,6 +430,40 @@ fn builtins() -> Env {
     b!("messages", 0, |_, env| {
         with_editor_mut(|st| st.show_all_messages());
         ok_unit(env)
+    });
+
+    // popups — generalized overlay surface. A popup is conceptually a buffer
+    // drawn on top of the editor area with chrome (border/title) and a
+    // keymap mode that captures input while the popup is on top of the
+    // stack. The message popup is a thin preset on top of these; user
+    // popups (file picker, terminal, prompt, …) plug in placement, chrome,
+    // and keymap mode to express whatever shape they want.
+    //
+    // (popup-open props) — `props` is a map (see `parse_popup_props`).
+    //                     Returns the popup buffer's bufno.
+    // (popup-close)      — closes the topmost popup. Returns 1 / 0.
+    // (popup-bufno)      — bufno of the topmost popup, or `()`.
+    // (popup?)           — 1 if any popup is open, else 0.
+    b!("popup-open", 1, |args, env| {
+        let spec = parse_popup_props(&args[0])?;
+        let bufno = with_editor_mut(|st| st.open_popup(spec));
+        Ok((Rc::new(Value::Int(bufno as i64)), env.clone()))
+    });
+    b!("popup-close", 0, |_, env| {
+        let closed = with_editor_mut(|st| st.close_popup());
+        Ok((Rc::new(Value::Int(closed as i64)), env.clone()))
+    });
+    b!("popup-bufno", 0, |_, env| {
+        let v = with_editor_mut(|st| {
+            st.top_popup_bufno()
+                .map(|n| Value::Int(n as i64))
+                .unwrap_or(Value::Unit)
+        });
+        Ok((Rc::new(v), env.clone()))
+    });
+    b!("popup?", 0, |_, env| {
+        let v = with_editor_mut(|st| st.has_popup());
+        Ok((Rc::new(Value::Int(v as i64)), env.clone()))
     });
 
     // queries
@@ -984,6 +1023,215 @@ fn parse_handler(
 fn parse_mode_ident(v: &Rc<Value>) -> Result<EditingMode, RuntimeError> {
     let s = as_ident(v, "mode")?;
     s.parse().map_err(|_| unknown_variant("mode", &s))
+}
+
+/// Loose mode-name parser used by the keymap builtins. Unlike
+/// [`parse_mode_ident`] (used by `set-mode`), this accepts any ident or
+/// string — that's what lets popup modes coexist with the typed
+/// [`EditingMode`] names in the keymap registry.
+fn parse_mode_name(v: &Rc<Value>) -> Result<Rc<str>, RuntimeError> {
+    as_ident_or_str(v, "mode")
+}
+
+// ---------------------------------------------------------------------------
+// Popup property parsing
+// ---------------------------------------------------------------------------
+
+/// Build a [`PopupSpec`] from the property map passed to `popup-open`.
+/// Recognized top-level keys (all optional):
+///
+/// * `"text"`        — initial text content (str).
+/// * `"mode"`        — keymap mode name (str / ident). Default `"popup"`.
+/// * `"buffer-mode"` — editing mode for the popup buffer (str / ident).
+///                     Default `"normal"`.
+/// * `"placement"`   — see [`parse_placement`].
+/// * `"border"`      — `"none" | "plain" | "rounded" | "double" | "thick"`.
+/// * `"title"`       — str shown in the top border.
+/// * `"face"`        — face for the popup's background fill.
+/// * `"border-face"` — face for the border characters.
+/// * `"title-face"`  — face for the title text.
+/// * `"show-cursor"` — truthy/falsy. Off by default.
+///
+/// A bare string is also accepted and treated as `{"text": <string>}` so
+/// `(popup-open "hi")` works for quick demos.
+fn parse_popup_props(v: &Rc<Value>) -> Result<PopupSpec, RuntimeError> {
+    let mut spec = PopupSpec::new();
+    match &**v {
+        Value::Unit => Ok(spec),
+        Value::Str(s) | Value::Ident(s) => {
+            spec.initial_text = Some(s.to_string());
+            Ok(spec)
+        }
+        Value::Map(m) => {
+            let key = |k: &str| Rc::new(Value::Str(k.into()));
+            if let Some(t) = m.get(&key("text")) {
+                spec.initial_text = Some(as_str(t, "popup-open.text")?.to_string());
+            }
+            if let Some(mode) = m.get(&key("mode")) {
+                spec.keymap_mode = parse_mode_name(mode)?;
+            }
+            if let Some(bm) = m.get(&key("buffer-mode")) {
+                spec.buffer_mode = parse_mode_ident(bm)?;
+            }
+            if let Some(p) = m.get(&key("placement")) {
+                spec.placement = parse_placement(p)?;
+            }
+            if let Some(b) = m.get(&key("border")) {
+                spec.chrome.border = parse_border(b)?;
+            }
+            if let Some(t) = m.get(&key("title")) {
+                spec.chrome.title = Some(as_str(t, "popup-open.title")?);
+            }
+            if let Some(f) = m.get(&key("face")) {
+                spec.chrome.face = Some(as_ident_or_str(f, "popup-open.face")?);
+            }
+            if let Some(f) = m.get(&key("border-face")) {
+                spec.chrome.border_face = Some(as_ident_or_str(f, "popup-open.border-face")?);
+            }
+            if let Some(f) = m.get(&key("title-face")) {
+                spec.chrome.title_face = Some(as_ident_or_str(f, "popup-open.title-face")?);
+            }
+            if let Some(sc) = m.get(&key("show-cursor")) {
+                spec.show_cursor = sc.is_truthy();
+            }
+            Ok(spec)
+        }
+        _ => Err(RuntimeError::type_mismatch(
+            "popup-open",
+            "map | str | ()",
+            v,
+        )),
+    }
+}
+
+/// Parse a placement value. Accepted shapes:
+///
+/// * `'center` / `'full` — preset shapes with defaults.
+/// * `{"kind": "center" "w": <dim> "h": <dim>}` — centered, sized.
+/// * `{"kind": "at" "x": N "y": N "w": <dim> "h": <dim>}` — fixed corner.
+/// * `{"kind": "side" "side": "top|bottom|left|right" "size": <dim>}` —
+///   pinned to one edge.
+/// * `{"kind": "full"}` — full editor area.
+///
+/// `<dim>` is either an int (cell count) or a float (fraction in `[0, 1]`).
+fn parse_placement(v: &Rc<Value>) -> Result<Placement, RuntimeError> {
+    match &**v {
+        Value::Ident(s) | Value::Str(s) => match s.as_ref() {
+            "center" | "centered" => Ok(Placement::default()),
+            "full" => Ok(Placement::Full),
+            other => Err(unknown_variant("placement", other)),
+        },
+        Value::Map(m) => {
+            let key = |k: &str| Rc::new(Value::Str(k.into()));
+            let kind = m
+                .get(&key("kind"))
+                .map(|k| as_ident_or_str(k, "placement.kind"))
+                .transpose()?
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "center".to_string());
+            match kind.as_str() {
+                "center" | "centered" => {
+                    let width = m
+                        .get(&key("w"))
+                        .or_else(|| m.get(&key("width")))
+                        .map(parse_dim)
+                        .transpose()?
+                        .unwrap_or(Dim::Frac(0.6));
+                    let height = m
+                        .get(&key("h"))
+                        .or_else(|| m.get(&key("height")))
+                        .map(parse_dim)
+                        .transpose()?
+                        .unwrap_or(Dim::Frac(0.6));
+                    Ok(Placement::Centered { width, height })
+                }
+                "at" => {
+                    let x = m
+                        .get(&key("x"))
+                        .map(|v| as_int(v, "placement.x"))
+                        .transpose()?
+                        .unwrap_or(0)
+                        .max(0) as u16;
+                    let y = m
+                        .get(&key("y"))
+                        .map(|v| as_int(v, "placement.y"))
+                        .transpose()?
+                        .unwrap_or(0)
+                        .max(0) as u16;
+                    let width = m
+                        .get(&key("w"))
+                        .or_else(|| m.get(&key("width")))
+                        .map(parse_dim)
+                        .transpose()?
+                        .unwrap_or(Dim::Cells(40));
+                    let height = m
+                        .get(&key("h"))
+                        .or_else(|| m.get(&key("height")))
+                        .map(parse_dim)
+                        .transpose()?
+                        .unwrap_or(Dim::Cells(10));
+                    Ok(Placement::At {
+                        x,
+                        y,
+                        width,
+                        height,
+                    })
+                }
+                "side" => {
+                    let side = m
+                        .get(&key("side"))
+                        .ok_or_else(|| RuntimeError::type_mismatch(
+                            "placement.side",
+                            "ident|str",
+                            v,
+                        ))?;
+                    let side = match as_ident_or_str(side, "placement.side")?.as_ref() {
+                        "top" => Side::Top,
+                        "bottom" => Side::Bottom,
+                        "left" => Side::Left,
+                        "right" => Side::Right,
+                        other => return Err(unknown_variant("placement.side", other)),
+                    };
+                    let size = m
+                        .get(&key("size"))
+                        .map(parse_dim)
+                        .transpose()?
+                        .unwrap_or(Dim::Cells(10));
+                    Ok(Placement::Anchored { side, size })
+                }
+                "full" => Ok(Placement::Full),
+                other => Err(unknown_variant("placement.kind", other)),
+            }
+        }
+        _ => Err(RuntimeError::type_mismatch(
+            "placement",
+            "ident|str|map",
+            v,
+        )),
+    }
+}
+
+/// Parse a dimension: int → cell count, float → fraction of the available
+/// axis. The fractional form makes `{"placement": {"kind": "center" "w": 0.5}}`
+/// readable in lisp.
+fn parse_dim(v: &Rc<Value>) -> Result<Dim, RuntimeError> {
+    match &**v {
+        Value::Int(n) => Ok(Dim::Cells((*n).max(0) as u16)),
+        Value::Float(f) => Ok(Dim::Frac(f.into_inner() as f32)),
+        _ => Err(RuntimeError::type_mismatch("dim", "int|float", v)),
+    }
+}
+
+fn parse_border(v: &Rc<Value>) -> Result<BorderStyle, RuntimeError> {
+    let s = as_ident_or_str(v, "border")?;
+    Ok(match s.as_ref() {
+        "none" => BorderStyle::None,
+        "plain" => BorderStyle::Plain,
+        "rounded" => BorderStyle::Rounded,
+        "double" => BorderStyle::Double,
+        "thick" => BorderStyle::Thick,
+        other => return Err(unknown_variant("border", other)),
+    })
 }
 
 fn unknown_variant(name: &str, got: &str) -> RuntimeError {

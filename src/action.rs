@@ -46,14 +46,18 @@ pub enum Action {
     /// Move focus to the nearest window in the given direction.
     WindowFocus(FocusDir),
 
+    /// Bind a key sequence in `mode` to an action. `mode` is a free-form
+    /// string so popup-mode bindings (`"popup"`, `"popup.files"`, …) can
+    /// live alongside the typed [`EditingMode`] names without expanding
+    /// that enum.
     KeymapSet {
-        mode: EditingMode,
+        mode: Rc<str>,
         lhs: Vec<KeyEvent>,
         rhs: Rc<Action>,
     },
 
     KeymapRemove {
-        mode: EditingMode,
+        mode: Rc<str>,
         lhs: Vec<KeyEvent>,
     },
 

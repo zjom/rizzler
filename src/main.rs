@@ -4,6 +4,7 @@ mod components;
 mod keymap;
 mod lisp;
 mod mode;
+mod popup;
 mod position;
 mod props;
 mod regions;

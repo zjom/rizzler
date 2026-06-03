@@ -26,19 +26,29 @@ use rizz::runtime::{RuntimeError, Value};
 
 pub type Color = ratatui::style::Color;
 
+/// A *partial* style spec: every attribute is optional, so `None` means
+/// "transparent — inherit from the parent face / the layer underneath".
+/// `Some(false)` for a bool means "explicitly off" — distinguishable from
+/// `None` for inheritance purposes, even though both look the same at the
+/// terminal.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Style {
     pub fg: Option<Color>,
     pub bg: Option<Color>,
-    pub bold: bool,
-    pub italic: bool,
-    pub underline: bool,
-    pub reverse: bool,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline: Option<bool>,
+    pub reverse: Option<bool>,
+    /// Names of faces this style inherits from, in priority order: earlier
+    /// names win over later. Only set on faces in the [`Theme`]; the result of
+    /// [`Theme::resolve`] has this cleared.
+    pub inherit: Vec<Rc<str>>,
 }
 
 impl Style {
-    /// Layer `over` on top of `self`: each field of `over` wins if set; `bool`
-    /// modifiers are OR-ed so a base style's bold survives a non-bold overlay.
+    /// Layer `over` on top of `self`: any attribute set on `over` (`Some(_)`)
+    /// wins; attributes left `None` on `over` preserve `self`. Used by both
+    /// inheritance resolution and decorator overlays.
     pub fn patch(mut self, over: &Style) -> Self {
         if over.fg.is_some() {
             self.fg = over.fg;
@@ -46,10 +56,18 @@ impl Style {
         if over.bg.is_some() {
             self.bg = over.bg;
         }
-        self.bold |= over.bold;
-        self.italic |= over.italic;
-        self.underline |= over.underline;
-        self.reverse |= over.reverse;
+        if over.bold.is_some() {
+            self.bold = over.bold;
+        }
+        if over.italic.is_some() {
+            self.italic = over.italic;
+        }
+        if over.underline.is_some() {
+            self.underline = over.underline;
+        }
+        if over.reverse.is_some() {
+            self.reverse = over.reverse;
+        }
         self
     }
 }
@@ -79,6 +97,36 @@ impl Theme {
     pub fn lookup(&self, name: &str) -> Option<&Style> {
         self.faces.get(name)
     }
+
+    /// Resolve a face into a flattened style: walks its `inherit` chain,
+    /// layering each parent under the face's own attributes. Returns `None`
+    /// only if `name` itself is not defined — missing parents in the chain are
+    /// silently skipped (they contribute nothing).
+    ///
+    /// Inherit list semantics match Emacs: earlier names win over later ones
+    /// (so we apply later ones first, then earlier override). The face's own
+    /// attributes always win over any inherited one.
+    ///
+    /// Recursion is capped at depth 32, which doubles as cycle protection.
+    pub fn resolve(&self, name: &str) -> Option<Style> {
+        self.resolve_at(name, 32)
+    }
+
+    fn resolve_at(&self, name: &str, depth: usize) -> Option<Style> {
+        if depth == 0 {
+            return None;
+        }
+        let face = self.faces.get(name)?;
+        let mut base = Style::default();
+        for parent in face.inherit.iter().rev() {
+            if let Some(p) = self.resolve_at(parent, depth - 1) {
+                base = base.patch(&p);
+            }
+        }
+        let mut own = face.clone();
+        own.inherit.clear();
+        Some(base.patch(&own))
+    }
 }
 
 /// Wrapper that hands the runtime a stable interior-mutable handle. `State`
@@ -98,8 +146,8 @@ pub type ThemeCell = RefCell<Theme>;
 pub fn style_from_value(v: &Rc<Value>, theme: &Theme) -> Result<Style, RuntimeError> {
     match &**v {
         Value::Unit => Ok(Style::default()),
-        Value::Ident(s) => Ok(theme.lookup(s).cloned().unwrap_or_default()),
-        Value::Str(s) => Ok(theme.lookup(s).cloned().unwrap_or_default()),
+        Value::Ident(s) => Ok(theme.resolve(s).unwrap_or_default()),
+        Value::Str(s) => Ok(theme.resolve(s).unwrap_or_default()),
         Value::Map(m) => {
             let mut style = Style::default();
             for (k, val) in m.iter() {
@@ -107,14 +155,15 @@ pub fn style_from_value(v: &Rc<Value>, theme: &Theme) -> Result<Style, RuntimeEr
                 match key.as_ref() {
                     "fg" => style.fg = color_from_value(val)?,
                     "bg" => style.bg = color_from_value(val)?,
-                    "bold" => style.bold = val.is_truthy(),
-                    "italic" => style.italic = val.is_truthy(),
-                    "underline" => style.underline = val.is_truthy(),
-                    "reverse" => style.reverse = val.is_truthy(),
+                    "bold" => style.bold = Some(val.is_truthy()),
+                    "italic" => style.italic = Some(val.is_truthy()),
+                    "underline" => style.underline = Some(val.is_truthy()),
+                    "reverse" => style.reverse = Some(val.is_truthy()),
+                    "inherit" => style.inherit = inherit_from_value(val)?,
                     other => {
                         return Err(RuntimeError::TypeMismatch {
                             name: "style".into(),
-                            expected: "fg|bg|bold|italic|underline|reverse".into(),
+                            expected: "fg|bg|bold|italic|underline|reverse|inherit".into(),
                             got: other.into(),
                         });
                     }
@@ -123,6 +172,28 @@ pub fn style_from_value(v: &Rc<Value>, theme: &Theme) -> Result<Style, RuntimeEr
             Ok(style)
         }
         _ => Err(RuntimeError::type_mismatch("style", "ident|map|()", v)),
+    }
+}
+
+/// Parse the `inherit` field of a style map. Accepts a single face name
+/// (`'face` or `"face"`) or an array of names. The order is preserved as the
+/// priority order: earlier names win over later ones during resolution.
+fn inherit_from_value(v: &Rc<Value>) -> Result<Vec<Rc<str>>, RuntimeError> {
+    match &**v {
+        Value::Unit => Ok(Vec::new()),
+        Value::Ident(s) | Value::Str(s) => Ok(vec![s.clone()]),
+        Value::Array(xs) => xs
+            .iter()
+            .map(|x| match &**x {
+                Value::Ident(s) | Value::Str(s) => Ok(s.clone()),
+                _ => Err(RuntimeError::type_mismatch("inherit-name", "ident|str", x)),
+            })
+            .collect(),
+        _ => Err(RuntimeError::type_mismatch(
+            "inherit",
+            "ident|str|array",
+            v,
+        )),
     }
 }
 
@@ -193,17 +264,25 @@ pub fn style_to_value(style: &Style) -> Rc<Value> {
     if let Some(c) = &style.bg {
         m.insert(key("bg"), color_to_value(c));
     }
-    if style.bold {
-        m.insert(key("bold"), Rc::new(Value::Int(1)));
+    if let Some(b) = style.bold {
+        m.insert(key("bold"), Rc::new(Value::Int(b as i64)));
     }
-    if style.italic {
-        m.insert(key("italic"), Rc::new(Value::Int(1)));
+    if let Some(b) = style.italic {
+        m.insert(key("italic"), Rc::new(Value::Int(b as i64)));
     }
-    if style.underline {
-        m.insert(key("underline"), Rc::new(Value::Int(1)));
+    if let Some(b) = style.underline {
+        m.insert(key("underline"), Rc::new(Value::Int(b as i64)));
     }
-    if style.reverse {
-        m.insert(key("reverse"), Rc::new(Value::Int(1)));
+    if let Some(b) = style.reverse {
+        m.insert(key("reverse"), Rc::new(Value::Int(b as i64)));
+    }
+    if !style.inherit.is_empty() {
+        let arr: im::Vector<Rc<Value>> = style
+            .inherit
+            .iter()
+            .map(|s| Rc::new(Value::Str(s.clone())))
+            .collect();
+        m.insert(key("inherit"), Rc::new(Value::Array(arr)));
     }
     Rc::new(Value::Map(m))
 }
@@ -389,16 +468,16 @@ pub fn style_to_ratatui(style: &Style) -> ratatui::style::Style {
         s = s.bg(*c);
     }
     let mut m = Modifier::empty();
-    if style.bold {
+    if style.bold == Some(true) {
         m |= Modifier::BOLD;
     }
-    if style.italic {
+    if style.italic == Some(true) {
         m |= Modifier::ITALIC;
     }
-    if style.underline {
+    if style.underline == Some(true) {
         m |= Modifier::UNDERLINED;
     }
-    if style.reverse {
+    if style.reverse == Some(true) {
         m |= Modifier::REVERSED;
     }
     if !m.is_empty() {
@@ -426,8 +505,8 @@ mod tests {
         let theme = Theme::new();
         let s = style_from_value(&v, &theme).unwrap();
         assert_eq!(s.fg, Some(Color::Red));
-        assert!(s.bold);
-        assert!(!s.italic);
+        assert_eq!(s.bold, Some(true));
+        assert_eq!(s.italic, None);
     }
 
     #[test]
@@ -437,14 +516,14 @@ mod tests {
             "header".into(),
             Style {
                 fg: Some(Color::Cyan),
-                bold: true,
+                bold: Some(true),
                 ..Default::default()
             },
         );
         let v = run("'header");
         let s = style_from_value(&v, &theme).unwrap();
         assert_eq!(s.fg, Some(Color::Cyan));
-        assert!(s.bold);
+        assert_eq!(s.bold, Some(true));
     }
 
     #[test]
@@ -483,7 +562,7 @@ mod tests {
     fn style_to_value_round_trips_basic() {
         let s = Style {
             fg: Some(Color::Blue),
-            bold: true,
+            bold: Some(true),
             ..Default::default()
         };
         let v = style_to_value(&s);

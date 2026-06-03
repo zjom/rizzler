@@ -443,7 +443,7 @@ fn builtin_decorator(b: BuiltinId, buf: &Buffer, theme: &Theme) -> DecoratorRang
             // If the theme doesn't define `default`, this is a no-op — the
             // frame-wide base fill in the renderer already provides the
             // editor's baseline colors.
-            let Some(style) = theme.lookup("default").cloned() else {
+            let Some(style) = theme.resolve("default") else {
                 return DecoratorRanges { ranges };
             };
             for (i, line) in buf.lines_at(start).take(visible).enumerate() {
@@ -459,13 +459,10 @@ fn builtin_decorator(b: BuiltinId, buf: &Buffer, theme: &Theme) -> DecoratorRang
             }
         }
         BuiltinId::SelectionHighlight => {
-            let style = theme
-                .lookup("region")
-                .cloned()
-                .unwrap_or_else(|| Style {
-                    bg: Some(crate::styling::Color::Rgb(60, 90, 130)),
-                    ..Default::default()
-                });
+            let style = theme.resolve("region").unwrap_or_else(|| Style {
+                bg: Some(crate::styling::Color::Rgb(60, 90, 130)),
+                ..Default::default()
+            });
             let Some(anchor) = buf.selection_anchor() else {
                 return DecoratorRanges { ranges };
             };
@@ -518,13 +515,10 @@ fn builtin_decorator(b: BuiltinId, buf: &Buffer, theme: &Theme) -> DecoratorRang
             }
         }
         BuiltinId::CurrentLineHighlight => {
-            let style = theme
-                .lookup("cursor-line")
-                .cloned()
-                .unwrap_or_else(|| Style {
-                    bg: Some(crate::styling::Color::DarkGray),
-                    ..Default::default()
-                });
+            let style = theme.resolve("cursor-line").unwrap_or_else(|| Style {
+                bg: Some(crate::styling::Color::DarkGray),
+                ..Default::default()
+            });
             let cur_row = buf.file_pos().row + buf.cursor_pos().row as usize;
             ranges.push(StyledRange {
                 row: cur_row,

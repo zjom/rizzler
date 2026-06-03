@@ -170,6 +170,11 @@ impl State {
         &self.bufs[i]
     }
 
+    pub(crate) fn focused_buf_mut(&mut self) -> &mut Buffer {
+        let i = self.focused_bufno();
+        &mut self.bufs[i]
+    }
+
     /// Accessor for the [`crate::styling::Theme`] cell. Used by `face-define`
     /// / `face-of` builtins.
     pub(crate) fn theme(&self) -> &ThemeCell {
@@ -590,6 +595,13 @@ impl State {
                     Ok(d) => rb.decorators.push(d),
                     Err(e) => record(&mut error_chunks, &s.name, e),
                 }
+            }
+            // Text properties + overlays applied after user decorators so
+            // they layer on top — overlays themselves are priority-ordered
+            // inside `build_prop_ranges`.
+            let prop_ranges = crate::props::build_prop_ranges(buf, &theme);
+            if !prop_ranges.ranges.is_empty() {
+                rb.decorators.push(prop_ranges);
             }
             per_buf.push(rb);
         }

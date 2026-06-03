@@ -5,6 +5,7 @@ mod keymap;
 mod lisp;
 mod mode;
 mod position;
+mod props;
 mod render;
 mod render_ratatui;
 mod slots;

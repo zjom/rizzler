@@ -623,6 +623,109 @@ fn builtins() -> Env {
         ok_unit(env)
     });
 
+    // text properties + overlays. Both attach a style range to the focused
+    // buffer. `put-text-property` adds an anonymous entry; `overlay-create`
+    // returns a handle (int) so the entry can be mutated/removed later. The
+    // style argument accepts whatever `style_from_value` does — a face name
+    // or an inline `{"fg": ... "bg": ...}` map.
+    //
+    // Ranges are half-open `[start, end)`. Multi-row spans are clipped to
+    // each visible row at render time.
+    b!("put-text-property", 5, |args, env| {
+        let start_row = as_usize(&args[0], "put-text-property")?;
+        let start_col = as_usize(&args[1], "put-text-property")?;
+        let end_row = as_usize(&args[2], "put-text-property")?;
+        let end_col = as_usize(&args[3], "put-text-property")?;
+        let face = args[4].clone();
+        with_editor_mut(|st| {
+            st.focused_buf_mut()
+                .props_mut()
+                .push_text_property(crate::props::PropEntry {
+                    start: Position::new(start_col, start_row),
+                    end: Position::new(end_col, end_row),
+                    face: Some(face),
+                    priority: 0,
+                    pad_to_width: false,
+                });
+        });
+        ok_unit(env)
+    });
+    b!("clear-text-properties", 0, |_, env| {
+        with_editor_mut(|st| {
+            st.focused_buf_mut().props_mut().clear_text_properties();
+        });
+        ok_unit(env)
+    });
+
+    b!("overlay-create", 5, |args, env| {
+        let start_row = as_usize(&args[0], "overlay-create")?;
+        let start_col = as_usize(&args[1], "overlay-create")?;
+        let end_row = as_usize(&args[2], "overlay-create")?;
+        let end_col = as_usize(&args[3], "overlay-create")?;
+        let face = args[4].clone();
+        let id = with_editor_mut(|st| {
+            st.focused_buf_mut()
+                .props_mut()
+                .create_overlay(crate::props::PropEntry {
+                    start: Position::new(start_col, start_row),
+                    end: Position::new(end_col, end_row),
+                    face: Some(face),
+                    priority: 0,
+                    pad_to_width: false,
+                })
+        });
+        Ok((Rc::new(Value::Int(id.0 as i64)), env.clone()))
+    });
+    // `(overlay-put id key value)` — currently recognized keys:
+    //   "face"         — face name or inline style map
+    //   "priority"     — int; higher wins among overlapping overlays
+    //   "pad-to-width" — truthy/falsy; pad the highlight to the area width
+    b!("overlay-put", 3, |args, env| {
+        let id = crate::props::OverlayId(as_int(&args[0], "overlay-put")? as u64);
+        let key = as_ident_or_str(&args[1], "overlay-put")?;
+        match key.as_ref() {
+            "face" => {
+                let face = args[2].clone();
+                with_editor_mut(|st| {
+                    if let Some(e) = st.focused_buf_mut().props_mut().overlay_mut(id) {
+                        e.face = Some(face);
+                    }
+                });
+            }
+            "priority" => {
+                let p = as_int(&args[2], "overlay-put")?;
+                with_editor_mut(|st| {
+                    if let Some(e) = st.focused_buf_mut().props_mut().overlay_mut(id) {
+                        e.priority = p;
+                    }
+                });
+            }
+            "pad-to-width" => {
+                let pad = args[2].is_truthy();
+                with_editor_mut(|st| {
+                    if let Some(e) = st.focused_buf_mut().props_mut().overlay_mut(id) {
+                        e.pad_to_width = pad;
+                    }
+                });
+            }
+            other => {
+                return Err(RuntimeError::TypeMismatch {
+                    name: "overlay-put".into(),
+                    expected: "face|priority|pad-to-width".into(),
+                    got: other.into(),
+                });
+            }
+        }
+        ok_unit(env)
+    });
+    b!("overlay-delete", 1, |args, env| {
+        let id = crate::props::OverlayId(as_int(&args[0], "overlay-delete")? as u64);
+        with_editor_mut(|st| {
+            st.focused_buf_mut().props_mut().delete_overlay(id);
+        });
+        ok_unit(env)
+    });
+
     b!("focused-mode", 0, |_, env| {
         let m = with_editor_mut(|st| st.focused_buf().mode());
         let s: &str = match m {
@@ -1091,6 +1194,60 @@ mod tests {
         assert!(err.is_some(), "expected a render-phase error");
         let after = s.focused_buf().text();
         assert_eq!(pre, after, "render callback must not mutate the buffer");
+    }
+
+    #[test]
+    fn put_text_property_shows_up_in_frame_decorators() {
+        let mut s = test_state();
+        // Need some content so the prop range maps to a visible row, and a
+        // viewport so `build_prop_ranges` doesn't short-circuit.
+        s.eval_lisp("(set-mode 'insert)").unwrap();
+        s.eval_lisp("(insert \"hello world\")").unwrap();
+        s.eval_lisp("(set-mode 'normal)").unwrap();
+        s.eval_lisp(r#"(put-text-property 0 0 0 5 "twilight.accent")"#)
+            .unwrap();
+        let (frame, err) = s.precompute_frame();
+        assert!(err.is_none(), "{err:?}");
+        let found = frame
+            .per_buf
+            .iter()
+            .flat_map(|b| b.decorators.iter())
+            .flat_map(|d| d.ranges.iter())
+            .any(|r| r.row == 0 && r.col == 0 && r.len == 5);
+        assert!(found, "expected a styled range from the text property");
+    }
+
+    #[test]
+    fn overlay_create_put_delete_round_trip() {
+        let mut s = test_state();
+        s.eval_lisp("(set-mode 'insert)").unwrap();
+        s.eval_lisp("(insert \"abcde\")").unwrap();
+        s.eval_lisp("(set-mode 'normal)").unwrap();
+        let id = s
+            .eval_lisp(r#"(overlay-create 0 0 0 3 "twilight.accent")"#)
+            .unwrap();
+        let id_int = id.as_int().expect("overlay-create returns int");
+        // Mutate it.
+        s.eval_lisp(&format!(r#"(overlay-put {id_int} "priority" 5)"#))
+            .unwrap();
+        let (frame, _) = s.precompute_frame();
+        let has_range = frame
+            .per_buf
+            .iter()
+            .flat_map(|b| b.decorators.iter())
+            .flat_map(|d| d.ranges.iter())
+            .any(|r| r.row == 0 && r.col == 0 && r.len == 3);
+        assert!(has_range, "overlay should have produced a range");
+        // Delete and confirm.
+        s.eval_lisp(&format!("(overlay-delete {id_int})")).unwrap();
+        let (frame2, _) = s.precompute_frame();
+        let still = frame2
+            .per_buf
+            .iter()
+            .flat_map(|b| b.decorators.iter())
+            .flat_map(|d| d.ranges.iter())
+            .any(|r| r.row == 0 && r.col == 0 && r.len == 3);
+        assert!(!still, "deleted overlay shouldn't appear");
     }
 
     #[test]

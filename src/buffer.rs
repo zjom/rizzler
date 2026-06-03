@@ -6,7 +6,7 @@ use std::{
     str::FromStr,
 };
 
-use crate::{mode::EditingMode, position::Position};
+use crate::{mode::EditingMode, position::Position, props::PropStore};
 
 /// What sort of buffer this is. Drives default mode and gates operations like
 /// BufDelete/BufNext — the minibuffer participates in everything a file
@@ -73,6 +73,10 @@ pub struct Buffer {
     /// Anchor (absolute file position) of the current visual selection.
     /// `Some` iff `mode` is one of the visual modes — managed by `set_mode`.
     pub(crate) selection_anchor: Option<Position<usize>>,
+    /// Text properties and overlays. Built up by lisp via
+    /// `put-text-property` / `overlay-create`; consumed by the precompute
+    /// pass to emit decorator ranges.
+    pub(crate) props: PropStore,
     // pub(crate) permissions: Permissions,
 }
 
@@ -93,6 +97,14 @@ impl Buffer {
 
     pub fn fs_path(&self) -> Option<Rc<Path>> {
         self.fs_path.clone()
+    }
+
+    pub fn props(&self) -> &PropStore {
+        &self.props
+    }
+
+    pub fn props_mut(&mut self) -> &mut PropStore {
+        &mut self.props
     }
 
     pub fn kind(&self) -> BufferKind {

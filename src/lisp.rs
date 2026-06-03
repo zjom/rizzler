@@ -771,7 +771,6 @@ fn builtins() -> Env {
         ]);
         Ok((Rc::new(Value::Map(m)), env.clone()))
     });
-    alias!("!"=>"exec");
 
     let mut env = Env::of_builtins(entries);
     for (a, t) in aliases {

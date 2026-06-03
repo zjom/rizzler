@@ -257,7 +257,7 @@ impl State {
         let mode = self.bufs[self.focused_bufno()].mode();
         if let Some(action) = self
             .keymap
-            .resolve(mode.to_str().into(), event.into(), timedout)
+            .resolve(mode.as_str().into(), event.into(), timedout)
         {
             self.apply(&action)?;
         }
@@ -315,10 +315,10 @@ impl State {
                 Action::WindowFocusNext => self.windows.focus_next(),
                 Action::WindowFocus(d) => self.windows.focus_dir(*d),
                 Action::KeymapSet { mode, lhs, rhs } => {
-                    self.keymap.set(mode.to_str().into(), lhs, rhs.clone());
+                    self.keymap.set(mode.as_str().into(), lhs, rhs.clone());
                 }
                 Action::KeymapRemove { mode, lhs } => {
-                    self.keymap.remove(mode.to_str().into(), lhs);
+                    self.keymap.remove(mode.as_str().into(), lhs);
                 }
                 Action::EvalLisp(form) => {
                     if let Err(e) = self.eval_lisp_value(form.clone()) {

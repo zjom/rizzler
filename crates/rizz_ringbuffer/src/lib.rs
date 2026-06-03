@@ -68,7 +68,7 @@ impl<T, const N: usize> RingBuffer<T, N> {
     /// slot is not read again without a subsequent `write`.
     #[inline]
     unsafe fn take_at(&mut self, slot: usize) -> T {
-        self.data[slot].assume_init_read()
+        unsafe { self.data[slot].assume_init_read() }
     }
 
     /// Run the destructor of the value at `slot` in place.
@@ -77,7 +77,9 @@ impl<T, const N: usize> RingBuffer<T, N> {
     /// `slot` must be initialised.
     #[inline]
     unsafe fn drop_at(&mut self, slot: usize) {
-        self.data[slot].assume_init_drop();
+        unsafe {
+            self.data[slot].assume_init_drop();
+        }
     }
 
     /// Append `value` to the back.

@@ -14,7 +14,7 @@ pub fn defaults() -> HashMap<Rc<str>, Rc<Trie>> {
         on_char: Some(Action::InsertChar),
     });
     HashMap::from([
-        (EditingMode::Insert.to_str().into(), typing_node.clone()),
-        (EditingMode::Command.to_str().into(), typing_node),
+        (EditingMode::Insert.as_str().into(), typing_node.clone()),
+        (EditingMode::Command.as_str().into(), typing_node),
     ])
 }

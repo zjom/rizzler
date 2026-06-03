@@ -16,7 +16,7 @@ impl EditingMode {
         matches!(self, Self::Visual | Self::VisualLine | Self::VisualBlock)
     }
 
-    pub fn to_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Normal => "normal",
             Self::Insert => "insert",

@@ -344,7 +344,7 @@ fn builtins() -> Env {
     });
 
     b!("keymap-get", 1, |args, env| {
-        let mode = parse_mode_ident(&args[0])?.to_str();
+        let mode = parse_mode_ident(&args[0])?.as_str();
         let mappings = with_editor_mut(|st| {
             st.keymap_registry()
                 .iter()

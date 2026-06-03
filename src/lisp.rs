@@ -774,7 +774,7 @@ fn builtins() -> Env {
     });
 
     b!("fs-readdir", 1, |args, env| {
-        let path = as_str(&args[0], "dir-read")?;
+        let path = as_str(&args[0], "fs-readdir")?;
         let dirs = std::fs::read_dir(path.as_ref())?
             .map(|res| res.map(|e| e.path().into()))
             .collect::<Result<Vector<Value>, std::io::Error>>()?;
@@ -782,6 +782,12 @@ fn builtins() -> Env {
     });
     alias!("ls"=>"fs-readdir");
     alias!("readdir"=>"fs-readdir");
+
+    b!("fs-isdir", 1, |args, env| {
+        let path = as_str(&args[0], "fs-isdir")?;
+        let meta = std::fs::metadata(path.as_ref())?;
+        Ok((Rc::new(meta.is_dir().into()), env.clone()))
+    });
 
     b!("exec", 1, |args, env| {
         let cmd_args = as_str(&args[0], "exec")?;
@@ -1178,13 +1184,9 @@ fn parse_placement(v: &Rc<Value>) -> Result<Placement, RuntimeError> {
                     })
                 }
                 "side" => {
-                    let side = m
-                        .get(&key("side"))
-                        .ok_or_else(|| RuntimeError::type_mismatch(
-                            "placement.side",
-                            "ident|str",
-                            v,
-                        ))?;
+                    let side = m.get(&key("side")).ok_or_else(|| {
+                        RuntimeError::type_mismatch("placement.side", "ident|str", v)
+                    })?;
                     let side = match as_ident_or_str(side, "placement.side")?.as_ref() {
                         "top" => Side::Top,
                         "bottom" => Side::Bottom,
@@ -1203,11 +1205,7 @@ fn parse_placement(v: &Rc<Value>) -> Result<Placement, RuntimeError> {
                 other => Err(unknown_variant("placement.kind", other)),
             }
         }
-        _ => Err(RuntimeError::type_mismatch(
-            "placement",
-            "ident|str|map",
-            v,
-        )),
+        _ => Err(RuntimeError::type_mismatch("placement", "ident|str|map", v)),
     }
 }
 

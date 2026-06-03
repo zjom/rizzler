@@ -16,9 +16,9 @@ use crate::{
     lisp::{EditorGuard, LispRuntime, init_script_path},
     mode::EditingMode,
     position::Position,
+    regions::RegionRegistry,
     render::{CursorStyle, Renderer, StateSnapshot},
     render_ratatui::RatatuiRenderer,
-    regions::RegionRegistry,
     styling::ThemeCell,
     window::{SplitDir, WindowTree},
 };
@@ -217,7 +217,7 @@ impl State {
     }
 
     /// The buffer currently receiving key events.
-    fn focused_bufno(&self) -> usize {
+    pub(crate) fn focused_bufno(&self) -> usize {
         if self.focus_minibuffer {
             self.minibuffer
         } else {
@@ -564,10 +564,12 @@ impl State {
                     Ok(lines) => bottom_extra.push(RenderedStrip { lines }),
                     Err(e) => record(&mut error_chunks, &region.name, e),
                 },
-                RegionAnchor::StatusLeft => match produce_status_span(region, &snap, &theme, &env) {
-                    Ok(spans) => status_left.extend(spans),
-                    Err(e) => record(&mut error_chunks, &region.name, e),
-                },
+                RegionAnchor::StatusLeft => {
+                    match produce_status_span(region, &snap, &theme, &env) {
+                        Ok(spans) => status_left.extend(spans),
+                        Err(e) => record(&mut error_chunks, &region.name, e),
+                    }
+                }
                 RegionAnchor::StatusRight => {
                     match produce_status_span(region, &snap, &theme, &env) {
                         Ok(spans) => status_right.extend(spans),
@@ -590,10 +592,12 @@ impl State {
             let mut rb = RenderedBuffer::default();
             for region in self.regions.iter() {
                 match region.anchor {
-                    RegionAnchor::Gutter { .. } => match produce_gutter(region, buf, &theme, &env) {
-                        Ok(g) => rb.gutters.push(g),
-                        Err(e) => record(&mut error_chunks, &region.name, e),
-                    },
+                    RegionAnchor::Gutter { .. } => {
+                        match produce_gutter(region, buf, &theme, &env) {
+                            Ok(g) => rb.gutters.push(g),
+                            Err(e) => record(&mut error_chunks, &region.name, e),
+                        }
+                    }
                     RegionAnchor::Decorator => match produce_decorator(region, buf, &theme, &env) {
                         Ok(d) => rb.decorators.push(d),
                         Err(e) => record(&mut error_chunks, &region.name, e),

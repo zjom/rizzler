@@ -449,6 +449,11 @@ fn builtins() -> Env {
         Ok((Rc::new(s.into()), env.clone()))
     });
 
+    b!("buf-no", 0, |_, env| {
+        let s = with_editor_mut(|st| st.focused_bufno());
+        Ok((Rc::new(Value::Int(s as i64)), env.clone()))
+    });
+
     b!("buf-path", 0, |_, env| {
         let v: Value = with_editor_mut(|st| st.focused_buf().fs_path())
             .map(|p| p.to_string_lossy().as_ref().into())
@@ -936,17 +941,9 @@ fn parse_anchor(v: &Rc<Value>) -> Result<RegionAnchor, RuntimeError> {
                 let width = u16::try_from(width).unwrap_or(0);
                 return Ok(RegionAnchor::Gutter { width });
             }
-            Err(RuntimeError::type_mismatch(
-                "anchor",
-                "{gutter: N}",
-                v,
-            ))
+            Err(RuntimeError::type_mismatch("anchor", "{gutter: N}", v))
         }
-        _ => Err(RuntimeError::type_mismatch(
-            "anchor",
-            "ident|str|map",
-            v,
-        )),
+        _ => Err(RuntimeError::type_mismatch("anchor", "ident|str|map", v)),
     }
 }
 
@@ -1184,8 +1181,7 @@ mod tests {
         use unicode_width::UnicodeWidthStr;
         let mut s = test_state();
         for name in ["cursor", "pip", "last-key", "spacer", "bufno"] {
-            s.eval_lisp(&format!("(region-remove '{name})"))
-                .unwrap();
+            s.eval_lisp(&format!("(region-remove '{name})")).unwrap();
         }
         s.eval_lisp(r#"(region-add 'cjk 'status-right "漢字")"#)
             .unwrap();

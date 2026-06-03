@@ -455,6 +455,7 @@ fn builtin_decorator(b: BuiltinId, buf: &Buffer, theme: &Theme) -> DecoratorRang
                     len,
                     style: style.clone(),
                     pad_to_width: false,
+                    display: None,
                 });
             }
         }
@@ -511,6 +512,7 @@ fn builtin_decorator(b: BuiltinId, buf: &Buffer, theme: &Theme) -> DecoratorRang
                     len,
                     style: style.clone(),
                     pad_to_width: pad,
+                    display: None,
                 });
             }
         }
@@ -526,6 +528,7 @@ fn builtin_decorator(b: BuiltinId, buf: &Buffer, theme: &Theme) -> DecoratorRang
                 len: 0,
                 style,
                 pad_to_width: true,
+                display: None,
             });
         }
         _ => {}
@@ -577,6 +580,7 @@ fn ranges_from_value(v: &Rc<Value>, theme: &Theme) -> Result<Vec<StyledRange>, R
             len,
             style,
             pad_to_width,
+            display: None,
         });
     }
     Ok(out)

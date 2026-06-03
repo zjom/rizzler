@@ -111,6 +111,19 @@ pub struct StyledRange {
     /// many real characters the line has on this row. Used by the
     /// current-line-highlight decorator so the band fills the screen.
     pub pad_to_width: bool,
+    /// If set, the renderer *replaces* the underlying chars in `[col, col+len)`
+    /// with this display content instead of restyling them. `style` applies
+    /// to the displayed content. Used for fold ellipses, virtual text, and
+    /// inline hints.
+    pub display: Option<Display>,
+}
+
+/// Visual substitution for a range. `String` replaces with arbitrary text;
+/// `Space(n)` replaces with `n` blank cells.
+#[derive(Clone, Debug)]
+pub enum Display {
+    String(std::rc::Rc<str>),
+    Space(usize),
 }
 
 pub trait Renderer {

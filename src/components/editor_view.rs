@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::buffer::Buffer;
-use crate::render::{RenderedBuffer, StyledRange};
+use crate::render::{Display, RenderedBuffer, StyledRange};
 use crate::styling::style_to_ratatui;
 
 pub struct EditorView;
@@ -91,7 +91,11 @@ fn apply_decorators(
 
 /// Repaint `spans` so that character indices `[r.col, r.col + r.len)` carry
 /// `r.style`. Pads with spaces when `pad_to_width` is set so a current-line
-/// or visual-line band fills the row width.
+/// or visual-line band fills the row width. When `r.display` is set, the
+/// `middle` slice is *replaced* with the display content instead of
+/// restyled — subsequent ranges that target columns after the replacement
+/// may end up slightly mis-aligned, which is a known limitation of doing
+/// substitution in a flat span stream.
 fn apply_range(spans: Vec<Span<'static>>, r: &StyledRange, area_width: u16) -> Vec<Span<'static>> {
     let mut text: String = spans.iter().flat_map(|s| s.content.chars()).collect();
     let cur_len = text.chars().count();
@@ -122,7 +126,11 @@ fn apply_range(spans: Vec<Span<'static>>, r: &StyledRange, area_width: u16) -> V
     let highlight = inherited.patch(style_to_ratatui(&r.style));
 
     let before: String = chars[..start].iter().collect();
-    let middle: String = chars[start..end].iter().collect();
+    let middle: String = match &r.display {
+        Some(Display::String(s)) => s.to_string(),
+        Some(Display::Space(n)) => " ".repeat(*n),
+        None => chars[start..end].iter().collect(),
+    };
     let after: String = chars[end..].iter().collect();
 
     let mut out = Vec::with_capacity(3);

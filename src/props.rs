@@ -21,7 +21,7 @@ use rizz::runtime::Value;
 
 use crate::buffer::Buffer;
 use crate::position::Position;
-use crate::render::{DecoratorRanges, StyledRange};
+use crate::render::{DecoratorRanges, Display, StyledRange};
 use crate::styling::{Theme, style_from_value};
 
 // ---------------------------------------------------------------------------
@@ -35,11 +35,16 @@ use crate::styling::{Theme, style_from_value};
 pub struct PropEntry {
     pub start: Position<usize>,
     pub end: Position<usize>,
-    /// Currently the only recognized key is `"face"`, whose value is consumed
-    /// via [`style_from_value`] (face name or inline style map). Stored as a
-    /// `Value` so future property keys can carry richer shapes without
-    /// changing the entry layout.
+    /// Style to apply. For face-only entries, restyles the underlying chars;
+    /// for display entries, styles the substituted content. Stored as a raw
+    /// `Value` so the face name resolves through the theme at render time
+    /// (a theme reload updates existing entries).
     pub face: Option<Rc<Value>>,
+    /// When set, the renderer *replaces* the range with this content instead
+    /// of restyling. Only honored for single-row ranges (`start.row ==
+    /// end.row`); multi-row display would require hiding subsequent rows,
+    /// which is out of scope for this pipeline.
+    pub display: Option<Display>,
     /// Overlays only; ignored for text properties. Higher wins.
     pub priority: i64,
     /// When set, the highlight pads to the area's full width on each row it
@@ -159,7 +164,15 @@ fn emit_clipped(
             line_len
         };
         let len = end_col.saturating_sub(col);
-        if len == 0 && !e.pad_to_width {
+        // Display substitution is single-row only; only attach it to the
+        // entry's first row (which here is also its only row when the entry
+        // is single-row, since `start.row == end.row` constrains the loop).
+        let display = if row == e.start.row && e.start.row == e.end.row {
+            e.display.clone()
+        } else {
+            None
+        };
+        if len == 0 && !e.pad_to_width && display.is_none() {
             continue;
         }
         out.push(StyledRange {
@@ -168,6 +181,7 @@ fn emit_clipped(
             len,
             style: style.clone(),
             pad_to_width: e.pad_to_width,
+            display,
         });
     }
 }

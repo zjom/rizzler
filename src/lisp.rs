@@ -644,6 +644,7 @@ fn builtins() -> Env {
                     start: Position::new(start_col, start_row),
                     end: Position::new(end_col, end_row),
                     face: Some(face),
+                    display: None,
                     priority: 0,
                     pad_to_width: false,
                 });
@@ -670,6 +671,7 @@ fn builtins() -> Env {
                     start: Position::new(start_col, start_row),
                     end: Position::new(end_col, end_row),
                     face: Some(face),
+                    display: None,
                     priority: 0,
                     pad_to_width: false,
                 })
@@ -680,6 +682,11 @@ fn builtins() -> Env {
     //   "face"         — face name or inline style map
     //   "priority"     — int; higher wins among overlapping overlays
     //   "pad-to-width" — truthy/falsy; pad the highlight to the area width
+    //   "display"      — visual substitution; one of:
+    //                      a string                        → replace with text
+    //                      {"text": "..."}                 → same as above
+    //                      {"space": N}                    → replace with N spaces
+    //                      ()                              → clear any display
     b!("overlay-put", 3, |args, env| {
         let id = crate::props::OverlayId(as_int(&args[0], "overlay-put")? as u64);
         let key = as_ident_or_str(&args[1], "overlay-put")?;
@@ -708,10 +715,18 @@ fn builtins() -> Env {
                     }
                 });
             }
+            "display" => {
+                let disp = display_from_value(&args[2])?;
+                with_editor_mut(|st| {
+                    if let Some(e) = st.focused_buf_mut().props_mut().overlay_mut(id) {
+                        e.display = disp;
+                    }
+                });
+            }
             other => {
                 return Err(RuntimeError::TypeMismatch {
                     name: "overlay-put".into(),
-                    expected: "face|priority|pad-to-width".into(),
+                    expected: "face|priority|pad-to-width|display".into(),
                     got: other.into(),
                 });
             }
@@ -918,6 +933,42 @@ fn as_usize(v: &Rc<Value>, name: &str) -> Result<usize, RuntimeError> {
         expected: "0..=usize::MAX".into(),
         got: n.to_string().into(),
     })
+}
+
+/// Parse a value into an optional [`crate::render::Display`]. Recognized
+/// shapes:
+///
+/// * `()` — clear any display (returns `None`)
+/// * `Str` / `Ident` — display the literal text
+/// * `{"text": "..."}` — same as a bare string
+/// * `{"space": N}` — N blank cells
+fn display_from_value(v: &Rc<Value>) -> Result<Option<crate::render::Display>, RuntimeError> {
+    use crate::render::Display;
+    match &**v {
+        Value::Unit => Ok(None),
+        Value::Str(s) | Value::Ident(s) => Ok(Some(Display::String(s.clone()))),
+        Value::Map(m) => {
+            let key = |k: &str| Rc::new(Value::Str(k.into()));
+            if let Some(t) = m.get(&key("text")) {
+                let s = as_str(t, "display.text")?;
+                return Ok(Some(Display::String(s)));
+            }
+            if let Some(n) = m.get(&key("space")) {
+                let n = as_usize(n, "display.space")?;
+                return Ok(Some(Display::Space(n)));
+            }
+            Err(RuntimeError::type_mismatch(
+                "display",
+                "{text: ...} | {space: N}",
+                v,
+            ))
+        }
+        _ => Err(RuntimeError::type_mismatch(
+            "display",
+            "str | {text} | {space} | ()",
+            v,
+        )),
+    }
 }
 
 fn parse_segment_side(v: &Rc<Value>) -> Result<SegmentSide, RuntimeError> {
@@ -1248,6 +1299,32 @@ mod tests {
             .flat_map(|d| d.ranges.iter())
             .any(|r| r.row == 0 && r.col == 0 && r.len == 3);
         assert!(!still, "deleted overlay shouldn't appear");
+    }
+
+    #[test]
+    fn overlay_display_substitution_lands_in_styled_range() {
+        let mut s = test_state();
+        s.eval_lisp("(set-mode 'insert)").unwrap();
+        s.eval_lisp("(insert \"abcdefghij\")").unwrap();
+        s.eval_lisp("(set-mode 'normal)").unwrap();
+        let id = s
+            .eval_lisp(r#"(overlay-create 0 2 0 8 "twilight.muted")"#)
+            .unwrap();
+        let id_int = id.as_int().unwrap();
+        s.eval_lisp(&format!(r#"(overlay-put {id_int} "display" "...")"#))
+            .unwrap();
+        let (frame, _) = s.precompute_frame();
+        let got_display = frame
+            .per_buf
+            .iter()
+            .flat_map(|b| b.decorators.iter())
+            .flat_map(|d| d.ranges.iter())
+            .find(|r| r.row == 0 && r.col == 2 && r.len == 6)
+            .and_then(|r| r.display.clone());
+        match got_display {
+            Some(crate::render::Display::String(s)) => assert_eq!(&*s, "..."),
+            other => panic!("expected Display::String(...), got {other:?}"),
+        }
     }
 
     #[test]

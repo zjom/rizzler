@@ -69,7 +69,6 @@
 ;; --- gutter + cursor ----------------------------------------------------
 (face-define "twilight.gutter"          {"fg": pal-fg-dim})
 (face-define "twilight.gutter-current"  {"fg": pal-accent       "bold": 1})
-(face-define "twilight.cursor-marker"   {"fg": pal-bg-deep      "bg": pal-accent})
 
 ;; --- xterm-indexed example: a soft amber, color 215 ---------------------
 (face-define "twilight.signature"  {"fg": 215 "italic": 1})
@@ -170,17 +169,6 @@
     "style":        "cursor-line"
     "pad-to-width": 1}])
 (region-add 'current-line-highlight 'decorator _current-line)
-
-(fn _cursor-marker ()
-  ;; Single-cell array of one StyledRange map. Could be empty (`[]`) and
-  ;; that's a valid decorator output too.
-  [{"row":          (cursor-line)
-    "col":          (cursor-col)
-    "len":          1
-    "style":        "twilight.cursor-marker"
-    "pad-to-width": 0}])
-
-(region-add 'cursor-marker 'decorator _cursor-marker)
 
 
 ;; ---------------------------------------------------------------------------
@@ -318,3 +306,171 @@
         (range 1 1)))                     ;; empty range — produces no entries
 
 (region-add 'phantom 'decorator _phantom-ranges)
+
+
+;; ---------------------------------------------------------------------------
+;; 9. Overlays + virtual text
+;; ---------------------------------------------------------------------------
+;;
+;; Decorators (section 4) paint per-frame, recomputed each render. Overlays
+;; and text-properties are the *other* path: they live on the buffer itself,
+;; attach to absolute (row, col) ranges, and are emitted as styled ranges by
+;; `props.rs::build_prop_ranges`. Two flavors:
+;;
+;;   * `put-text-property` — anonymous, batch-cleared with
+;;     `clear-text-properties`. Good for things you rebuild on every change
+;;     (a syntax pass, a lint result set).
+;;
+;;   * `overlay-create` — returns an integer handle. `overlay-put` mutates a
+;;     single overlay (face / priority / display / pad-to-width).
+;;     `overlay-delete` removes it. Use this when you want to flip one
+;;     individual annotation without re-emitting the rest.
+;;
+;; Overlays sort by ascending priority before emission, so higher priority
+;; lands on top. The `display` key swaps the underlying chars for a
+;; substitute — that's the "virtual text" mechanism (fold ellipses, inline
+;; hints, ghost completions). It's single-row only.
+;;
+;; The functions below take effect on the *currently focused* buffer when
+;; invoked. From command mode (`:`) run `(overlays-demo)` to populate a
+;; buffer with sample content + the full overlay set, or
+;; `(overlays-clear)` to wipe it.
+
+;; --- demo-specific faces ------------------------------------------------
+(face-define "demo.lint.error"
+  {"fg": pal-error  "underline": 1})
+(face-define "demo.lint.warn"
+  {"fg": pal-warn   "italic": 1})
+(face-define "demo.ghost"                ;; virtual-text / ghost completion
+  {"fg": pal-fg-dim "italic": 1})
+(face-define "demo.fold"                 ;; collapsed region ellipsis
+  {"fg": pal-accent "bg": pal-bg-line "bold": 1})
+(face-define "demo.highlight"            ;; full-width band
+  {"bg": (rgb 50 30 70)})
+(face-define "demo.match"                ;; search-style hit
+  {"fg": pal-bg-deep "bg": pal-warn "bold": 1})
+
+;; --- sample buffer content the demo annotates ---------------------------
+;; Twelve lines so every overlay below has somewhere to land. Lisp doesn't
+;; have multi-line string literals here, so we assemble with `str-join`.
+(let _demo-text
+  (str-join
+    ["fn greet(name: String) -> String {"
+     "    let greeting = format!(\"hello, {}\", name);"
+     "    println!(\"{}\", greeting);"
+     "    return greeting;"
+     "}"
+     ""
+     "// TODO: support multiple languages"
+     "fn main() {"
+     "    let names = vec![\"world\", \"twilight\", \"rizz\"];"
+     "    for n in names {"
+     "        greet(n.to_string());"
+     "    }"
+     "}"]
+    "\n"))
+
+;; --- helper: create an overlay and immediately apply a key/value bag ----
+;; Wraps the three calls (create, put-face, put-display, put-priority...)
+;; in one place so the demo below reads as data. Returns the overlay id.
+(fn _ov (sr sc er ec face props)
+  (do
+    (let id (overlay-create sr sc er ec face))
+    ;; `props` is a map of "key": value entries we forward to overlay-put.
+    ;; Keys understood: "display", "priority", "pad-to-width".
+    (if (! (= (get props "display") ()))
+        (overlay-put id "display" (get props "display"))
+        ())
+    (if (! (= (get props "priority") ()))
+        (overlay-put id "priority" (get props "priority"))
+        ())
+    (if (! (= (get props "pad-to-width") ()))
+        (overlay-put id "pad-to-width" (get props "pad-to-width"))
+        ())
+    id))
+
+;; --- the demo entrypoint ------------------------------------------------
+;; Stamps the sample buffer text, then layers:
+;;
+;;   1. text properties  — anonymous lint marks on lines 0 and 6
+;;   2. an overlay       — full-width highlight on the TODO line
+;;   3. virtual text     — a ghost type-hint and a fold ellipsis
+;;   4. priority         — two overlapping overlays where the higher wins
+;;   5. an inline match  — search-style hit, padded to one cell width
+;;
+;; Re-runnable: it clears prior demo state first.
+(fn overlays-demo ()
+  (do
+    ;; Replace the focused buffer's contents with the sample. `buf-no`
+    ;; gives the focused buffer index, which is what `buf-text-set` wants.
+    (buf-text-set (buf-no) _demo-text)
+
+    ;; Wipe any prior demo state so re-running is idempotent. Anonymous
+    ;; properties get cleared in bulk; individual overlays would need their
+    ;; ids tracked — we leave them alone here for simplicity, and recommend
+    ;; calling `(overlays-clear)` between iterations during exploration.
+    (clear-text-properties)
+
+    ;; 1. Lint-style text properties — these are the "fire and forget"
+    ;;    form: no handle returned, cleared in bulk later.
+    ;;    Underline `format!` on line 1.
+    (put-text-property 1 19 1 26 "demo.lint.error")
+    ;;    Italicize the TODO marker on line 6.
+    (put-text-property 6 3 6 7 "demo.lint.warn")
+
+    ;; 2. Full-width band on the TODO line. `pad-to-width` extends the
+    ;;    highlight past the end of the actual characters so the band
+    ;;    reaches the right margin (same trick as `cursor-line`).
+    (_ov 6 0 6 0 "demo.highlight"
+         {"pad-to-width": 1})
+
+    ;; 3a. Virtual text — a ghost type hint after the `name` parameter on
+    ;;     line 0. We attach to a single cell and *replace* it with new
+    ;;     text via `display`. The substituted content can be longer than
+    ;;     the original range; the renderer pushes following chars right.
+    (_ov 0 35 0 46 "demo.ghost"
+         {"display": " &str "})
+
+    ;; 3b. Fold ellipsis — collapse the println line by replacing its
+    ;;     entire content with a single token. (Real fold UX would also
+    ;;     hide the following rows; this just demonstrates the inline
+    ;;     substitution mechanism.)
+    (_ov 2 4 2 28 "demo.fold"
+         {"display": "  ⋯ println …  "})
+
+    ;; 4. Priority layering — two overlapping overlays on line 8.
+    ;;    The first paints the whole vec! range muted; the second
+    ;;    repaints just "twilight" with a brighter accent because its
+    ;;    priority is higher.
+    (_ov 8 16 8 47 "twilight.muted"
+         {"priority": 1})
+    (_ov 8 26 8 36 "twilight.accent"
+          {"priority": 10})
+
+    ;; 5. Search-style match — every `greet` identifier in the file.
+    ;;    Listing the positions inline is clearest for a demo; a real
+    ;;    search would walk the buffer.
+    (_ov 0 4  0 9  "demo.match" {})
+    (_ov 3 11 3 16 "demo.match" {})
+    (_ov 10 8 10 13 "demo.match" {})
+
+    ;; 6. A `{"space": N}` display — replaces a range with N blank cells,
+    ;;    styled. Useful for visually "redacting" content (e.g. secrets in
+    ;;    a log buffer) without changing buffer length.
+    (_ov 1 27 1 38 "twilight.reverse"
+         {"display": {"space": 7}})
+
+    (message "overlays-demo: applied. try :(overlays-clear)")))
+
+(keymap-set 'normal "od" '(overlays-demo))
+
+;; --- teardown -----------------------------------------------------------
+;; `clear-text-properties` only wipes the anonymous set. Overlays are
+;; per-handle and would each need `(overlay-delete id)`. For an exploration
+;; session, the simplest reset is to reload the buffer (close + reopen);
+;; this entrypoint just clears the anonymous half and refreshes the text.
+(fn overlays-clear ()
+  (do
+    (clear-text-properties)
+    (buf-text-set (buf-no) "")
+    (message "overlays-clear: text-properties cleared, buffer reset")))

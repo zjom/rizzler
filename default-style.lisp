@@ -244,16 +244,15 @@
 ;; --- right: spacer (Static plain string — simplest possible payload) -
 (region-add 'spacer 'status-right "  ")
 
-;; --- right: builtin buffer number, styled by composing with `span`  --
-;; `buffer-no` is a Rust builtin, but we can also wrap it in a closure to
-;; restyle it.
+;; --- right: buffer number ---------------------------------------------
 (fn _bufno ()
   (do
     (let m (focused-mode))
     ;; In command mode, highlight the buffer index using `reverse` for emphasis.
     (if (= m "command")
-        (span (to-str (cursor-line)) "twilight.reverse")
-        (span (to-str (cursor-line)) "twilight.warn"))))
+        (span (to-str (buf-no)) "twilight.reverse")
+        (span (to-str (buf-no)) "twilight.warn"))
+      ))
 
 (region-add 'bufno 'status-right _bufno)
 
@@ -287,9 +286,20 @@
 
 (region-add 'hint-bar 'bottom _hint-bar)
 
+;; ---------------------------------------------------------------------------
+;; 7. Composition
+;; ---------------------------------------------------------------------------
+;;
+;; Since this is lisp, you can compose your components and styles however you wish.
+
+(fn _banner ()
+    [[(span "  rizz  " "twilight.error")  (_bufno) (first (_hint-bar)) ]])
+
+(region-add 'banner 'top _banner)
+
 
 ;; ---------------------------------------------------------------------------
-;; 7. Sanity / debug
+;; 8. Sanity / debug
 ;; ---------------------------------------------------------------------------
 ;;
 ;; A no-op showcase of arithmetic + `fmap` + `range` building data the engine

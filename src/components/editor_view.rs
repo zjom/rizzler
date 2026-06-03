@@ -173,8 +173,7 @@ fn apply_range(spans: Vec<Span<'static>>, r: &StyledRange, area_width: u16) -> V
         None => mid,
     };
 
-    let mut out: Vec<Span<'static>> =
-        Vec::with_capacity(before.len() + middle.len() + after.len());
+    let mut out: Vec<Span<'static>> = Vec::with_capacity(before.len() + middle.len() + after.len());
     out.extend(before);
     out.extend(middle);
     out.extend(after);

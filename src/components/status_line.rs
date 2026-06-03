@@ -10,12 +10,7 @@ use unicode_width::UnicodeWidthStr;
 pub struct StatusLine;
 
 impl StatusLine {
-    pub fn render(
-        area: Rect,
-        left: &[Span<'static>],
-        right: &[Span<'static>],
-        frame: &mut Frame,
-    ) {
+    pub fn render(area: Rect, left: &[Span<'static>], right: &[Span<'static>], frame: &mut Frame) {
         // Use display width (not char count) so CJK / wide-emoji segments
         // don't bleed across the left/right split.
         let right_width: u16 = right

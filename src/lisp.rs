@@ -377,13 +377,13 @@ fn builtins() -> Env {
         match rizz::parse_and_run_with_env(src.as_bytes(), env) {
             Ok((v, new_env)) => {
                 if !v.is_unit() {
-                    with_editor_mut(|st| st.set_minibuffer_message(&v.display()));
+                    with_editor_mut(|st| st.push_message(&v.display()));
                 }
                 Ok((unit(), new_env))
             }
             Err(e) => {
                 let msg = e.to_string();
-                with_editor_mut(|st| st.set_minibuffer_message(&msg));
+                with_editor_mut(|st| st.push_message(&msg));
                 ok_unit(env)
             }
         }
@@ -403,22 +403,27 @@ fn builtins() -> Env {
         match rizz::parse_and_run_with_env(src.as_bytes(), env) {
             Ok((v, new_env)) => {
                 if !v.is_unit() {
-                    with_editor_mut(|st| st.set_minibuffer_message(&v.display()));
+                    with_editor_mut(|st| st.push_message(&v.display()));
                 }
                 Ok((unit(), new_env))
             }
             Err(e) => {
                 let msg = e.to_string();
-                with_editor_mut(|st| st.set_minibuffer_message(&msg));
+                with_editor_mut(|st| st.push_message(&msg));
                 ok_unit(env)
             }
         }
     });
 
     // user-facing messaging
-    b!("message", 1, |args, env| {
-        let s = as_str(&args[0], "message")?;
-        with_editor_mut(|st| st.set_minibuffer_message(&s));
+    b!("notify", 1, |args, env| {
+        let s = as_str(&args[0], "notify")?;
+        with_editor_mut(|st| st.push_message(&s));
+        ok_unit(env)
+    });
+    // `:messages` — show the full message history in the popup.
+    b!("messages", 0, |_, env| {
+        with_editor_mut(|st| st.show_all_messages());
         ok_unit(env)
     });
 

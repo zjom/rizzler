@@ -6,12 +6,13 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     text::Line,
-    widgets::{Block, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 use crate::{
     components::{EditorView, MinibufferLine, StatusLine},
     render::{CursorStyle, RenderedFrame, Renderer, StateSnapshot},
+    state::MessagePopup,
     styling::style_to_ratatui,
 };
 
@@ -88,7 +89,9 @@ impl Renderer for RatatuiRenderer {
             let mut cursor: Option<(u16, u16)> = None;
             let focused_path = snap.windows.focused_path();
             for leaf in snap.windows.layout(editor_area) {
-                let Some(buf) = snap.bufs.get(leaf.bufno) else { continue };
+                let Some(buf) = snap.bufs.get(leaf.bufno) else {
+                    continue;
+                };
                 let buf_frame = frame_data.per_buf.get(leaf.bufno);
                 EditorView::render(buf, leaf.area, buf_frame, f);
                 if !snap.focus_minibuffer && &leaf.path == focused_path {
@@ -117,12 +120,44 @@ impl Renderer for RatatuiRenderer {
                 cursor = Some(pos);
             }
 
-            if let Some((x, y)) = cursor {
+            // Popup is drawn last so it covers every layer below it. While
+            // it's visible the editor cursor is hidden — ratatui only shows
+            // a cursor when `set_cursor_position` is called this frame.
+            if let Some(popup) = snap.message_popup {
+                draw_popup(popup, editor_area, f);
+            } else if let Some((x, y)) = cursor {
                 f.set_cursor_position((x, y));
             }
         })?;
         Ok(())
     }
+}
+
+/// Center a `[60% × 60%]` (capped) popup over `area`, paint a bordered box,
+/// and draw the popup's wrapped text scrolled by `popup.scroll`.
+fn draw_popup(popup: &MessagePopup, area: Rect, f: &mut ratatui::Frame) {
+    let w = area.width.saturating_sub(4).clamp(20, 80);
+    let h = area.height.saturating_sub(4).clamp(5, 20);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let rect = Rect::new(x, y, w, h);
+
+    f.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" message — any key to dismiss ");
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let lines: Vec<Line<'static>> = popup
+        .text
+        .lines()
+        .map(|l| Line::from(l.to_string()))
+        .collect();
+    let para = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((popup.scroll, 0));
+    f.render_widget(para, inner);
 }
 
 fn draw_strip(b: &crate::render::RenderedStrip, area: Rect, f: &mut ratatui::Frame) {

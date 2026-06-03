@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::time::Instant;
 use std::{io, time::Duration};
 
-use crossterm::event::KeyEvent as CTKeyEvent;
+use crossterm::event::{KeyCode, KeyEvent as CTKeyEvent, KeyModifiers};
 use rizz::RizzError;
 use rizz::runtime::Value;
 use rizz_ringbuffer::RingBuffer;
@@ -46,6 +46,15 @@ impl Config {
     }
 }
 
+/// Modal message overlay. Created by [`State::push_message`] (for an
+/// incoming message) or [`State::show_all_messages`] (for `:messages`).
+/// While `Some`, key events bypass the keymap: scroll keys move `scroll`,
+/// any other key clears the popup.
+pub struct MessagePopup {
+    pub text: String,
+    pub scroll: u16,
+}
+
 pub struct State {
     /// All live buffers. Index 0 is the minibuffer by construction; file
     /// buffers occupy index 1..
@@ -58,6 +67,12 @@ pub struct State {
     focus_minibuffer: bool,
     /// Index of the minibuffer (always kind = Minibuffer).
     minibuffer: usize,
+    /// Append-only history of every user-visible message. Surfaced by
+    /// `:messages`.
+    messages: Vec<String>,
+    /// Active modal popup, if any. While `Some`, all key events go through
+    /// the popup (scroll or dismiss) instead of the keymap.
+    message_popup: Option<MessagePopup>,
     quit: bool,
     keymap: KeymapRegistry,
     keyevents: RingBuffer<(KeyEvent, Instant), 100>,
@@ -90,6 +105,8 @@ impl State {
             windows: WindowTree::new(1),
             focus_minibuffer: false,
             minibuffer: 0,
+            messages: Vec::new(),
+            message_popup: None,
             quit: false,
             keymap: KeymapRegistry::new(),
             keyevents: RingBuffer::new(),
@@ -187,10 +204,22 @@ impl State {
         &mut self.regions
     }
 
-    /// Write `msg` into the minibuffer as a status line. Used by lisp's
-    /// `(message ...)` and as the sink for eval errors.
-    pub(crate) fn set_minibuffer_message(&mut self, msg: &str) {
-        self.set_buffer_contents(self.minibuffer, msg);
+    /// Record `msg` in the message history and surface it to the user as a
+    /// modal popup. Sink for `(message ...)`, eval errors, render-callback
+    /// errors, and command-submit results.
+    pub(crate) fn push_message(&mut self, msg: &str) {
+        self.messages.push(msg.to_string());
+        self.message_popup = Some(MessagePopup {
+            text: msg.to_string(),
+            scroll: 0,
+        });
+    }
+
+    /// Open the popup with the full message history (newline-separated).
+    /// Invoked by `:messages`.
+    pub(crate) fn show_all_messages(&mut self) {
+        let text = self.messages.join("\n");
+        self.message_popup = Some(MessagePopup { text, scroll: 0 });
     }
 
     pub(crate) fn set_buffer_contents(&mut self, bufno: usize, msg: &str) {
@@ -251,7 +280,44 @@ impl State {
         self.quit
     }
 
+    /// Translate a key event into a popup action: scroll or dismiss. The
+    /// popup is `Some` on entry (checked by `handle_key_event`).
+    fn handle_popup_key(&mut self, event: CTKeyEvent) {
+        let popup = self.message_popup.as_mut().expect("popup is visible");
+        let lines = popup.text.lines().count() as u16;
+        // 0 means "ignore this key for scrolling", any other delta clamps and
+        // returns. Anything below that match arm dismisses.
+        let plain = event.modifiers == KeyModifiers::NONE;
+        let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
+        let half_page: i32 = 5;
+        let delta: i32 = match event.code {
+            KeyCode::Char('j') | KeyCode::Down if plain => 1,
+            KeyCode::Char('k') | KeyCode::Up if plain => -1,
+            KeyCode::PageDown => half_page,
+            KeyCode::PageUp => -half_page,
+            KeyCode::Char('d') if ctrl => half_page,
+            KeyCode::Char('u') if ctrl => -half_page,
+            KeyCode::Char('g') | KeyCode::Home if plain => i32::MIN,
+            KeyCode::Char('G') | KeyCode::End if plain => i32::MAX,
+            _ => {
+                self.message_popup = None;
+                return;
+            }
+        };
+        let max = lines.saturating_sub(1) as i32;
+        let new = (popup.scroll as i32 + delta).clamp(0, max);
+        popup.scroll = new as u16;
+    }
+
     pub fn handle_key_event(&mut self, event: CTKeyEvent) -> io::Result<()> {
+        // Popup intercepts every key. Recognized scroll keys move the
+        // popup's scroll offset; anything else dismisses. Either way the
+        // event does not reach the keymap.
+        if self.message_popup.is_some() {
+            self.handle_popup_key(event);
+            return self.render();
+        }
+
         let now = Instant::now();
         let timedout = self
             .keyevents
@@ -327,7 +393,7 @@ impl State {
                 }
                 Action::EvalLisp(form) => {
                     if let Err(e) = self.eval_lisp_value(form.clone()) {
-                        self.set_minibuffer_message(&e.to_string());
+                        self.push_message(&e.to_string());
                     }
                 }
             }
@@ -499,12 +565,13 @@ impl State {
                 EditingMode::Insert | EditingMode::Command => CursorStyle::Bar,
                 _ => CursorStyle::Block,
             },
+            message_popup: self.message_popup.as_ref(),
         };
         let result = self.renderer.render(snap, &frame);
-        // Surface any render-callback error to the minibuffer *after* the
-        // frame draws so the message itself isn't part of the failing pass.
+        // Surface any render-callback error via the popup *after* the frame
+        // draws so the message itself isn't part of the failing pass.
         if let Some(msg) = error_msg {
-            self.set_minibuffer_message(&msg);
+            self.push_message(&msg);
         }
         result
     }
@@ -546,6 +613,7 @@ impl State {
             bufno: self.windows.focused_bufno(),
             keyevent: self.keyevents.peek_back().map(|(ke, _)| ke.to_owned()),
             cursor_style: CursorStyle::Block,
+            message_popup: None,
         };
 
         // One pass over the registry, routing each region's output to the
@@ -675,6 +743,64 @@ mod tests {
     fn render_does_not_panic_on_empty_buffer() {
         let mut s = test_state();
         s.render().unwrap();
+    }
+
+    #[test]
+    fn message_pushes_history_and_shows_popup() {
+        let mut s = test_state();
+        s.push_message("hello");
+        assert_eq!(s.messages, vec!["hello".to_string()]);
+        assert!(s.message_popup.is_some());
+    }
+
+    #[test]
+    fn any_key_dismisses_popup() {
+        use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+        let mut s = test_state();
+        s.push_message("oops");
+        assert!(s.message_popup.is_some());
+        // 'q' isn't bound to anything in particular; with no popup it would
+        // hit the keymap, but here it just dismisses.
+        s.handle_key_event(CT::new(KeyCode::Char('q'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(s.message_popup.is_none());
+    }
+
+    #[test]
+    fn j_scrolls_popup_without_dismissing() {
+        use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+        let mut s = test_state();
+        s.push_message("line1\nline2\nline3");
+        s.handle_key_event(CT::new(KeyCode::Char('j'), KeyModifiers::NONE))
+            .unwrap();
+        let popup = s.message_popup.as_ref().expect("still visible");
+        assert_eq!(popup.scroll, 1);
+    }
+
+    #[test]
+    fn show_all_messages_joins_history() {
+        let mut s = test_state();
+        s.push_message("a");
+        s.push_message("b");
+        // Showing the latest message popped open after each push. Now
+        // request the full history.
+        s.show_all_messages();
+        let popup = s.message_popup.as_ref().unwrap();
+        assert_eq!(popup.text, "a\nb");
+    }
+
+    #[test]
+    fn messages_builtin_opens_popup_with_history() {
+        let mut s = test_state();
+        s.eval_lisp(r#"(message "first")"#).unwrap();
+        // Dismiss the popup the `message` call opened so we can re-check
+        // that `(messages)` reopens with the joined history.
+        s.message_popup = None;
+        s.eval_lisp(r#"(message "second")"#).unwrap();
+        s.message_popup = None;
+        s.eval_lisp("(messages)").unwrap();
+        let popup = s.message_popup.as_ref().expect("popup visible");
+        assert_eq!(popup.text, "first\nsecond");
     }
 
     #[test]

@@ -2,7 +2,9 @@ use std::io;
 
 use ratatui::text::{Line, Span};
 
-use crate::{buffer::Buffer, keymap::KeyEvent, styling::Style, window::WindowTree};
+use crate::{
+    buffer::Buffer, keymap::KeyEvent, state::MessagePopup, styling::Style, window::WindowTree,
+};
 
 /// Read-only view of the editor passed to renderers. Decoupling this from
 /// `State` means a renderer can be implemented without depending on the
@@ -22,6 +24,9 @@ pub struct StateSnapshot<'a> {
     pub bufno: usize,
     pub keyevent: Option<KeyEvent>,
     pub cursor_style: CursorStyle,
+    /// Active modal message popup. When `Some`, the renderer draws it as a
+    /// centered overlay on top of the editor area and the cursor is hidden.
+    pub message_popup: Option<&'a MessagePopup>,
 }
 
 impl StateSnapshot<'_> {

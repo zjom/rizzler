@@ -4,6 +4,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -96,53 +97,87 @@ fn apply_decorators(
 /// restyled — subsequent ranges that target columns after the replacement
 /// may end up slightly mis-aligned, which is a known limitation of doing
 /// substitution in a flat span stream.
+///
+/// Spans outside `[start, end)` keep their existing per-span style; spans
+/// inside have their style *patched* with the new range's style. This lets
+/// multiple ranges layer on the same row without later passes clobbering
+/// styles set by earlier passes (the previous implementation flattened the
+/// row to a single inherited base style on every call).
 fn apply_range(spans: Vec<Span<'static>>, r: &StyledRange, area_width: u16) -> Vec<Span<'static>> {
-    let mut text: String = spans.iter().flat_map(|s| s.content.chars()).collect();
-    let cur_len = text.chars().count();
+    let cur_len: usize = spans.iter().map(|s| s.content.chars().count()).sum();
 
     let pad_len = if r.pad_to_width {
         (area_width as usize).max(cur_len)
     } else {
         cur_len
     };
-    if pad_len > cur_len {
-        text.extend(std::iter::repeat_n(' ', pad_len - cur_len));
-    }
 
-    let chars: Vec<char> = text.chars().collect();
-    let end = if r.pad_to_width && r.len == 0 {
+    let start = r.col.min(pad_len);
+    let raw_end = if r.pad_to_width && r.len == 0 {
         pad_len
     } else {
-        (r.col + r.len).min(chars.len())
+        (r.col + r.len).min(pad_len)
     };
-    let start = r.col.min(chars.len());
-    let end = end.max(start);
+    let end = raw_end.max(start);
 
-    // Preserve any pre-existing styled spans outside the new range. We
-    // capture the inherited base style from the first span (the simple
-    // common case — non-uniform per-char styling would need a denser model
-    // but isn't produced by today's range emitters).
-    let inherited = spans.first().map(|s| s.style).unwrap_or_default();
-    let highlight = inherited.patch(style_to_ratatui(&r.style));
+    let new_style = style_to_ratatui(&r.style);
 
-    let before: String = chars[..start].iter().collect();
-    let middle: String = match &r.display {
-        Some(Display::String(s)) => s.to_string(),
-        Some(Display::Space(n)) => " ".repeat(*n),
-        None => chars[start..end].iter().collect(),
+    // Flatten input spans + any pad_to_width filler into (text, style) chunks.
+    // Padding past existing content uses `Style::default()` since it represents
+    // empty area past the buffer content.
+    let mut chunks: Vec<(String, Style)> = spans
+        .into_iter()
+        .map(|s| (s.content.into_owned(), s.style))
+        .collect();
+    if pad_len > cur_len {
+        chunks.push((" ".repeat(pad_len - cur_len), Style::default()));
+    }
+
+    // Walk chunks, splitting each at `start` and `end`. Pieces inside
+    // [start, end) move to `mid` with their style patched by `new_style`;
+    // pieces outside keep their style untouched.
+    let mut before: Vec<Span<'static>> = Vec::new();
+    let mut mid: Vec<Span<'static>> = Vec::new();
+    let mut after: Vec<Span<'static>> = Vec::new();
+    let mut pos = 0usize;
+    for (text, style) in chunks {
+        let chars: Vec<char> = text.chars().collect();
+        let chunk_end = pos + chars.len();
+        let s = start.clamp(pos, chunk_end);
+        let e = end.clamp(pos, chunk_end);
+
+        if s > pos {
+            let part: String = chars[..s - pos].iter().collect();
+            before.push(Span::styled(part, style));
+        }
+        if e > s {
+            let part: String = chars[s - pos..e - pos].iter().collect();
+            mid.push(Span::styled(part, style.patch(new_style)));
+        }
+        if chunk_end > e {
+            let part: String = chars[e - pos..].iter().collect();
+            after.push(Span::styled(part, style));
+        }
+        pos = chunk_end;
+    }
+
+    let middle: Vec<Span<'static>> = match &r.display {
+        Some(Display::String(s)) => {
+            let base = mid.first().map(|sp| sp.style).unwrap_or(new_style);
+            vec![Span::styled(s.to_string(), base)]
+        }
+        Some(Display::Space(n)) => {
+            let base = mid.first().map(|sp| sp.style).unwrap_or(new_style);
+            vec![Span::styled(" ".repeat(*n), base)]
+        }
+        None => mid,
     };
-    let after: String = chars[end..].iter().collect();
 
-    let mut out = Vec::with_capacity(3);
-    if !before.is_empty() {
-        out.push(Span::styled(before, inherited));
-    }
-    if !middle.is_empty() {
-        out.push(Span::styled(middle, highlight));
-    }
-    if !after.is_empty() {
-        out.push(Span::styled(after, inherited));
-    }
+    let mut out: Vec<Span<'static>> =
+        Vec::with_capacity(before.len() + middle.len() + after.len());
+    out.extend(before);
+    out.extend(middle);
+    out.extend(after);
     if out.is_empty() {
         out.push(Span::raw(String::new()));
     }

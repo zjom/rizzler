@@ -150,9 +150,8 @@
   (do
     (fn _row (i line) (str-join [(to-str i) line] ". "))
     (let rows (fmapi _row (message-history)))
-    (let text (str-join rows "\n"))
     (popup-open
-      {"text":        text
+      {"text":        (str-join rows "\n")
        "mode":        'popup
        "placement":   {"kind": "center" "w": 0.6 "h": 0.6}
        "border":      "plain"

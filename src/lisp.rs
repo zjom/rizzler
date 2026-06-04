@@ -438,13 +438,12 @@ fn builtins() -> Env {
     b!("evaluate-file", 1, |args, env| {
         let s = as_str(&args[0], "evaluate-file")?;
         let f = std::fs::File::open(s.as_ref())?;
-
         match rizz::parse_and_run_with_env(f, env) {
             Ok((v, new_env)) => {
-                if !v.is_unit() {
+                if !v.is_unit() && args.len() > 1 && args[1].is_truthy() {
                     notify_via_env(&v.display(), &new_env);
                 }
-                Ok((unit(), new_env))
+                Ok((v, new_env))
             }
             Err(e) => {
                 notify_via_env(&e.to_string(), env);

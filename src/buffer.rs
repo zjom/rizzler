@@ -612,7 +612,13 @@ impl Buffer {
                     let target_file_row = wrap
                         .rows
                         .get(target_top_visual)
-                        .map(|r| if r.start_col == 0 { r.file_row } else { r.file_row + 1 })
+                        .map(|r| {
+                            if r.start_col == 0 {
+                                r.file_row
+                            } else {
+                                r.file_row + 1
+                            }
+                        })
                         .unwrap_or(abs_row);
                     // Never scroll past the cursor's own file row — that
                     // would push the cursor off the top.

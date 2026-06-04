@@ -1,4 +1,5 @@
 use crate::keymap::KeyEvent;
+use crate::wrap::WrapMode;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Instant;
@@ -23,7 +24,6 @@ use crate::{
     styling::ThemeCell,
     window::{SplitDir, WindowTree},
 };
-
 
 /// Bottom-of-screen reservation: one row for the status line, one for the
 /// minibuffer. Subtracted from the terminal height when sizing the editor
@@ -58,6 +58,9 @@ pub struct PopupSpec {
     pub keymap_mode: Rc<str>,
     pub buffer_mode: EditingMode,
     pub show_cursor: bool,
+    pub wrap_mode: WrapMode,
+    pub wrap_column: Option<u16>,
+    pub breakindent: bool,
 }
 
 impl PopupSpec {
@@ -69,6 +72,9 @@ impl PopupSpec {
             keymap_mode: Rc::<str>::from("popup"),
             buffer_mode: EditingMode::Normal,
             show_cursor: false,
+            wrap_mode: WrapMode::default(),
+            wrap_column: None,
+            breakindent: false,
         }
     }
 }
@@ -267,6 +273,9 @@ impl State {
             buf.clear_with(&text);
         }
         buf.set_mode(spec.buffer_mode);
+        buf.set_wrap_mode(spec.wrap_mode);
+        buf.set_wrap_column(spec.wrap_column);
+        buf.set_breakindent(spec.breakindent);
         self.bufs.push(buf);
         let bufno = self.bufs.len() - 1;
         self.popups.push(Popup {
@@ -795,9 +804,7 @@ impl State {
             // the actual content area (viewport - gutters). Bail early when
             // wrap is off, the viewport hasn't been sized yet, or gutters
             // ate the whole row.
-            if !matches!(buf.wrap_mode(), crate::wrap::WrapMode::None)
-                && buf.viewport.row > 0
-            {
+            if !matches!(buf.wrap_mode(), crate::wrap::WrapMode::None) && buf.viewport.row > 0 {
                 let gutter_w: u16 = rb.gutters.iter().map(|g| g.width).sum();
                 let content_w = buf
                     .wrap_column()
@@ -812,12 +819,7 @@ impl State {
                     // movements like `j` near the viewport bottom can step
                     // onto the next visual row without falling off the map.
                     let budget = ((buf.viewport.row as usize) * 4).max(200);
-                    let map = crate::wrap::WrapMap::build(
-                        buf,
-                        buf.file_pos().row,
-                        budget,
-                        cfg,
-                    );
+                    let map = crate::wrap::WrapMap::build(buf, buf.file_pos().row, budget, cfg);
                     rb.wrap = Some(map);
                 }
             }

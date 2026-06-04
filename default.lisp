@@ -139,7 +139,8 @@
            "title":       " message — q/<esc>/<enter> to dismiss "
            "face":        "popup.default"
            "border-face": "popup.border"
-           "title-face":  "popup.title"}))
+           "title-face":  "popup.title"
+           "wrap-mode":   'word}))
     ()))
 
 ;; `:messages` — open the popup with the full notification history. Same

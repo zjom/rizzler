@@ -30,6 +30,7 @@ use crate::regions::{BuiltinId, Producer, Region, RegionAnchor};
 use crate::state::{PopupSpec, State};
 use crate::styling::{normalize_style_value, rgb_value, style_from_value, style_to_value};
 use crate::window::{FocusDir, SplitDir};
+use crate::wrap::WrapMode;
 
 // ---------------------------------------------------------------------------
 // Editor bridge: thread-local pointer to the live `State`.
@@ -558,7 +559,11 @@ fn builtins() -> Env {
     // the content area width".
     b!("buffer-wrap-column", 1, |args, env| {
         let n = as_int(&args[0], "buffer-wrap-column")?;
-        let col = if n <= 0 { None } else { Some(n.min(u16::MAX as i64) as u16) };
+        let col = if n <= 0 {
+            None
+        } else {
+            Some(n.min(u16::MAX as i64) as u16)
+        };
         with_editor_mut(|st| st.focused_buf_mut().set_wrap_column(col));
         ok_unit(env)
     });
@@ -1126,8 +1131,7 @@ fn parse_mode_name(v: &Rc<Value>) -> Result<Rc<str>, RuntimeError> {
 ///
 /// * `"text"`        — initial text content (str).
 /// * `"mode"`        — keymap mode name (str / ident). Default `"popup"`.
-/// * `"buffer-mode"` — editing mode for the popup buffer (str / ident).
-///                     Default `"normal"`.
+/// * `"buffer-mode"` — editing mode for the popup buffer (str / ident). Default `"normal"`.
 /// * `"placement"`   — see [`parse_placement`].
 /// * `"border"`      — `"none" | "plain" | "rounded" | "double" | "thick"`.
 /// * `"title"`       — str shown in the top border.
@@ -1135,6 +1139,9 @@ fn parse_mode_name(v: &Rc<Value>) -> Result<Rc<str>, RuntimeError> {
 /// * `"border-face"` — face for the border characters.
 /// * `"title-face"`  — face for the title text.
 /// * `"show-cursor"` — truthy/falsy. Off by default.
+/// * `"wrap-mode"`   — see [`WrapMode::from_str`]
+/// * `"wrap-column"` — Fixed wrap column.
+/// * `"break-indent"` — Indent continuation rows under the original line's leading whitespace.
 ///
 /// A bare string is also accepted and treated as `{"text": <string>}` so
 /// `(popup-open "hi")` works for quick demos.
@@ -1177,6 +1184,16 @@ fn parse_popup_props(v: &Rc<Value>) -> Result<PopupSpec, RuntimeError> {
             }
             if let Some(sc) = m.get(&key("show-cursor")) {
                 spec.show_cursor = sc.is_truthy();
+            }
+            if let Some(sc) = m.get(&key("wrap-mode")) {
+                spec.wrap_mode = WrapMode::from_str(&as_ident_or_str(sc, "popup-open.wrap-mode")?)
+                    .unwrap_or_default();
+            }
+            if let Some(sc) = m.get(&key("wrap-column")) {
+                spec.wrap_column = Some(as_int(sc, "popup-open.wrap-column")?.min(0) as u16)
+            }
+            if let Some(sc) = m.get(&key("break-indent")) {
+                spec.breakindent = sc.is_truthy();
             }
             Ok(spec)
         }

@@ -28,18 +28,18 @@
 ;; ---------------------------------------------------------------------------
 
 ;; --- the palette: bind colors once so the rest of the file reads cleanly ---
-(let pal-bg-deep   (rgb  18  18  30))   ;; deepest backdrop
-(let pal-bg-line   (rgb  32  32  52))   ;; current-line band
-(let pal-bg-sel    (rgb  20  60 110))   ;; visual selection
-(let pal-bg-panel  (rgb  26  26  42))   ;; bottom strip
-(let pal-fg-base   (rgb 220 220 240))   ;; default text
-(let pal-fg-dim    (rgb 110 110 140))   ;; comments / past-EOF / hints
-(let pal-accent    (rgb 180 150 220))   ;; lavender accent
-(let pal-warn      (rgb 230 180  60))   ;; warning amber
-(let pal-error     (rgb 230  90  90))   ;; error red
-(let pal-mode-i    (rgb 230 160  80))   ;; insert glow
-(let pal-mode-v    (rgb 210 110 200))   ;; visual magenta
-(let pal-mode-c    (rgb 110 210 210))   ;; command cyan
+(let pal-bg-deep   (rgb   19   19   20))    ;; deepest backdrop
+(let pal-bg-line   (rgb   37   37   47))    ;; current-line band
+(let pal-bg-sel    (rgb   52   55   56))    ;; visual selection
+(let pal-bg-panel  (rgb   19   19   20))    ;; bottom strip
+(let pal-fg-base   (rgb  205  205  205))    ;; default text
+(let pal-fg-dim    (rgb   96   96  119))    ;; comments / past-EOF / hints
+(let pal-accent    (rgb  180  150  220))    ;; lavender accent
+(let pal-warn      (rgb  235  192  133))    ;; warning amber
+(let pal-error     (rgb  202  107  127))    ;; error red
+(let pal-mode-i    (rgb  230  160   80))    ;; insert glow
+(let pal-mode-v    (rgb  210  110  200))    ;; visual magenta
+(let pal-mode-c    (rgb  110  210  210))    ;; command cyan
 
 ;; --- base text + frame ---------------------------------------------------
 ;; `default`, `selection`, and `cursor-line` are the canonical names the Rust

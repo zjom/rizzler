@@ -435,8 +435,8 @@ fn builtins() -> Env {
     });
 
     // reads and evaluates the file at specified path
-    b!("use", 1, |args, env| {
-        let s = as_str(&args[0], "use")?;
+    b!("evaluate-file", 1, |args, env| {
+        let s = as_str(&args[0], "evaluate-file")?;
         let f = std::fs::File::open(s.as_ref())?;
 
         match rizz::parse_and_run_with_env(f, env) {

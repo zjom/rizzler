@@ -431,6 +431,15 @@ fn builtins() -> Env {
         with_editor_mut(|st| st.show_all_messages());
         ok_unit(env)
     });
+    b!("message-history", 0, |_, env| {
+        let msgs: Vector<Rc<Value>> = with_editor_mut(|st| {
+            st.message_history()
+                .iter()
+                .map(|s| Rc::new(Value::Str(s.clone())))
+                .collect()
+        });
+        Ok((Rc::new(Value::Array(msgs)), env.clone()))
+    });
 
     // popups — generalized overlay surface. A popup is conceptually a buffer
     // drawn on top of the editor area with chrome (border/title) and a

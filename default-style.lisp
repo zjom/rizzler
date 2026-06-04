@@ -378,13 +378,13 @@
     (let id (overlay-create sr sc er ec face))
     ;; `props` is a map of "key": value entries we forward to overlay-put.
     ;; Keys understood: "display", "priority", "pad-to-width".
-    (if (! (= (get props "display") ()))
+    (if (!= (get props "display") ())
         (overlay-put id "display" (get props "display"))
         ())
-    (if (! (= (get props "priority") ()))
+    (if (!= (get props "priority") ())
         (overlay-put id "priority" (get props "priority"))
         ())
-    (if (! (= (get props "pad-to-width") ()))
+    (if (!= (get props "pad-to-width") ())
         (overlay-put id "pad-to-width" (get props "pad-to-width"))
         ())
     id))

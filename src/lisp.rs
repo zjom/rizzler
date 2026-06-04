@@ -533,6 +533,7 @@ fn builtins() -> Env {
             .unwrap_or(Value::Unit);
         Ok((Rc::new(v), env.clone()))
     });
+    alias!("%"=>"buf-path");
 
     b!("selected-text", 0, |_, env| {
         let s = with_editor_mut(|st| st.focused_buf().selected_text());

@@ -33,6 +33,21 @@ impl<T, const N: usize> RingBuffer<T, N> {
         }
     }
 
+    /// Return the live elements as up to two contiguous slices, front-to-back.
+    /// The second slice is empty when the buffer does not wrap.
+    pub fn as_slices(&self) -> (&[T], &[T]) {
+        if self.len == 0 {
+            return (&[], &[]);
+        }
+        let first_len = (N - self.head).min(self.len);
+        let second_len = self.len - first_len;
+        // SAFETY: slots `head..head+first_len` and `0..second_len` are
+        // exactly the live range (by the type's invariant), so the pointed-to
+        // `T`s are initialised and non-overlapping with any `&mut`.
+        let first = unsafe { std::slice::from_raw_parts(self.data[self.head].as_ptr(), first_len) };
+        let second = unsafe { std::slice::from_raw_parts(self.data[0].as_ptr(), second_len) };
+        (first, second)
+    }
     pub fn len(&self) -> usize {
         self.len
     }

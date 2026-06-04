@@ -102,7 +102,10 @@ pub struct State {
     minibuffer: usize,
     /// Append-only history of every user-visible message. Surfaced by
     /// `:messages`.
-    messages: Vec<Rc<str>>,
+    messages: RingBuffer<Rc<str>, 200>,
+    /// Append-only history of every user command. Surfaced by
+    /// `:history`.
+    history: RingBuffer<Rc<str>, 2000>,
     /// Popup overlay stack, bottom-to-top. While non-empty, the top popup
     /// captures key input (resolved against its mode layers) and the
     /// focused buffer is the top popup's backing buffer.
@@ -139,7 +142,8 @@ impl State {
             windows: WindowTree::new(1),
             focus_minibuffer: false,
             minibuffer: 0,
-            messages: Vec::new(),
+            messages: RingBuffer::new(),
+            history: RingBuffer::new(),
             popups: Vec::new(),
             quit: false,
             keymap: KeymapRegistry::new(),
@@ -241,11 +245,18 @@ impl State {
     /// Append `msg` to the message history. The user-visible popup is the
     /// concern of the lisp `notify` fn; this only owns the storage.
     pub(crate) fn record_message(&mut self, msg: &str) {
-        self.messages.push(msg.into());
+        self.messages.push_back(msg.into());
     }
 
-    pub(crate) fn message_history(&mut self) -> &[Rc<str>] {
-        &self.messages
+    pub(crate) fn message_history(&mut self) -> impl Iterator<Item = &Rc<str>> {
+        self.messages.iter()
+    }
+
+    pub(crate) fn record_cmd(&mut self, msg: &str) {
+        self.history.push_back(msg.into());
+    }
+    pub(crate) fn cmd_history(&mut self) -> impl Iterator<Item = &Rc<str>> {
+        self.history.iter()
     }
 
     /// Bridge from Rust-internal failure paths (eval errors, render-callback
@@ -907,7 +918,10 @@ mod tests {
         // wired up and that history storage still lives in Rust.
         let mut s = test_state();
         s.eval_lisp(r#"(notify "hello")"#).unwrap();
-        assert_eq!(s.messages, vec!["hello".into()]);
+        assert_eq!(
+            s.messages.iter().cloned().collect::<Vec<_>>(),
+            vec!["hello".into()]
+        );
         assert!(s.has_popup());
         assert_eq!(top_popup_text(&s), "hello");
     }
@@ -948,7 +962,10 @@ mod tests {
         let mut s = test_state();
         s.eval_lisp(r#"(notify "a")"#).unwrap();
         s.eval_lisp(r#"(notify "b")"#).unwrap();
-        assert_eq!(s.messages, vec!["a".into(), "b".into()]);
+        assert_eq!(
+            s.messages.iter().cloned().collect::<Vec<_>>(),
+            vec!["a".into(), "b".into()]
+        );
         assert_eq!(top_popup_text(&s), "b");
         assert!(s.has_popup());
     }

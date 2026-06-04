@@ -393,6 +393,7 @@ fn builtins() -> Env {
     // evaluate the user's input directly against `env` instead.
     b!("command-submit", 0, |_, env| {
         let cmd = with_editor_mut(|st| st.take_minibuffer_command());
+        with_editor_mut(|st| st.record_cmd(&cmd));
         let src = wrap_shell_style(&cmd);
         match rizz::parse_and_run_with_env(src.as_bytes(), env) {
             Ok((v, new_env)) => {
@@ -443,12 +444,22 @@ fn builtins() -> Env {
     b!("message-history", 0, |_, env| {
         let msgs: Vector<Rc<Value>> = with_editor_mut(|st| {
             st.message_history()
-                .iter()
                 .map(|s| Rc::new(Value::Str(s.clone())))
                 .collect()
         });
         Ok((Rc::new(Value::Array(msgs)), env.clone()))
     });
+    alias!("messages"=>"message-history");
+
+    b!("history", 0, |_, env| {
+        let cmds: Vector<Rc<Value>> = with_editor_mut(|st| {
+            st.cmd_history()
+                .map(|s| Rc::new(Value::Str(s.clone())))
+                .collect()
+        });
+        Ok((Rc::new(Value::Array(cmds)), env.clone()))
+    });
+    alias!("commands"=>"history");
 
     // popups — generalized overlay surface. A popup is conceptually a buffer
     // drawn on top of the editor area with chrome (border/title) and a

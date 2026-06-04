@@ -275,18 +275,6 @@
 (region-add 'hint-bar 'bottom _hint-bar)
 
 ;; ---------------------------------------------------------------------------
-;; 7. Composition
-;; ---------------------------------------------------------------------------
-;;
-;; Since this is lisp, you can compose your components and styles however you wish.
-
-(fn _banner ()
-    [[(span "  rizz  " "twilight.error")  (_bufno) (first (_hint-bar)) ]])
-
-(region-add 'banner 'top _banner)
-
-
-;; ---------------------------------------------------------------------------
 ;; 8. Sanity / debug
 ;; ---------------------------------------------------------------------------
 ;;

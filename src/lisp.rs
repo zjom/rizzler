@@ -433,6 +433,26 @@ fn builtins() -> Env {
             }
         }
     });
+
+    // reads and evaluates the file at specified path
+    b!("use", 1, |args, env| {
+        let s = as_str(&args[0], "use")?;
+        let f = std::fs::File::open(s.as_ref())?;
+
+        match rizz::parse_and_run_with_env(f, env) {
+            Ok((v, new_env)) => {
+                if !v.is_unit() {
+                    notify_via_env(&v.display(), &new_env);
+                }
+                Ok((unit(), new_env))
+            }
+            Err(e) => {
+                notify_via_env(&e.to_string(), env);
+                ok_unit(env)
+            }
+        }
+    });
+
     // Append a message to the history. The user-facing `notify` fn is
     // defined in `default.lisp` on top of this primitive + `popup-open`,
     // so popup styling, dedup, and dismissal all live in lisp.

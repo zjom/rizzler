@@ -399,7 +399,7 @@ fn builtins() -> Env {
         ok_unit(env)
     });
 
-    b!("eval", 0, |_, env| {
+    b!("evaluate", 0, |_, env| {
         let src = with_editor_mut(|st| {
             st.focused_buf()
                 .selected_text()
@@ -854,10 +854,8 @@ fn apply(action: Action) -> Result<(), RuntimeError> {
             got: "called from a render callback".into(),
         });
     }
-    with_editor_mut(|st| {
-        let _ = st.apply(&[Rc::new(action)]);
-    });
-    Ok(())
+    let result = with_editor_mut(|st| st.apply(&[Rc::new(action)]));
+    result.map_err(|e| RuntimeError::Other(anyhow!("{e}")))
 }
 
 fn as_str(v: &Rc<Value>, name: &str) -> Result<Rc<str>, RuntimeError> {

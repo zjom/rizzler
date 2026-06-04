@@ -96,7 +96,10 @@ impl Renderer for RatatuiRenderer {
                 let buf_frame = frame_data.per_buf.get(leaf.bufno);
                 EditorView::render(buf, leaf.area, buf_frame, f);
                 if !snap.focus_minibuffer && &leaf.path == focused_path {
-                    cursor = Some(EditorView::cursor(buf, leaf.area, buf_frame));
+                    cursor = Some(match buf_frame.and_then(|bf| bf.wrap.as_ref()) {
+                        Some(wrap) => EditorView::cursor_wrapped(buf, leaf.area, buf_frame, wrap),
+                        None => EditorView::cursor(buf, leaf.area, buf_frame),
+                    });
                 }
             }
 
@@ -204,7 +207,10 @@ fn draw_popup(
     EditorView::render(buf, inner, buf_frame, f);
 
     if is_top && popup.show_cursor {
-        let (x, y) = EditorView::cursor(buf, inner, buf_frame);
+        let (x, y) = match buf_frame.and_then(|bf| bf.wrap.as_ref()) {
+            Some(wrap) => EditorView::cursor_wrapped(buf, inner, buf_frame, wrap),
+            None => EditorView::cursor(buf, inner, buf_frame),
+        };
         let cs = match buf.mode() {
             EditingMode::Insert | EditingMode::Command => CursorStyle::Bar,
             _ => CursorStyle::Block,

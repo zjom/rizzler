@@ -540,6 +540,36 @@ fn builtins() -> Env {
         Ok((Rc::new(n.into()), env.clone()))
     });
 
+    // Soft-wrap, per buffer. Pass an argument to set; call with no arg to read.
+    // `mode` is one of `'none` / `'char` / `'word` (or the strings of same).
+    b!("buffer-wrap", 1, |args, env| {
+        let sym = as_ident_or_str(&args[0], "buffer-wrap")?;
+        let m = crate::wrap::WrapMode::from_str(&sym)
+            .ok_or_else(|| unknown_variant("buffer-wrap", &sym))?;
+        with_editor_mut(|st| st.focused_buf_mut().set_wrap_mode(m));
+        ok_unit(env)
+    });
+    b!("buffer-wrap?", 0, |_, env| {
+        let s: Rc<str> = with_editor_mut(|st| st.focused_buf().wrap_mode().as_str().into());
+        Ok((Rc::new(Value::Str(s)), env.clone()))
+    });
+
+    // Fixed wrap column. Pass 0 (or negative) to clear, meaning "wrap to
+    // the content area width".
+    b!("buffer-wrap-column", 1, |args, env| {
+        let n = as_int(&args[0], "buffer-wrap-column")?;
+        let col = if n <= 0 { None } else { Some(n.min(u16::MAX as i64) as u16) };
+        with_editor_mut(|st| st.focused_buf_mut().set_wrap_column(col));
+        ok_unit(env)
+    });
+
+    // breakindent: pass non-zero to enable, 0 to disable.
+    b!("buffer-breakindent", 1, |args, env| {
+        let n = as_int(&args[0], "buffer-breakindent")?;
+        with_editor_mut(|st| st.focused_buf_mut().set_breakindent(n != 0));
+        ok_unit(env)
+    });
+
     // styling: faces + colors
     b!("face-define", 2, |args, env| {
         let name = as_ident_or_str(&args[0], "face-define")?;

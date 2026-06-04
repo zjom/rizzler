@@ -782,6 +782,33 @@ impl State {
                     rb.decorators.push(prop_ranges);
                 }
             }
+
+            // Soft-wrap layout. Built after gutters so the wrap width is
+            // the actual content area (viewport - gutters). Bail early when
+            // wrap is off, the viewport hasn't been sized yet, or gutters
+            // ate the whole row.
+            if !matches!(buf.wrap_mode(), crate::wrap::WrapMode::None)
+                && buf.viewport.row > 0
+            {
+                let gutter_w: u16 = rb.gutters.iter().map(|g| g.width).sum();
+                let content_w = buf
+                    .wrap_column()
+                    .unwrap_or_else(|| buf.viewport.col.saturating_sub(gutter_w));
+                if content_w > 0 {
+                    let cfg = crate::wrap::WrapConfig {
+                        mode: buf.wrap_mode(),
+                        width: content_w,
+                        breakindent: buf.breakindent(),
+                    };
+                    let map = crate::components::wrap::WrapMap::build(
+                        buf,
+                        buf.file_pos().row,
+                        buf.viewport.row as usize,
+                        cfg,
+                    );
+                    rb.wrap = Some(map);
+                }
+            }
             per_buf.push(rb);
         }
 

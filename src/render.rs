@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 
 use crate::{
     buffer::Buffer,
+    components::wrap::WrapMap,
     keymap::KeyEvent,
     popup::Popup,
     styling::{Style, Theme},
@@ -101,6 +102,11 @@ pub struct RenderedStrip {
 pub struct RenderedBuffer {
     pub gutters: Vec<RenderedGutter>,
     pub decorators: Vec<DecoratorRanges>,
+    /// Visual-line layout for soft-wrapped buffers. `None` = no wrap;
+    /// renderer falls back to one screen row per file row. When `Some`,
+    /// the first entry corresponds to `buf.file_pos().row` and the slice
+    /// covers at least the viewport height.
+    pub wrap: Option<WrapMap>,
 }
 
 pub struct RenderedGutter {

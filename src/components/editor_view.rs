@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::buffer::Buffer;
+use crate::components::wrap::WrapMap;
 use crate::render::{Display, RenderedBuffer, StyledRange};
 use crate::styling::style_to_ratatui;
 
@@ -27,6 +28,7 @@ impl EditorView {
     pub fn render(buf: &Buffer, area: Rect, buf_frame: Option<&RenderedBuffer>, frame: &mut Frame) {
         let gutters = buf_frame.map(|f| f.gutters.as_slice()).unwrap_or(&[]);
         let decorators = buf_frame.map(|f| f.decorators.as_slice()).unwrap_or(&[]);
+        let wrap = buf_frame.and_then(|f| f.wrap.as_ref());
 
         // Horizontal split: each gutter takes its registered width, content gets the rest.
         let mut constraints: Vec<Constraint> = gutters
@@ -46,19 +48,45 @@ impl EditorView {
         }
 
         // --- content lines, with decorator ranges applied ---
-        let start = buf.file_pos().row.min(buf.len_lines());
         let visible_rows = content_area.height as usize;
-        let content: Vec<Line<'static>> = buf
-            .lines_at(start)
-            .take(visible_rows)
-            .enumerate()
-            .map(|(row, l)| {
-                let lnum = start + row;
-                let text = l.to_string();
-                let text = text.trim_end_matches(['\n', '\r']).to_string();
-                apply_decorators(lnum, text, decorators, content_area.width)
-            })
-            .collect();
+        let content: Vec<Line<'static>> = if let Some(wrap) = wrap {
+            // Wrapped path: emit one Line per visual row.
+            wrap.rows
+                .iter()
+                .take(visible_rows)
+                .map(|vr| {
+                    let line = match buf.lines_at(vr.file_row).next() {
+                        Some(l) => l,
+                        None => return Line::from(String::new()),
+                    };
+                    let total = line.len_chars();
+                    let end = vr.end_col.min(total);
+                    let segment: String = line.slice(vr.start_col..end).to_string();
+                    let segment = segment.trim_end_matches(['\n', '\r']).to_string();
+                    apply_decorators_segment(
+                        vr.file_row,
+                        vr.start_col,
+                        vr.indent,
+                        segment,
+                        decorators,
+                        content_area.width,
+                    )
+                })
+                .collect()
+        } else {
+            // Unwrapped path: one screen row per file row.
+            let start = buf.file_pos().row.min(buf.len_lines());
+            buf.lines_at(start)
+                .take(visible_rows)
+                .enumerate()
+                .map(|(row, l)| {
+                    let lnum = start + row;
+                    let text = l.to_string();
+                    let text = text.trim_end_matches(['\n', '\r']).to_string();
+                    apply_decorators(lnum, text, decorators, content_area.width)
+                })
+                .collect()
+        };
         frame.render_widget(Paragraph::new(content), content_area);
     }
 
@@ -66,6 +94,35 @@ impl EditorView {
         let gutter_w = Self::gutter_width(buf_frame);
         let cur = buf.cursor_pos();
         (area.x + gutter_w + cur.col, area.y + cur.row)
+    }
+
+    /// Cursor placement for buffers with soft-wrap on. Derives the screen
+    /// coordinate from the buffer's *absolute file position* via `WrapMap`,
+    /// so logical and visual cursors can't drift.
+    ///
+    /// `wrap` is built by the precompute pass for buffers that opt in; its
+    /// first entry corresponds to `buf.file_pos().row`.
+    pub fn cursor_wrapped(
+        buf: &Buffer,
+        area: Rect,
+        buf_frame: Option<&RenderedBuffer>,
+        wrap: &WrapMap,
+    ) -> (u16, u16) {
+        let gutter_w = Self::gutter_width(buf_frame);
+        let abs = buf.abs_pos();
+        // `locate` returns indices relative to wrap.rows[0]. The caller has
+        // already arranged for wrap.start_file_row == buf.file_pos().row, so
+        // the visual index is the screen row offset from area.y.
+        if let Some((visual_row, screen_col)) = wrap.locate(abs.row, abs.col) {
+            return (
+                area.x + gutter_w + screen_col,
+                area.y + visual_row as u16,
+            );
+        }
+        // Fallback: cursor is off the rendered map — should not happen if
+        // the precompute pass kept file_pos in sync with the cursor, but
+        // returning the area origin is safer than panicking.
+        (area.x + gutter_w, area.y)
     }
 }
 
@@ -88,6 +145,64 @@ fn apply_decorators(
         }
     }
     Line::from(spans)
+}
+
+/// Same as `apply_decorators`, but for one visual segment of a wrapped row.
+/// Decorator columns are clipped to `[segment_start, segment_start + len(text))`
+/// and shifted into segment-local coordinates before being applied. A
+/// `breakindent` of `indent` cells is prepended to continuation segments;
+/// it does not affect column math (decorators target file columns, not
+/// screen columns).
+fn apply_decorators_segment(
+    file_row: usize,
+    segment_start: usize,
+    indent: u16,
+    text: String,
+    decorators: &[crate::render::DecoratorRanges],
+    area_width: u16,
+) -> Line<'static> {
+    let segment_len = text.chars().count();
+    let segment_end = segment_start + segment_len;
+    // Width available *for the content slice* — pad_to_width must respect
+    // the indent we'll prepend below, otherwise current-line highlights
+    // would overflow.
+    let inner_width = area_width.saturating_sub(indent);
+
+    let mut spans = vec![Span::raw(text)];
+    for d in decorators {
+        for r in &d.ranges {
+            if r.row != file_row {
+                continue;
+            }
+            // Clip the range to this segment.
+            let r_end = r.col + r.len;
+            // The range still applies if it overlaps the segment OR if it's
+            // a pad_to_width range (which intentionally extends past content).
+            if !r.pad_to_width && (r_end <= segment_start || r.col >= segment_end) {
+                continue;
+            }
+            let clipped_col = r.col.saturating_sub(segment_start);
+            let clipped_end = r_end.saturating_sub(segment_start).min(segment_len.max(r_end));
+            let clipped = crate::render::StyledRange {
+                row: r.row,
+                col: clipped_col,
+                len: clipped_end.saturating_sub(clipped_col),
+                style: r.style.clone(),
+                pad_to_width: r.pad_to_width,
+                display: r.display.clone(),
+            };
+            spans = apply_range(spans, &clipped, inner_width);
+        }
+    }
+
+    if indent > 0 {
+        let mut with_indent = Vec::with_capacity(spans.len() + 1);
+        with_indent.push(Span::raw(" ".repeat(indent as usize)));
+        with_indent.extend(spans);
+        Line::from(with_indent)
+    } else {
+        Line::from(spans)
+    }
 }
 
 /// Repaint `spans` so that character indices `[r.col, r.col + r.len)` carry

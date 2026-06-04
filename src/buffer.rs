@@ -6,7 +6,7 @@ use std::{
     str::FromStr,
 };
 
-use crate::{mode::EditingMode, position::Position, props::PropStore};
+use crate::{mode::EditingMode, position::Position, props::PropStore, wrap::WrapMode};
 
 /// What sort of buffer this is. Drives default mode and gates operations like
 /// BufDelete/BufNext — the minibuffer participates in everything a file
@@ -80,6 +80,14 @@ pub struct Buffer {
     /// `put-text-property` / `overlay-create`; consumed by the precompute
     /// pass to emit decorator ranges.
     pub(crate) props: PropStore,
+    /// Soft-wrap mode. `None` = no wrapping (default). When non-`None`, the
+    /// precompute pass builds a `WrapMap` for this buffer and the renderer
+    /// emits one visual row per `WrapMap` entry.
+    pub(crate) wrap_mode: WrapMode,
+    /// Fixed wrap column. `None` = wrap to the content area width.
+    pub(crate) wrap_column: Option<u16>,
+    /// Indent continuation rows under the original line's leading whitespace.
+    pub(crate) breakindent: bool,
     // pub(crate) permissions: Permissions,
 }
 
@@ -125,6 +133,30 @@ impl Buffer {
 
     pub fn mode(&self) -> EditingMode {
         self.mode
+    }
+
+    pub fn wrap_mode(&self) -> WrapMode {
+        self.wrap_mode
+    }
+
+    pub fn set_wrap_mode(&mut self, m: WrapMode) {
+        self.wrap_mode = m;
+    }
+
+    pub fn wrap_column(&self) -> Option<u16> {
+        self.wrap_column
+    }
+
+    pub fn set_wrap_column(&mut self, col: Option<u16>) {
+        self.wrap_column = col;
+    }
+
+    pub fn breakindent(&self) -> bool {
+        self.breakindent
+    }
+
+    pub fn set_breakindent(&mut self, b: bool) {
+        self.breakindent = b;
     }
 
     pub fn set_mode(&mut self, mode: EditingMode) {

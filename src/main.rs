@@ -14,6 +14,7 @@ mod state;
 mod styling;
 mod terminal;
 mod window;
+mod wrap;
 
 use std::{io, time::Duration};
 

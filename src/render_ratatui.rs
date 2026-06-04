@@ -199,9 +199,7 @@ fn draw_popup(
     let inner = block.inner(outer);
     f.render_widget(block, outer);
 
-    let Some(buf) = snap.bufs.get(popup.bufno) else {
-        return None;
-    };
+    let buf = snap.bufs.get(popup.bufno)?;
     let buf_frame = frame_data.per_buf.get(popup.bufno);
     EditorView::render(buf, inner, buf_frame, f);
 

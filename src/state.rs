@@ -101,7 +101,7 @@ pub struct State {
     minibuffer: usize,
     /// Append-only history of every user-visible message. Surfaced by
     /// `:messages`.
-    messages: Vec<String>,
+    messages: Vec<Rc<str>>,
     /// Popup overlay stack, bottom-to-top. While non-empty, the top popup
     /// captures key input (resolved against its `keymap_mode`) and the
     /// focused buffer is the top popup's backing buffer.
@@ -245,7 +245,7 @@ impl State {
     /// place instead of stacking — that mirrors the pre-generalization
     /// behavior where successive messages overwrote each other.
     pub(crate) fn push_message(&mut self, msg: &str) {
-        self.messages.push(msg.to_string());
+        self.messages.push(msg.into());
         self.replace_or_open_message_popup(PopupSpec::message(msg));
     }
 
@@ -254,6 +254,10 @@ impl State {
     pub(crate) fn show_all_messages(&mut self) {
         let text = self.messages.join("\n");
         self.replace_or_open_message_popup(PopupSpec::message(&text));
+    }
+
+    pub(crate) fn message_history(&mut self) -> &[Rc<str>] {
+        &self.messages
     }
 
     /// If the top popup is a message popup (default keymap mode), refill
@@ -875,7 +879,7 @@ mod tests {
     fn message_pushes_history_and_shows_popup() {
         let mut s = test_state();
         s.push_message("hello");
-        assert_eq!(s.messages, vec!["hello".to_string()]);
+        assert_eq!(s.messages, vec!["hello".into()]);
         assert!(s.has_popup());
         assert_eq!(top_popup_text(&s), "hello");
     }

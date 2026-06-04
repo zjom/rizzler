@@ -161,6 +161,22 @@
        "title-face":  "popup.title"})
     ()))
 
+
+(fn history ()
+  (do
+    (fn _row (i line) (str-join [(to-str (+ 1 i)) line] ". "))
+    (let rows (fmapi _row (command-history)))
+    (popup-open
+      {"text":        (str-join rows "\n")
+       "modes":       ['popup]
+       "placement":   {"kind": "side" "side": "bottom" "size": (clamp (len rows) 5 50 ) }
+       "border":      "rounded"
+       "title":       " command history — q/<esc>/<enter> to dismiss "
+       "face":        "popup.default"
+       "border-face": "popup.border"
+       "title-face":  "popup.title"})
+    ()))
+
 ;; ----- popup mode ------------------------------------------------------
 ;; The default keymap a popup is interpreted under. While a popup is on top
 ;; of the stack `handle_key_event` resolves keys against the popup's

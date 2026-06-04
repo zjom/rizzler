@@ -47,8 +47,8 @@
 ;; `selection` colors the visual selection band, `cursor-line` colors the
 ;; current-line band. Any face the user redefines under these names is
 ;; picked up automatically. You can use either a str or an ident to refer to them.
-(face-define 'default             {'fg: pal-fg-base "bg": pal-bg-deep})
-(face-define "selection"              {"bg": pal-bg-sel})
+(face-define 'default              {'fg: pal-fg-base "bg": pal-bg-deep})
+(face-define "selection"           {"bg": pal-bg-sel})
 (face-define "cursor-line"         {"bg": pal-bg-line "fg": pal-fg-base})
 
 (face-define "twilight.muted"      {"fg": pal-fg-dim "italic": 1})

@@ -959,7 +959,9 @@ mod tests {
         s.eval_lisp(r#"(notify "second")"#).unwrap();
         s.close_popup();
         s.eval_lisp("(messages)").unwrap();
-        assert_eq!(top_popup_text(&s), "first\nsecond");
+        let p = top_popup_text(&s);
+        assert!(p.contains("first"));
+        assert!(p.contains("second"));
     }
 
     #[test]

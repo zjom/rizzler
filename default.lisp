@@ -148,8 +148,11 @@
 ;; just the latest.
 (fn messages ()
   (do
+    (fn _row (i line) (str-join [(to-str i) line] ". "))
+    (let rows (fmapi _row (message-history)))
+    (let text (str-join rows "\n"))
     (popup-open
-      {"text":        (str-join (message-history) "\n")
+      {"text":        text
        "mode":        'popup
        "placement":   {"kind": "center" "w": 0.6 "h": 0.6}
        "border":      "plain"

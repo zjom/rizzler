@@ -449,9 +449,7 @@ fn builtins() -> Env {
         });
         Ok((Rc::new(Value::Array(msgs)), env.clone()))
     });
-    alias!("messages"=>"message-history");
-
-    b!("history", 0, |_, env| {
+    b!("command-history", 0, |_, env| {
         let cmds: Vector<Rc<Value>> = with_editor_mut(|st| {
             st.cmd_history()
                 .map(|s| Rc::new(Value::Str(s.clone())))
@@ -459,7 +457,6 @@ fn builtins() -> Env {
         });
         Ok((Rc::new(Value::Array(cmds)), env.clone()))
     });
-    alias!("commands"=>"history");
 
     // popups — generalized overlay surface. A popup is conceptually a buffer
     // drawn on top of the editor area with chrome (border/title) and a

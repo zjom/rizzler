@@ -6,7 +6,12 @@ use std::{
     str::FromStr,
 };
 
-use crate::{mode::EditingMode, position::Position, props::PropStore, wrap::WrapMode};
+use crate::{
+    mode::EditingMode,
+    position::Position,
+    props::PropStore,
+    wrap::{WrapMap, WrapMode},
+};
 
 /// What sort of buffer this is. Drives default mode and gates operations like
 /// BufDelete/BufNext — the minibuffer participates in everything a file
@@ -88,6 +93,12 @@ pub struct Buffer {
     pub(crate) wrap_column: Option<u16>,
     /// Indent continuation rows under the original line's leading whitespace.
     pub(crate) breakindent: bool,
+    /// Cached visual-line layout from the most recent render. Movement code
+    /// reads it to step in visual rows; `None` means "no recent render" or
+    /// "wrap is off" — fall back to file-row movement.
+    ///
+    /// Edits (insert/delete) invalidate this; the next render rebuilds it.
+    pub(crate) wrap_cache: Option<WrapMap>,
     // pub(crate) permissions: Permissions,
 }
 
@@ -157,6 +168,16 @@ impl Buffer {
 
     pub fn set_breakindent(&mut self, b: bool) {
         self.breakindent = b;
+    }
+
+    /// Most recent visual-line layout (from the last render's precompute
+    /// pass). Movement and scroll code reads this when wrap is on.
+    pub fn wrap_cache(&self) -> Option<&WrapMap> {
+        self.wrap_cache.as_ref()
+    }
+
+    pub(crate) fn set_wrap_cache(&mut self, map: Option<WrapMap>) {
+        self.wrap_cache = map;
     }
 
     pub fn set_mode(&mut self, mode: EditingMode) {
@@ -255,10 +276,12 @@ impl Buffer {
         self.buf = Rope::new();
         self.cursor_pos = Position::default();
         self.file_pos = Position::default();
+        self.wrap_cache = None;
     }
 
     pub fn clear_with(&mut self, text: &str) {
         self.buf = Rope::from_str(text);
+        self.wrap_cache = None;
         self.clamp_cursor();
     }
 
@@ -331,6 +354,7 @@ impl Buffer {
     pub fn insert_char(&mut self, c: char) {
         let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;
         self.buf.insert_char(cidx, c);
+        self.wrap_cache = None;
 
         if c == '\n' {
             self.cursor_pos.row = self.cursor_pos.row.saturating_add(1);
@@ -357,6 +381,7 @@ impl Buffer {
         };
 
         _ = self.buf.try_remove(cidx - 1..cidx);
+        self.wrap_cache = None;
     }
 
     pub fn delete_char_at(&mut self, Position { col, row }: Position<usize>) {
@@ -373,6 +398,7 @@ impl Buffer {
         }
         let cidx = line_start + col;
         _ = self.buf.try_remove(cidx..cidx + 1);
+        self.wrap_cache = None;
         self.clamp_cursor();
     }
 
@@ -380,18 +406,54 @@ impl Buffer {
         use MoveKind as MK;
         match m {
             MK::Relative(Position { col: dx, row: dy }) => {
+                let abs = self.abs_pos();
+
+                // Visual-row movement when wrap is on. Locate the current
+                // visual row, step by `dy` visual rows, then map back to a
+                // file (row, col). Falls through to file-row movement when
+                // the step exits the cached range — the next render rebuilds
+                // the cache around the new scroll position.
+                let visual_target = if dy != 0 {
+                    self.wrap_cache.as_ref().and_then(|wrap| {
+                        let total = wrap.rows.len() as isize;
+                        if total == 0 {
+                            return None;
+                        }
+                        let (cur_idx, cur_vcol) = wrap.locate(abs.row, abs.col)?;
+                        let target_idx_i = cur_idx as isize + dy as isize;
+                        if target_idx_i < 0 || target_idx_i >= total {
+                            return None;
+                        }
+                        let (tgt_row, tgt_col) =
+                            wrap.file_pos_at(target_idx_i as usize, cur_vcol)?;
+                        Some((tgt_row, tgt_col))
+                    })
+                } else {
+                    None
+                };
+
                 // Compute the absolute target. We can't use saturating_add_signed
                 // on cursor_pos directly because clamping to u16::0 would erase
                 // any "wanted to scroll up by N" overshoot; clamp_cursor then
                 // could never observe the up-scroll intent.
-                let abs_row = (self.cursor_pos.row as isize)
-                    .saturating_add(self.file_pos.row as isize)
-                    .saturating_add(dy as isize)
-                    .max(0) as usize;
-                let abs_col = (self.cursor_pos.col as isize)
-                    .saturating_add(self.file_pos.col as isize)
-                    .saturating_add(dx as isize)
-                    .max(0) as usize;
+                let (abs_row, abs_col) = match visual_target {
+                    Some((r, c)) => {
+                        // Apply any horizontal delta on top of the visual landing.
+                        let c = (c as isize + dx as isize).max(0) as usize;
+                        (r, c)
+                    }
+                    None => {
+                        let r = (self.cursor_pos.row as isize)
+                            .saturating_add(self.file_pos.row as isize)
+                            .saturating_add(dy as isize)
+                            .max(0) as usize;
+                        let c = (self.cursor_pos.col as isize)
+                            .saturating_add(self.file_pos.col as isize)
+                            .saturating_add(dx as isize)
+                            .max(0) as usize;
+                        (r, c)
+                    }
+                };
 
                 // Up/left scrolling lives here; down/right scrolling is left
                 // to clamp_cursor, which also knows the viewport bounds.
@@ -472,16 +534,41 @@ impl Buffer {
 
     /// Move the cursor by half the viewport height and re-center the
     /// viewport on the new cursor row (matches vim's C-d / C-u + zz fusion).
+    ///
+    /// When wrap is on, "half" is counted in *visual* rows — half-page over
+    /// a tall wrapped paragraph stays inside the paragraph instead of
+    /// skipping past it. Falls back to file rows if the target visual row
+    /// isn't in the cache.
     fn half_page(&mut self, direction: i16) {
         let vh = self.viewport.row as usize;
         if vh == 0 {
             return;
         }
         let half = ((vh / 2).max(1)) as isize * direction as isize;
-        let abs_row = (self.cursor_pos.row as isize)
-            .saturating_add(self.file_pos.row as isize)
-            .saturating_add(half)
-            .max(0) as usize;
+
+        let abs = self.abs_pos();
+        // Extract the target file (row, col) from the wrap cache *first*,
+        // then drop the borrow before mutating self via `center_on`.
+        let visual_target = self.wrap_cache.as_ref().and_then(|wrap| {
+            let total = wrap.rows.len() as isize;
+            if total == 0 {
+                return None;
+            }
+            let (cur_idx, cur_vcol) = wrap.locate(abs.row, abs.col)?;
+            let target_idx_i = (cur_idx as isize + half).clamp(0, total - 1);
+            wrap.file_pos_at(target_idx_i as usize, cur_vcol)
+        });
+
+        if let Some((tgt_row, tgt_col)) = visual_target {
+            self.center_on(tgt_row);
+            if tgt_col < self.file_pos.col {
+                self.file_pos.col = tgt_col;
+            }
+            self.cursor_pos.col = (tgt_col - self.file_pos.col) as u16;
+            return;
+        }
+
+        let abs_row = (abs.row as isize).saturating_add(half).max(0) as usize;
         self.center_on(abs_row);
     }
 
@@ -506,16 +593,53 @@ impl Buffer {
         // so pre-scroll behaviour is preserved.
         if self.viewport.row > 0 {
             let vh = self.viewport.row as usize;
-            if abs_row < self.file_pos.row {
-                self.file_pos.row = abs_row;
-            } else if abs_row >= self.file_pos.row + vh {
-                self.file_pos.row = abs_row + 1 - vh;
+
+            // Visual-row scroll down: when wrap is on, the "cursor below
+            // viewport" check counts visual rows from the top of the wrap
+            // cache (which starts at file_pos.row). Up-scroll stays
+            // file-row based because the cache doesn't cover anything
+            // above its start.
+            let abs_col_now = self.cursor_pos.col as usize + self.file_pos.col;
+            let visual_scrolled = self.wrap_cache.as_ref().and_then(|wrap| {
+                let (cur_idx, _) = wrap.locate(abs_row, abs_col_now)?;
+                if cur_idx >= vh {
+                    let target_top_visual = cur_idx + 1 - vh;
+                    // The visual row at target_top_visual maps to some
+                    // file row. If it's a continuation (start_col != 0)
+                    // we can't put file_pos there — the next render
+                    // starts the new cache at a file-row boundary — so
+                    // round up to the next file row.
+                    let target_file_row = wrap
+                        .rows
+                        .get(target_top_visual)
+                        .map(|r| if r.start_col == 0 { r.file_row } else { r.file_row + 1 })
+                        .unwrap_or(abs_row);
+                    // Never scroll past the cursor's own file row — that
+                    // would push the cursor off the top.
+                    Some(target_file_row.min(abs_row))
+                } else {
+                    Some(self.file_pos.row)
+                }
+            });
+
+            if let Some(new_top) = visual_scrolled {
+                self.file_pos.row = new_top;
+                // Up-scroll if cursor is above the new top.
+                if abs_row < self.file_pos.row {
+                    self.file_pos.row = abs_row;
+                }
+            } else {
+                if abs_row < self.file_pos.row {
+                    self.file_pos.row = abs_row;
+                } else if abs_row >= self.file_pos.row + vh {
+                    self.file_pos.row = abs_row + 1 - vh;
+                }
+                // Pin viewport so the last file line never sits above the
+                // viewport bottom — only correct when 1 file row = 1
+                // visual row, i.e. wrap is off.
+                let max_file_pos = (last_line + 1).saturating_sub(vh);
+                self.file_pos.row = self.file_pos.row.min(max_file_pos);
             }
-            // Pin viewport so the last file line never sits above the
-            // viewport bottom — avoids drawing empty rows past EOF after
-            // operations like HalfPageDown.
-            let max_file_pos = (last_line + 1).saturating_sub(vh);
-            self.file_pos.row = self.file_pos.row.min(max_file_pos);
         }
         self.cursor_pos.row = abs_row.saturating_sub(self.file_pos.row) as u16;
 

@@ -4,11 +4,11 @@ use ratatui::text::{Line, Span};
 
 use crate::{
     buffer::Buffer,
-    components::wrap::WrapMap,
     keymap::KeyEvent,
     popup::Popup,
     styling::{Style, Theme},
     window::WindowTree,
+    wrap::WrapMap,
 };
 
 /// Read-only view of the editor passed to renderers. Decoupling this from

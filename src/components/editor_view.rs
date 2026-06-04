@@ -9,9 +9,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::buffer::Buffer;
-use crate::components::wrap::WrapMap;
 use crate::render::{Display, RenderedBuffer, StyledRange};
 use crate::styling::style_to_ratatui;
+use crate::wrap::WrapMap;
 
 pub struct EditorView;
 

@@ -648,6 +648,14 @@ impl State {
         // so lisp render callbacks can reach back into `State` for queries,
         // and runs each slot to a plain value the renderer can consume.
         let (frame, error_msg) = self.precompute_frame();
+        // Push each freshly built WrapMap onto its buffer so the next round
+        // of cursor movement can step in visual rows. Clone into bufs;
+        // `frame.per_buf` still owns the map for the renderer below.
+        for (i, rb) in frame.per_buf.iter().enumerate() {
+            if i < self.bufs.len() {
+                self.bufs[i].set_wrap_cache(rb.wrap.clone());
+            }
+        }
         let snap = StateSnapshot {
             bufs: &self.bufs,
             windows: &self.windows,
@@ -800,10 +808,14 @@ impl State {
                         width: content_w,
                         breakindent: buf.breakindent(),
                     };
-                    let map = crate::components::wrap::WrapMap::build(
+                    // Build a generous cache (several screenfuls) so single-step
+                    // movements like `j` near the viewport bottom can step
+                    // onto the next visual row without falling off the map.
+                    let budget = ((buf.viewport.row as usize) * 4).max(200);
+                    let map = crate::wrap::WrapMap::build(
                         buf,
                         buf.file_pos().row,
-                        buf.viewport.row as usize,
+                        budget,
                         cfg,
                     );
                     rb.wrap = Some(map);

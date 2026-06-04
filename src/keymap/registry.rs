@@ -22,33 +22,60 @@ impl KeymapRegistry {
             prev_mode: None,
         }
     }
+    /// Resolve `key` against the supplied layered modes. `modes` is ordered
+    /// most-specific first — the first mode whose trie produces an
+    /// `Action` or `Descend` wins. An in-progress sequence is only
+    /// continued if its mode is still in `modes` and `timedout` is false;
+    /// otherwise resolution restarts from each mode's root.
     pub fn resolve(
         &mut self,
-        mode: Rc<str>,
+        modes: &[Rc<str>],
         key: KeyEvent,
         timedout: bool,
     ) -> Option<Vec<Rc<Action>>> {
-        // Continue an in-progress sequence only if the mode is unchanged;
-        // otherwise restart from this mode's root keymap. `take()` clears
-        // any stale sequence either way.
-        let continuing = !timedout && self.prev_mode.as_ref() == Some(&mode);
-        self.prev_mode = Some(mode.clone());
+        let continuing = !timedout
+            && self
+                .prev_mode
+                .as_ref()
+                .is_some_and(|pm| modes.iter().any(|m| m == pm));
 
-        let start = match self.cur.take() {
-            Some(cur) if continuing => Some(cur),
-            _ => self.children.get(&mode).cloned(),
-        };
-
-        let user_action = match start.as_deref().map(|t| walk(t, key)) {
-            Some(WalkOutcome::Action(a)) => Some(a),
-            Some(WalkOutcome::Descend(n)) => {
-                self.cur = Some(n);
-                return None;
+        if continuing && let Some(cur) = self.cur.take() {
+            match walk(&cur, key) {
+                WalkOutcome::Action(a) => {
+                    self.prev_mode = None;
+                    return Some(vec![a]);
+                }
+                WalkOutcome::Descend(n) => {
+                    self.cur = Some(n);
+                    return None;
+                }
+                WalkOutcome::Miss => {
+                    // Drop the stale sequence; fall through to a fresh
+                    // top-level resolution so the user's key still has a
+                    // chance to match a different layer.
+                }
             }
-            Some(WalkOutcome::Miss) | None => None,
-        };
+        }
+        self.cur = None;
+        self.prev_mode = None;
 
-        user_action.map(|a| vec![a])
+        for mode in modes {
+            let Some(root) = self.children.get(mode).cloned() else {
+                continue;
+            };
+            match walk(&root, key) {
+                WalkOutcome::Action(a) => {
+                    return Some(vec![a]);
+                }
+                WalkOutcome::Descend(n) => {
+                    self.cur = Some(n);
+                    self.prev_mode = Some(mode.clone());
+                    return None;
+                }
+                WalkOutcome::Miss => {}
+            }
+        }
+        None
     }
 
     /// Bind a key sequence in `mode` to `action`.
@@ -133,5 +160,70 @@ impl KeymapRegistry {
     /// registered across all modes.
     pub fn iter(&self) -> KeymapRegistryIter<'_> {
         self.into_iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keymap::{KeyCode, KeyEvent};
+
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::from_code(KeyCode::Char(c))
+    }
+
+    fn act(tag: &str) -> Rc<Action> {
+        Rc::new(Action::EvalLisp(Rc::new(rizz::runtime::Value::Str(
+            tag.into(),
+        ))))
+    }
+
+    fn rhs(a: &Rc<Action>) -> String {
+        match a.as_ref() {
+            Action::EvalLisp(v) => v.as_str().map(|s| s.to_string()).unwrap_or_default(),
+            _ => String::new(),
+        }
+    }
+
+    #[test]
+    fn upper_layer_shadows_lower_layer() {
+        let mut r = KeymapRegistry::new();
+        r.set("base".into(), &[key('q')], act("base-q"));
+        r.set("top".into(), &[key('q')], act("top-q"));
+        let modes: Vec<Rc<str>> = vec!["top".into(), "base".into()];
+        let out = r.resolve(&modes, key('q'), false).expect("resolved");
+        assert_eq!(rhs(&out[0]), "top-q");
+    }
+
+    #[test]
+    fn unbound_in_upper_layer_falls_through_to_lower() {
+        let mut r = KeymapRegistry::new();
+        r.set("base".into(), &[key('j')], act("base-j"));
+        r.set("top".into(), &[key('q')], act("top-q"));
+        let modes: Vec<Rc<str>> = vec!["top".into(), "base".into()];
+        let out = r.resolve(&modes, key('j'), false).expect("resolved");
+        assert_eq!(rhs(&out[0]), "base-j");
+    }
+
+    #[test]
+    fn sequence_continuation_only_when_mode_still_active() {
+        // `gg` in `top` descends after the first `g`. If the next call
+        // includes `top` in `modes`, the second `g` completes the
+        // sequence; if `top` is no longer active, the partial sequence
+        // is dropped before retrying against the new modes.
+        let mut r = KeymapRegistry::new();
+        r.set("top".into(), &[key('g'), key('g')], act("top-gg"));
+        r.set("base".into(), &[key('g')], act("base-g"));
+        let modes_top: Vec<Rc<str>> = vec!["top".into(), "base".into()];
+        assert!(r.resolve(&modes_top, key('g'), false).is_none());
+        let out = r.resolve(&modes_top, key('g'), false).expect("resolved");
+        assert_eq!(rhs(&out[0]), "top-gg");
+
+        // Restart a sequence, then drop `top` before the second key.
+        assert!(r.resolve(&modes_top, key('g'), false).is_none());
+        let modes_no_top: Vec<Rc<str>> = vec!["base".into()];
+        let out = r.resolve(&modes_no_top, key('g'), false).expect("resolved");
+        // Stale `top` sequence dropped; `g` re-resolves against `base`.
+        assert_eq!(rhs(&out[0]), "base-g");
     }
 }

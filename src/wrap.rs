@@ -81,12 +81,7 @@ impl WrapMap {
     /// Build a map starting at `start_row` and producing at most
     /// `max_visual_rows` visual rows. Stops early once the budget is hit
     /// since anything past that is scrolled out anyway.
-    pub fn build(
-        buf: &Buffer,
-        start_row: usize,
-        max_visual_rows: usize,
-        cfg: WrapConfig,
-    ) -> Self {
+    pub fn build(buf: &Buffer, start_row: usize, max_visual_rows: usize, cfg: WrapConfig) -> Self {
         let mut rows = Vec::with_capacity(max_visual_rows);
         if cfg.width == 0 || matches!(cfg.mode, WrapMode::None) {
             // Degenerate: one visual row per file row, no wrapping.
@@ -257,11 +252,19 @@ mod tests {
         let map = WrapMap::build(&b, 0, 10, cfg);
         assert_eq!(map.rows.len(), 5);
         assert_eq!(
-            (map.rows[0].file_row, map.rows[0].start_col, map.rows[0].end_col),
+            (
+                map.rows[0].file_row,
+                map.rows[0].start_col,
+                map.rows[0].end_col
+            ),
             (0, 0, 4)
         );
         assert_eq!(
-            (map.rows[2].file_row, map.rows[2].start_col, map.rows[2].end_col),
+            (
+                map.rows[2].file_row,
+                map.rows[2].start_col,
+                map.rows[2].end_col
+            ),
             (0, 8, 10)
         );
         assert_eq!(map.rows[3].file_row, 1);

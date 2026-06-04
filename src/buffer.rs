@@ -78,6 +78,12 @@ pub struct Buffer {
     pub(crate) viewport: Position<u16>,
     pub(crate) kind: BufferKind,
     pub(crate) mode: EditingMode,
+    /// Stack of additional keymap modes layered on top of `mode`. Used to
+    /// give a buffer extra named modes (e.g. a popup buffer activating
+    /// `"popup"` and `"popup.files"`) without losing its base editing mode.
+    /// Last element is the most recently pushed and shadows earlier layers
+    /// during keymap resolution.
+    pub(crate) mode_layers: Vec<Rc<str>>,
     /// Anchor (absolute file position) of the current visual selection.
     /// `Some` iff `mode` is one of the visual modes — managed by `set_mode`.
     pub(crate) selection_anchor: Option<Position<usize>>,
@@ -144,6 +150,31 @@ impl Buffer {
 
     pub fn mode(&self) -> EditingMode {
         self.mode
+    }
+
+    /// Push `name` to the top of the keymap mode stack. Idempotent: if
+    /// already present, the existing entry is removed first so the layer
+    /// ends up at the top.
+    pub fn push_mode_layer(&mut self, name: Rc<str>) {
+        self.mode_layers.retain(|m| m.as_ref() != name.as_ref());
+        self.mode_layers.push(name);
+    }
+
+    /// Remove `name` from the mode stack. No-op when absent.
+    pub fn remove_mode_layer(&mut self, name: &str) {
+        self.mode_layers.retain(|m| m.as_ref() != name);
+    }
+
+    pub fn mode_layers(&self) -> &[Rc<str>] {
+        &self.mode_layers
+    }
+
+    /// Active modes for keymap resolution, most-specific first. Stacked
+    /// layers (most recent first) precede the buffer's base editing mode.
+    pub fn active_modes(&self) -> Vec<Rc<str>> {
+        let mut v: Vec<Rc<str>> = self.mode_layers.iter().rev().cloned().collect();
+        v.push(self.mode.as_str().into());
+        v
     }
 
     pub fn wrap_mode(&self) -> WrapMode {

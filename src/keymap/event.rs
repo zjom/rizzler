@@ -1,3 +1,5 @@
+use std::fmt;
+
 pub use crossterm::event::{KeyCode, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -86,6 +88,54 @@ fn parse_token(tok: &str) -> Result<KeyEvent, String> {
         modifiers.remove(KeyModifiers::SHIFT);
     }
     Ok(KeyEvent { code, modifiers })
+}
+
+impl fmt::Display for KeyEvent {
+    /// Renders a `KeyEvent` in the same syntax `parse_sequence` accepts:
+    /// `q`, `<esc>`, `<c-w>`, `<s-tab>`, etc. Useful for surfacing bindings
+    /// back to lisp via `keymap-get`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ctrl = self.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = self.modifiers.contains(KeyModifiers::ALT);
+        let shift = self.modifiers.contains(KeyModifiers::SHIFT);
+        // Bare printable char with no non-shift modifier renders verbatim.
+        if let KeyCode::Char(c) = self.code
+            && !ctrl
+            && !alt
+        {
+            return write!(f, "{c}");
+        }
+        f.write_str("<")?;
+        if ctrl {
+            f.write_str("c-")?;
+        }
+        if shift {
+            f.write_str("s-")?;
+        }
+        if alt {
+            f.write_str("a-")?;
+        }
+        match self.code {
+            KeyCode::Esc => f.write_str("esc")?,
+            KeyCode::Enter => f.write_str("enter")?,
+            KeyCode::Backspace => f.write_str("backspace")?,
+            KeyCode::Tab => f.write_str("tab")?,
+            KeyCode::Up => f.write_str("up")?,
+            KeyCode::Down => f.write_str("down")?,
+            KeyCode::Left => f.write_str("left")?,
+            KeyCode::Right => f.write_str("right")?,
+            KeyCode::Home => f.write_str("home")?,
+            KeyCode::End => f.write_str("end")?,
+            KeyCode::PageUp => f.write_str("pageup")?,
+            KeyCode::PageDown => f.write_str("pagedown")?,
+            KeyCode::Char(' ') => f.write_str("space")?,
+            KeyCode::Char('<') => f.write_str("lt")?,
+            KeyCode::Char('>') => f.write_str("gt")?,
+            KeyCode::Char(c) => write!(f, "{c}")?,
+            other => write!(f, "{other:?}")?,
+        }
+        f.write_str(">")
+    }
 }
 
 impl From<crossterm::event::KeyEvent> for KeyEvent {

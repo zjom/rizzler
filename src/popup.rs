@@ -195,10 +195,12 @@ pub struct Popup {
     pub bufno: usize,
     pub placement: Placement,
     pub chrome: Chrome,
-    /// Keymap mode used while this popup is on top of the stack. Defaults to
-    /// `"popup"`. Custom popups can use names like `"popup.files"` and bind
-    /// keys to them in lisp.
-    pub keymap_mode: Rc<str>,
+    /// Keymap mode layers pushed onto the popup's buffer when it opens.
+    /// Stored on the popup so callers can introspect (e.g. `popup-mode`
+    /// returns the topmost layer for `notify` dedup) and so the layers
+    /// can be cleaned up if the popup ever outlives its buffer. Ordered
+    /// least-recent first — `layers.last()` is the most specific mode.
+    pub mode_layers: Vec<Rc<str>>,
     /// Whether to display the popup buffer's cursor inside the popup.
     /// Off by default — viewing popups (messages, hints) don't want a
     /// cursor; editable popups (terminal, prompt) flip this on.

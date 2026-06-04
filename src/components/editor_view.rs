@@ -114,10 +114,7 @@ impl EditorView {
         // already arranged for wrap.start_file_row == buf.file_pos().row, so
         // the visual index is the screen row offset from area.y.
         if let Some((visual_row, screen_col)) = wrap.locate(abs.row, abs.col) {
-            return (
-                area.x + gutter_w + screen_col,
-                area.y + visual_row as u16,
-            );
+            return (area.x + gutter_w + screen_col, area.y + visual_row as u16);
         }
         // Fallback: cursor is off the rendered map — should not happen if
         // the precompute pass kept file_pos in sync with the cursor, but
@@ -182,7 +179,9 @@ fn apply_decorators_segment(
                 continue;
             }
             let clipped_col = r.col.saturating_sub(segment_start);
-            let clipped_end = r_end.saturating_sub(segment_start).min(segment_len.max(r_end));
+            let clipped_end = r_end
+                .saturating_sub(segment_start)
+                .min(segment_len.max(r_end));
             let clipped = crate::render::StyledRange {
                 row: r.row,
                 col: clipped_col,

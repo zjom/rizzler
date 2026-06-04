@@ -8,7 +8,6 @@
 //! of an eval, so there is never simultaneous aliasing of `&mut State`.
 
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process;
 use std::ptr::NonNull;
@@ -349,6 +348,16 @@ fn builtins() -> Env {
         ok_unit(env)
     });
 
+    // Returns the bindings registered against `mode` as an array of maps:
+    //
+    //     [{"mode": "normal" "lhs": "<c-w>q" "rhs": (window-close)} ...]
+    //
+    // `lhs` is a key-sequence string that round-trips through
+    // `KeyEvent::parse_sequence`, and `rhs` is the lisp form the binding
+    // was originally created with (or a `Debug` string for non-lisp
+    // actions, e.g. the seeded `on_char` typing handlers). This lets lisp
+    // code introspect bindings — popups can copy or reuse them instead of
+    // redefining every key from scratch.
     b!("keymap-get", 1, |args, env| {
         let mode = parse_mode_name(&args[0])?;
         let mappings = with_editor_mut(|st| {
@@ -356,15 +365,20 @@ fn builtins() -> Env {
                 .iter()
                 .filter(|(m, _, _)| m == &mode)
                 .map(|(m, p, a)| {
-                    vec![
-                        Value::Str(m),
-                        p.iter()
-                            .map(|e| (Value::Str("code".into()), e.code.to_string().into()))
-                            .collect::<HashMap<Value, Value>>()
-                            .into(),
-                        format!("{:?}", a).into(),
-                    ]
-                    .into()
+                    let lhs: String = p.iter().map(|e| e.to_string()).collect::<Vec<_>>().concat();
+                    let rhs: Value = match a {
+                        Action::EvalLisp(form) => (**form).clone(),
+                        other => format!("{:?}", other).into(),
+                    };
+                    let entry: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::from_iter([
+                        (Rc::new(Value::Str("mode".into())), Rc::new(Value::Str(m))),
+                        (
+                            Rc::new(Value::Str("lhs".into())),
+                            Rc::new(Value::Str(lhs.into())),
+                        ),
+                        (Rc::new(Value::Str("rhs".into())), Rc::new(rhs)),
+                    ]);
+                    Value::Map(entry)
                 })
                 .collect::<Vec<Value>>()
         });
@@ -1122,6 +1136,16 @@ fn parse_mode_name(v: &Rc<Value>) -> Result<Rc<str>, RuntimeError> {
     as_ident_or_str(v, "mode")
 }
 
+/// Parse a popup's `modes` property. Accepts a single mode name (ident/str)
+/// or an array of mode names. The returned vec is ordered least-recent
+/// first — the last entry becomes the topmost layer once pushed.
+fn parse_mode_layers(v: &Rc<Value>) -> Result<Vec<Rc<str>>, RuntimeError> {
+    match &**v {
+        Value::Array(items) => items.iter().map(parse_mode_name).collect(),
+        _ => Ok(vec![parse_mode_name(v)?]),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Popup property parsing
 // ---------------------------------------------------------------------------
@@ -1158,8 +1182,12 @@ fn parse_popup_props(v: &Rc<Value>) -> Result<PopupSpec, RuntimeError> {
             if let Some(t) = m.get(&key("text")) {
                 spec.initial_text = Some(as_str(t, "popup-open.text")?.to_string());
             }
-            if let Some(mode) = m.get(&key("mode")) {
-                spec.keymap_mode = parse_mode_name(mode)?;
+            // `modes` (array) is the canonical form; `mode` (single name)
+            // is a convenience shorthand for a one-layer stack.
+            if let Some(modes) = m.get(&key("modes")) {
+                spec.mode_layers = parse_mode_layers(modes)?;
+            } else if let Some(mode) = m.get(&key("mode")) {
+                spec.mode_layers = vec![parse_mode_name(mode)?];
             }
             if let Some(bm) = m.get(&key("buffer-mode")) {
                 spec.buffer_mode = parse_mode_ident(bm)?;

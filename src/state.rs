@@ -55,7 +55,10 @@ pub struct PopupSpec {
     pub initial_text: Option<String>,
     pub placement: Placement,
     pub chrome: Chrome,
-    pub keymap_mode: Rc<str>,
+    /// Keymap mode layers to push onto the popup's buffer. Ordered
+    /// least-recent first — the last entry ends up at the top of the
+    /// stack and shadows the rest during keymap resolution.
+    pub mode_layers: Vec<Rc<str>>,
     pub buffer_mode: EditingMode,
     pub show_cursor: bool,
     pub wrap_mode: WrapMode,
@@ -69,7 +72,7 @@ impl PopupSpec {
             initial_text: None,
             placement: Placement::default(),
             chrome: Chrome::default(),
-            keymap_mode: Rc::<str>::from("popup"),
+            mode_layers: vec![Rc::<str>::from("popup")],
             buffer_mode: EditingMode::Normal,
             show_cursor: false,
             wrap_mode: WrapMode::default(),
@@ -101,7 +104,7 @@ pub struct State {
     /// `:messages`.
     messages: Vec<Rc<str>>,
     /// Popup overlay stack, bottom-to-top. While non-empty, the top popup
-    /// captures key input (resolved against its `keymap_mode`) and the
+    /// captures key input (resolved against its mode layers) and the
     /// focused buffer is the top popup's backing buffer.
     popups: Vec<Popup>,
     quit: bool,
@@ -258,10 +261,14 @@ impl State {
         }
     }
 
-    /// Keymap mode of the topmost popup, exposed for the `popup-mode` lisp
-    /// builtin (used by `notify` to dedup against its own popup).
+    /// Topmost keymap layer of the topmost popup, exposed for the
+    /// `popup-mode` lisp builtin (used by `notify` to dedup against its
+    /// own popup). Returns `None` when no popup is open or when the top
+    /// popup didn't push any layers.
     pub(crate) fn top_popup_mode(&self) -> Option<Rc<str>> {
-        self.popups.last().map(|p| p.keymap_mode.clone())
+        self.popups
+            .last()
+            .and_then(|p| p.mode_layers.last().cloned())
     }
 
     /// Push a popup onto the overlay stack. Creates a backing buffer of
@@ -276,13 +283,16 @@ impl State {
         buf.set_wrap_mode(spec.wrap_mode);
         buf.set_wrap_column(spec.wrap_column);
         buf.set_breakindent(spec.breakindent);
+        for layer in &spec.mode_layers {
+            buf.push_mode_layer(layer.clone());
+        }
         self.bufs.push(buf);
         let bufno = self.bufs.len() - 1;
         self.popups.push(Popup {
             bufno,
             placement: spec.placement,
             chrome: spec.chrome,
-            keymap_mode: spec.keymap_mode,
+            mode_layers: spec.mode_layers,
             show_cursor: spec.show_cursor,
         });
         self.refresh_viewport();
@@ -421,18 +431,12 @@ impl State {
             .is_some_and(|(_, earlier)| now.duration_since(*earlier) > self.keycombo_timeout);
         self.keyevents.push_back((event.into(), now));
 
-        // When a popup is on top of the stack the keymap is resolved against
-        // its `keymap_mode` (default `"popup"`), not the focused buffer's
-        // editing mode. That decouples popup interaction from the underlying
-        // buffer mode — a popup buffer may still be in Normal/Insert, but
-        // pop-up-specific bindings (j/k scroll, q dismiss, …) live in their
-        // own mode keymap.
-        let mode_name: Rc<str> = if let Some(p) = self.popups.last() {
-            p.keymap_mode.clone()
-        } else {
-            self.bufs[self.focused_bufno()].mode().as_str().into()
-        };
-        if let Some(action) = self.keymap.resolve(mode_name, event.into(), timedout) {
+        // The focused buffer's mode stack drives keymap resolution
+        // uniformly: pushed layers (most recent first) shadow the buffer's
+        // base editing mode. Popups participate by virtue of opening
+        // having pushed their layers onto the popup's backing buffer.
+        let modes = self.bufs[self.focused_bufno()].active_modes();
+        if let Some(action) = self.keymap.resolve(&modes, event.into(), timedout) {
             self.apply(&action)?;
         }
         // Refresh after apply: window splits/closes and buffer switches may
@@ -962,6 +966,23 @@ mod tests {
         let p = top_popup_text(&s);
         assert!(p.contains("first"));
         assert!(p.contains("second"));
+    }
+
+    #[test]
+    fn popup_files_inherits_motions_from_popup_layer() {
+        // `popup-files` opens a popup with mode layers ['popup, 'popup.files].
+        // `popup.files` no longer rebinds motions; `j` resolves against the
+        // underlying `popup` layer, exercising the layered lookup path.
+        use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+        let mut s = test_state();
+        s.eval_lisp("(popup-files)").unwrap();
+        assert!(s.has_popup());
+        let bufno = s.top_popup_bufno().unwrap();
+        let before = s.bufs[bufno].cursor_pos().row as usize + s.bufs[bufno].file_pos().row;
+        s.handle_key_event(CT::new(KeyCode::Char('j'), KeyModifiers::NONE))
+            .unwrap();
+        let after = s.bufs[bufno].cursor_pos().row as usize + s.bufs[bufno].file_pos().row;
+        assert_eq!(after, before + 1, "j should move down via popup layer");
     }
 
     #[test]

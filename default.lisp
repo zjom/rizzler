@@ -133,7 +133,7 @@
         (buf-text-set (popup-bufno) msg)
         (popup-open
           {"text":        msg
-           "mode":        'popup
+           "modes":       ['popup]
            "placement":   {"kind": "center" "w": 0.6 "h": 0.6}
            "border":      "plain"
            "title":       " message — q/<esc>/<enter> to dismiss "
@@ -152,7 +152,7 @@
     (let rows (fmapi _row (message-history)))
     (popup-open
       {"text":        (str-join rows "\n")
-       "mode":        'popup
+       "modes":       ['popup]
        "placement":   {"kind": "center" "w": 0.6 "h": 0.6}
        "border":      "plain"
        "title":       " messages — q/<esc>/<enter> to dismiss "
@@ -193,10 +193,10 @@
 
 ;; --- (popup-files)  centered file-explorer popup -----------------------
 ;; Reuses the buffer machinery (the popup buffer holds the directory
-;; listing as plain text) and a *custom* keymap mode (`'popup.files`) so we
-;; can attach explorer-specific bindings without conflicting with the
-;; default popup mode. Pressing `<enter>` on a row opens that path; `q`
-;; dismisses.
+;; listing as plain text) and *layers* `popup.files` on top of `popup`
+;; so that only the explorer-specific bindings (open / parent dir) need
+;; to be defined here — j/k/q/<esc>/movement keys are inherited from the
+;; base `popup` keymap by the layered resolver.
 
 ;; Snapshot of the directory we listed, indexed by line number. Updated on
 ;; each `(popup-files)` invocation so `<enter>` knows which path the cursor
@@ -223,7 +223,7 @@
                  (workdir)))
     (popup-open
       {"text":        (_popup-files-render dir)
-       "mode":        'popup.files
+       "modes":       ['popup 'popup.files]
        "buffer-mode": 'normal
        "placement":   'full
        "border":      "rounded"
@@ -233,25 +233,11 @@
        "title-face":  "popup.title"
        "show-cursor": 1})))
 
-;; Bind the explorer to `<space>f`. Movement keys are shared with the
-;; default popup mode, but `q`/`<esc>` still need to be wired up since
-;; `'popup.files` has its own keymap.
+;; Bind the explorer to `<space>f`. Motion and dismiss keys are inherited
+;; from the `popup` layer beneath `popup.files`, so only the explorer-
+;; specific actions (open + parent-dir) need to be bound here.
 (keymap-set 'normal "<space>f" '(popup-files))
 
-(keymap-set 'popup.files "j"        '(move-cursor 'down))
-(keymap-set 'popup.files "k"        '(move-cursor 'up))
-(keymap-set 'popup.files "l"        '(move-cursor 'right))
-(keymap-set 'popup.files "h"        '(move-cursor 'left))
-(keymap-set 'popup.files "<down>"   '(move-cursor 'down))
-(keymap-set 'popup.files "<up>"     '(move-cursor 'up))
-(keymap-set 'popup.files "<left>"   '(move-cursor 'left))
-(keymap-set 'popup.files "<right>"  '(move-cursor 'right))
-(keymap-set 'popup.files "<c-d>"    '(move-cursor 'half-page-down))
-(keymap-set 'popup.files "<c-u>"    '(move-cursor 'half-page-up))
-(keymap-set 'popup.files "gg"       '(move-cursor 'file-start))
-(keymap-set 'popup.files "G"        '(move-cursor 'file-end))
-(keymap-set 'popup.files "q"        '(popup-close))
-(keymap-set 'popup.files "<esc>"    '(popup-close))
 ;; `<enter>` reads the current line out of the popup buffer (via
 ;; `selected-text`/`buf-text`) and asks the editor to edit it. The popup
 ;; closes first so the new buffer takes focus cleanly.

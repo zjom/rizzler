@@ -205,6 +205,11 @@
 
 (fn _popup-files-render (dir)
   (do
+    (let dir
+      (if (fs-isdir dir)
+          dir
+          (fs-parent dir)))
+
     (let entries (fs-readdir dir))
     (set! _popup-files-entries entries)
     (str-join
@@ -213,12 +218,14 @@
 
 (fn popup-files ()
   (do
-    (let dir (workdir))
+    (let dir (if (buf-path)
+                 (buf-path)
+                 (workdir)))
     (popup-open
       {"text":        (_popup-files-render dir)
        "mode":        'popup.files
        "buffer-mode": 'normal
-       "placement":   {"kind": "center" "w": 0.5 "h": 0.5}
+       "placement":   'full
        "border":      "rounded"
        "title":       (str-join [" files: " (to-str dir) " "] "")
        "face":        "popup.default"
@@ -233,8 +240,12 @@
 
 (keymap-set 'popup.files "j"        '(move-cursor 'down))
 (keymap-set 'popup.files "k"        '(move-cursor 'up))
+(keymap-set 'popup.files "l"        '(move-cursor 'right))
+(keymap-set 'popup.files "h"        '(move-cursor 'left))
 (keymap-set 'popup.files "<down>"   '(move-cursor 'down))
 (keymap-set 'popup.files "<up>"     '(move-cursor 'up))
+(keymap-set 'popup.files "<left>"   '(move-cursor 'left))
+(keymap-set 'popup.files "<right>"  '(move-cursor 'right))
 (keymap-set 'popup.files "<c-d>"    '(move-cursor 'half-page-down))
 (keymap-set 'popup.files "<c-u>"    '(move-cursor 'half-page-up))
 (keymap-set 'popup.files "gg"       '(move-cursor 'file-start))
@@ -257,7 +268,7 @@
             {"text":        (_popup-files-render target)
              "mode":        'popup.files
              "buffer-mode": 'normal
-             "placement":   {"kind": "center" "w": 0.5 "h": 0.5}
+             "placement":   "full"
              "border":      "rounded"
              "title":       (str-join [" files: " target " "] "")
              "face":        "popup.default"
@@ -269,7 +280,7 @@
 ))
 
 
-(keymap-set 'popup.files "h"
+(keymap-set 'popup.files "-"
    '(do (let entries (deref _popup-files-entries))
         (let target (fs-parent (fs-parent (first entries))))
         (popup-close)
@@ -280,7 +291,7 @@
             {"text":        (_popup-files-render target)
              "mode":        'popup.files
              "buffer-mode": 'normal
-             "placement":   {"kind": "center" "w": 0.5 "h": 0.5}
+             "placement":   "full"
              "border":      "rounded"
              "title":       (str-join [" files: " target " "] "")
              "face":        "popup.default"

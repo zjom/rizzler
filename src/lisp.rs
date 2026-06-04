@@ -382,13 +382,12 @@ fn builtins() -> Env {
         match rizz::parse_and_run_with_env(src.as_bytes(), env) {
             Ok((v, new_env)) => {
                 if !v.is_unit() {
-                    with_editor_mut(|st| st.push_message(&v.display()));
+                    notify_via_env(&v.display(), &new_env);
                 }
                 Ok((unit(), new_env))
             }
             Err(e) => {
-                let msg = e.to_string();
-                with_editor_mut(|st| st.push_message(&msg));
+                notify_via_env(&e.to_string(), env);
                 ok_unit(env)
             }
         }
@@ -408,27 +407,22 @@ fn builtins() -> Env {
         match rizz::parse_and_run_with_env(src.as_bytes(), env) {
             Ok((v, new_env)) => {
                 if !v.is_unit() {
-                    with_editor_mut(|st| st.push_message(&v.display()));
+                    notify_via_env(&v.display(), &new_env);
                 }
                 Ok((unit(), new_env))
             }
             Err(e) => {
-                let msg = e.to_string();
-                with_editor_mut(|st| st.push_message(&msg));
+                notify_via_env(&e.to_string(), env);
                 ok_unit(env)
             }
         }
     });
-
-    // user-facing messaging
-    b!("notify", 1, |args, env| {
-        let s = as_str(&args[0], "notify")?;
-        with_editor_mut(|st| st.push_message(&s));
-        ok_unit(env)
-    });
-    // `:messages` — show the full message history in the popup.
-    b!("messages", 0, |_, env| {
-        with_editor_mut(|st| st.show_all_messages());
+    // Append a message to the history. The user-facing `notify` fn is
+    // defined in `default.lisp` on top of this primitive + `popup-open`,
+    // so popup styling, dedup, and dismissal all live in lisp.
+    b!("notify-record", 1, |args, env| {
+        let s = as_str(&args[0], "notify-record")?;
+        with_editor_mut(|st| st.record_message(&s));
         ok_unit(env)
     });
     b!("message-history", 0, |_, env| {
@@ -470,6 +464,13 @@ fn builtins() -> Env {
         });
         Ok((Rc::new(v), env.clone()))
     });
+    // Keymap mode of the topmost popup as a string, or `()` if no popup is
+    // open. Lets lisp-side popup managers (like `notify` in default.lisp)
+    // dedup against their own popup instead of stacking new ones.
+    b!("popup-mode", 0, |_, env| {
+        let v = with_editor_mut(|st| st.top_popup_mode().map(Value::Str).unwrap_or(Value::Unit));
+        Ok((Rc::new(v), env.clone()))
+    });
     b!("popup?", 0, |_, env| {
         let v = with_editor_mut(|st| st.has_popup());
         Ok((Rc::new(Value::Int(v as i64)), env.clone()))
@@ -485,7 +486,10 @@ fn builtins() -> Env {
                 &args[0],
             ));
         }
-        let text = args[1].repr();
+        // `display` keeps strings raw (no surrounding quotes) while still
+        // formatting non-strings sensibly — that's what callers expect when
+        // setting a buffer's text from a plain string value.
+        let text = args[1].display();
         let nbufs = with_editor_mut(|st| st.nbufs());
         if bufno as usize >= nbufs {
             return Err(RuntimeError::Other(anyhow!(
@@ -865,6 +869,43 @@ fn apply(action: Action) -> Result<(), RuntimeError> {
     }
     let result = with_editor_mut(|st| st.apply(&[Rc::new(action)]));
     result.map_err(|e| RuntimeError::Other(anyhow!("{e}")))
+}
+
+/// Escape `s` so it can be embedded as a rizz string literal. The
+/// notify-via-lisp bridge constructs `(notify "<msg>")` source from
+/// arbitrary message text — including eval-error messages with embedded
+/// quotes, backslashes, or newlines — so we can't rely on `Value::repr`,
+/// which assumes a clean ASCII identifier-like payload.
+pub(crate) fn quote_for_lisp(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Fire `(notify "<msg>")` against `env`. Used by builtins that are already
+/// inside an `eval_lisp_value` frame (so they can't recursively call
+/// `State::eval_lisp`) — `command-submit` and `evaluate` route their result
+/// / error messages through here. A broken user `notify` falls back to
+/// recording the original message *and* the failure, but never panics.
+fn notify_via_env(msg: &str, env: &Env) {
+    let src = format!("(notify {})", quote_for_lisp(msg));
+    if let Err(e) = rizz::parse_and_run_with_env(src.as_bytes(), env) {
+        with_editor_mut(|st| {
+            st.record_message(msg);
+            st.record_message(&format!("notify failed: {e}"));
+        });
+    }
 }
 
 fn as_str(v: &Rc<Value>, name: &str) -> Result<Rc<str>, RuntimeError> {

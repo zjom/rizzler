@@ -460,7 +460,7 @@
     (_ov 1 27 1 38 "twilight.reverse"
          {"display": {"space": 7}})
 
-    (message "overlays-demo: applied. try :(overlays-clear)")))
+    (notify "overlays-demo: applied. try :(overlays-clear)")))
 
 (keymap-set 'normal "od" '(overlays-demo))
 
@@ -473,7 +473,7 @@
   (do
     (clear-text-properties)
     (buf-text-set (buf-no) "")
-    (message "overlays-clear: text-properties cleared, buffer reset")))
+    (notify "overlays-clear: text-properties cleared, buffer reset")))
 
 
 ;; ---------------------------------------------------------------------------
@@ -522,104 +522,3 @@
      "title-face":  "popup.title"}))
 
 (keymap-set 'normal "?" '(popup-help))
-
-
-;; --- (popup-files)  centered file-explorer popup -----------------------
-;; Reuses the buffer machinery (the popup buffer holds the directory
-;; listing as plain text) and a *custom* keymap mode (`'popup.files`) so we
-;; can attach explorer-specific bindings without conflicting with the
-;; default popup mode. Pressing `<enter>` on a row opens that path; `q`
-;; dismisses.
-
-;; Snapshot of the directory we listed, indexed by line number. Updated on
-;; each `(popup-files)` invocation so `<enter>` knows which path the cursor
-;; is on without parsing the buffer text back.
-(let _popup-files-entries (ref []))
-
-(fn _popup-files-render (dir)
-  (do
-    (let entries (fs-readdir dir))
-    (set! _popup-files-entries entries)
-    (str-join
-      (fmap (fn _row (p) (to-str p)) entries)
-      "\n")))
-
-(fn popup-files ()
-  (do
-    (let dir (workdir))
-    (popup-open
-      {"text":        (_popup-files-render dir)
-       "mode":        'popup.files
-       "buffer-mode": 'normal
-       "placement":   {"kind": "center" "w": 0.5 "h": 0.5}
-       "border":      "rounded"
-       "title":       (str-join [" files: " (to-str dir) " "] "")
-       "face":        "popup.default"
-       "border-face": "popup.border"
-       "title-face":  "popup.title"
-       "show-cursor": 1})))
-
-;; Bind the explorer to `<space>f`. Movement keys are shared with the
-;; default popup mode, but `q`/`<esc>` still need to be wired up since
-;; `'popup.files` has its own keymap.
-(keymap-set 'normal "<space>f" '(popup-files))
-
-(keymap-set 'popup.files "j"        '(move-cursor 'down))
-(keymap-set 'popup.files "k"        '(move-cursor 'up))
-(keymap-set 'popup.files "<down>"   '(move-cursor 'down))
-(keymap-set 'popup.files "<up>"     '(move-cursor 'up))
-(keymap-set 'popup.files "<c-d>"    '(move-cursor 'half-page-down))
-(keymap-set 'popup.files "<c-u>"    '(move-cursor 'half-page-up))
-(keymap-set 'popup.files "gg"       '(move-cursor 'file-start))
-(keymap-set 'popup.files "G"        '(move-cursor 'file-end))
-(keymap-set 'popup.files "q"        '(popup-close))
-(keymap-set 'popup.files "<esc>"    '(popup-close))
-;; `<enter>` reads the current line out of the popup buffer (via
-;; `selected-text`/`buf-text`) and asks the editor to edit it. The popup
-;; closes first so the new buffer takes focus cleanly.
-(keymap-set 'popup.files "<enter>"
-  '(do
-     (let line (cursor-line))
-     (let entries (deref _popup-files-entries))
-     (let target (get entries line))
-     (popup-close)
-     (if (= target ())
-         ()
-     (if (fs-isdir target)
-          (popup-open
-            {"text":        (_popup-files-render target)
-             "mode":        'popup.files
-             "buffer-mode": 'normal
-             "placement":   {"kind": "center" "w": 0.5 "h": 0.5}
-             "border":      "rounded"
-             "title":       (str-join [" files: " target " "] "")
-             "face":        "popup.default"
-             "border-face": "popup.border"
-             "title-face":  "popup.title"
-             "show-cursor": 1})
-     (edit target)
-     ))
-))
-
-
-(keymap-set 'popup.files "h"
-   '(do (let entries (deref _popup-files-entries))
-        (let target (fs-parent (fs-parent (first entries))))
-        (popup-close)
-        (if (= target ())
-          ()
-        (if (fs-isdir target)
-          (popup-open
-            {"text":        (_popup-files-render target)
-             "mode":        'popup.files
-             "buffer-mode": 'normal
-             "placement":   {"kind": "center" "w": 0.5 "h": 0.5}
-             "border":      "rounded"
-             "title":       (str-join [" files: " target " "] "")
-             "face":        "popup.default"
-             "border-face": "popup.border"
-             "title-face":  "popup.title"
-             "show-cursor": 1})
-          ()
-        ))
-     ))

@@ -24,6 +24,7 @@ use crate::{
     window::{SplitDir, WindowTree},
 };
 
+
 /// Bottom-of-screen reservation: one row for the status line, one for the
 /// minibuffer. Subtracted from the terminal height when sizing the editor
 /// area for the window tree.
@@ -47,9 +48,9 @@ impl Config {
     }
 }
 
-/// Builder-style spec describing a popup to open. The lisp `popup-open`
-/// builtin builds one of these from a property map; internal callers
-/// (`push_message`, `show_all_messages`) construct one directly.
+/// Builder-style spec describing a popup to open. Built by the lisp
+/// `popup-open` builtin from a property map; there are no Rust-side
+/// callers — message popups are constructed in lisp on top of `popup-open`.
 pub struct PopupSpec {
     pub initial_text: Option<String>,
     pub placement: Placement,
@@ -69,15 +70,6 @@ impl PopupSpec {
             buffer_mode: EditingMode::Normal,
             show_cursor: false,
         }
-    }
-
-    /// Preset matching the legacy message popup: centered with a plain
-    /// border and the canonical message title.
-    pub fn message(text: &str) -> Self {
-        let mut spec = Self::new();
-        spec.initial_text = Some(text.to_string());
-        spec.chrome.title = Some(Rc::<str>::from("message — any key to dismiss"));
-        spec
     }
 }
 
@@ -237,45 +229,33 @@ impl State {
         &mut self.regions
     }
 
-    /// Record `msg` in the message history and surface it to the user as a
-    /// modal popup. Sink for `(message ...)`, eval errors, render-callback
-    /// errors, and command-submit results.
-    ///
-    /// If the topmost popup is already a message popup we replace it in
-    /// place instead of stacking — that mirrors the pre-generalization
-    /// behavior where successive messages overwrote each other.
-    pub(crate) fn push_message(&mut self, msg: &str) {
+    /// Append `msg` to the message history. The user-visible popup is the
+    /// concern of the lisp `notify` fn; this only owns the storage.
+    pub(crate) fn record_message(&mut self, msg: &str) {
         self.messages.push(msg.into());
-        self.replace_or_open_message_popup(PopupSpec::message(msg));
-    }
-
-    /// Open the popup with the full message history (newline-separated).
-    /// Invoked by `:messages`.
-    pub(crate) fn show_all_messages(&mut self) {
-        let text = self.messages.join("\n");
-        self.replace_or_open_message_popup(PopupSpec::message(&text));
     }
 
     pub(crate) fn message_history(&mut self) -> &[Rc<str>] {
         &self.messages
     }
 
-    /// If the top popup is a message popup (default keymap mode), refill
-    /// its buffer and reset the cursor instead of stacking another one.
-    /// Otherwise open a fresh popup.
-    fn replace_or_open_message_popup(&mut self, spec: PopupSpec) {
-        if let Some(top) = self.popups.last()
-            && top.keymap_mode.as_ref() == "popup"
-        {
-            let bufno = top.bufno;
-            if let Some(text) = &spec.initial_text {
-                self.bufs[bufno].clear_with(text);
-            } else {
-                self.bufs[bufno].clear();
-            }
-            return;
+    /// Bridge from Rust-internal failure paths (eval errors, render-callback
+    /// errors) to the lisp-side `notify` fn defined in `default.lisp`. Runs
+    /// `(notify "<msg>")` in the embedded runtime so styling and dedup live
+    /// entirely in lisp. Any error from the eval itself is recorded as a
+    /// message but does not recurse — we don't want a broken `notify` to
+    /// take down the editor.
+    pub(crate) fn notify_via_lisp(&mut self, msg: &str) {
+        let src = format!("(notify {})", crate::lisp::quote_for_lisp(msg));
+        if let Err(e) = self.eval_lisp(&src) {
+            self.record_message(&format!("notify failed: {e}"));
         }
-        self.open_popup(spec);
+    }
+
+    /// Keymap mode of the topmost popup, exposed for the `popup-mode` lisp
+    /// builtin (used by `notify` to dedup against its own popup).
+    pub(crate) fn top_popup_mode(&self) -> Option<Rc<str>> {
+        self.popups.last().map(|p| p.keymap_mode.clone())
     }
 
     /// Push a popup onto the overlay stack. Creates a backing buffer of
@@ -507,7 +487,7 @@ impl State {
                 }
                 Action::EvalLisp(form) => {
                     if let Err(e) = self.eval_lisp_value(form.clone()) {
-                        self.push_message(&e.to_string());
+                        self.notify_via_lisp(&e.to_string());
                     }
                 }
             }
@@ -685,7 +665,7 @@ impl State {
         // Surface any render-callback error via the popup *after* the frame
         // draws so the message itself isn't part of the failing pass.
         if let Some(msg) = error_msg {
-            self.push_message(&msg);
+            self.notify_via_lisp(&msg);
         }
         result
     }
@@ -876,9 +856,12 @@ mod tests {
     }
 
     #[test]
-    fn message_pushes_history_and_shows_popup() {
+    fn notify_records_history_and_shows_popup() {
+        // `notify` is defined in `default.lisp` on top of `notify-record`
+        // and `popup-open` — exercising it confirms the lisp-side bridge is
+        // wired up and that history storage still lives in Rust.
         let mut s = test_state();
-        s.push_message("hello");
+        s.eval_lisp(r#"(notify "hello")"#).unwrap();
         assert_eq!(s.messages, vec!["hello".into()]);
         assert!(s.has_popup());
         assert_eq!(top_popup_text(&s), "hello");
@@ -889,7 +872,7 @@ mod tests {
         // `q` is bound to (popup-close) in the bundled `popup` keymap mode.
         use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
         let mut s = test_state();
-        s.push_message("oops");
+        s.eval_lisp(r#"(notify "oops")"#).unwrap();
         assert!(s.has_popup());
         s.handle_key_event(CT::new(KeyCode::Char('q'), KeyModifiers::NONE))
             .unwrap();
@@ -902,7 +885,7 @@ mod tests {
         // editor binding, exercising the "popup is just a buffer" model.
         use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
         let mut s = test_state();
-        s.push_message("line1\nline2\nline3");
+        s.eval_lisp(r#"(notify "line1\nline2\nline3")"#).unwrap();
         s.handle_key_event(CT::new(KeyCode::Char('j'), KeyModifiers::NONE))
             .unwrap();
         assert!(s.has_popup(), "popup must still be visible");
@@ -914,21 +897,22 @@ mod tests {
     }
 
     #[test]
-    fn show_all_messages_joins_history() {
+    fn successive_notifies_replace_in_place() {
+        // The lisp-side `notify` dedups against the topmost popup so a flood
+        // of notifications doesn't stack overlays.
         let mut s = test_state();
-        s.push_message("a");
-        s.push_message("b");
-        // Showing the latest message popped open after each push. Now
-        // request the full history.
-        s.show_all_messages();
-        assert_eq!(top_popup_text(&s), "a\nb");
+        s.eval_lisp(r#"(notify "a")"#).unwrap();
+        s.eval_lisp(r#"(notify "b")"#).unwrap();
+        assert_eq!(s.messages, vec!["a".into(), "b".into()]);
+        assert_eq!(top_popup_text(&s), "b");
+        assert!(s.has_popup());
     }
 
     #[test]
     fn messages_builtin_opens_popup_with_history() {
         let mut s = test_state();
         s.eval_lisp(r#"(notify "first")"#).unwrap();
-        // Dismiss the popup the `message` call opened so we can re-check
+        // Dismiss the popup the `notify` call opened so we can re-check
         // that `(messages)` reopens with the joined history.
         s.close_popup();
         s.eval_lisp(r#"(notify "second")"#).unwrap();

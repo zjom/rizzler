@@ -585,4 +585,41 @@
      (popup-close)
      (if (= target ())
          ()
-         (edit (to-str target)))))
+     (if (fs-isdir target)
+          (popup-open
+            {"text":        (_popup-files-render target)
+             "mode":        'popup.files
+             "buffer-mode": 'normal
+             "placement":   {"kind": "center" "w": 0.5 "h": 0.5}
+             "border":      "rounded"
+             "title":       (str-join [" files: " target " "] "")
+             "face":        "popup.default"
+             "border-face": "popup.border"
+             "title-face":  "popup.title"
+             "show-cursor": 1})
+     (edit target)
+     ))
+))
+
+
+(keymap-set 'popup.files "h"
+   '(do (let entries (deref _popup-files-entries))
+        (let target (fs-parent (fs-parent (first entries))))
+        (popup-close)
+        (if (= target ())
+          ()
+        (if (fs-isdir target)
+          (popup-open
+            {"text":        (_popup-files-render target)
+             "mode":        'popup.files
+             "buffer-mode": 'normal
+             "placement":   {"kind": "center" "w": 0.5 "h": 0.5}
+             "border":      "rounded"
+             "title":       (str-join [" files: " target " "] "")
+             "face":        "popup.default"
+             "border-face": "popup.border"
+             "title-face":  "popup.title"
+             "show-cursor": 1})
+          ()
+        ))
+     ))

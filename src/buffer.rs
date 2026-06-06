@@ -1,4 +1,4 @@
-use rizz_changetree::ChangeTree;
+use rizz_changetree::{ChangeTree, Delta};
 use ropey::{Rope, RopeSlice, iter::Lines};
 use std::{path::Path, rc::Rc, str::FromStr};
 
@@ -323,6 +323,7 @@ impl Buffer {
     pub fn insert_char(&mut self, c: char) {
         let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;
         let start_line = self.abs_row();
+        let abs_before = self.abs_pos();
         let before = snapshot_lines(&self.buf, start_line, 1);
 
         self.buf.insert_char(cidx, c);
@@ -337,8 +338,14 @@ impl Buffer {
 
         let after_lines = if c == '\n' { 2 } else { 1 };
         let after = snapshot_lines(&self.buf, start_line, after_lines);
-        self.changetree
-            .track_change((start_line, before.into(), after.into()));
+        let abs_after = self.abs_pos();
+        self.changetree.track_change(Delta {
+            start_line,
+            before: before.into(),
+            after: after.into(),
+            cursor_before: (abs_before.row, abs_before.col),
+            cursor_after: (abs_after.row, abs_after.col),
+        });
     }
 
     pub fn delete_char(&mut self) {
@@ -357,6 +364,7 @@ impl Buffer {
         };
         let before_lines = if removed_is_nl { 2 } else { 1 };
         let before = snapshot_lines(&self.buf, start_line, before_lines);
+        let abs_before = self.abs_pos();
 
         match self.buf.get_char(cidx - 1) {
             Some('\n') => {
@@ -372,8 +380,14 @@ impl Buffer {
         self.invalidate_wrap_cache();
 
         let after = snapshot_lines(&self.buf, start_line, 1);
-        self.changetree
-            .track_change((start_line, before.into(), after.into()));
+        let abs_after = self.abs_pos();
+        self.changetree.track_change(Delta {
+            start_line,
+            before: before.into(),
+            after: after.into(),
+            cursor_before: (abs_before.row, abs_before.col),
+            cursor_after: (abs_after.row, abs_after.col),
+        });
     }
 
     pub fn delete_char_at(&mut self, Position { col, row }: Position<usize>) {
@@ -389,49 +403,60 @@ impl Buffer {
             return;
         }
         let before = snapshot_lines(&self.buf, row, 1);
+        let abs_before = self.abs_pos();
         let cidx = line_start + col;
         _ = self.buf.try_remove(cidx..cidx + 1);
         self.invalidate_wrap_cache();
         self.clamp_cursor();
         let after = snapshot_lines(&self.buf, row, 1);
-        self.changetree
-            .track_change((row, before.into(), after.into()));
+        let abs_after = self.abs_pos();
+        self.changetree.track_change(Delta {
+            start_line: row,
+            before: before.into(),
+            after: after.into(),
+            cursor_before: (abs_before.row, abs_before.col),
+            cursor_after: (abs_after.row, abs_after.col),
+        });
     }
 
     /// Reverse the most recent tracked edit and return whether anything
-    /// happened. Cursor lands at the start of the restored region.
+    /// happened. Cursor lands where it was just before that edit.
     pub fn undo(&mut self) -> bool {
-        let Some((start_line, before, after)) = self.changetree.undo() else {
+        let Some(delta) = self.changetree.undo() else {
             return false;
         };
-        let after_lines = rope_line_count(&after);
-        replace_lines(&mut self.buf, start_line, after_lines, &before);
+        let after_lines = rope_line_count(&delta.after);
+        replace_lines(&mut self.buf, delta.start_line, after_lines, &delta.before);
         self.invalidate_wrap_cache();
-        self.land_cursor_at_line(start_line);
+        let (row, col) = delta.cursor_before;
+        self.land_cursor_at(row, col);
         true
     }
 
-    /// Reapply the most recently undone edit, if any. Cursor lands at the
-    /// start of the re-applied region.
+    /// Reapply the most recently undone edit, if any. Cursor lands where it
+    /// ended up the first time around.
     pub fn redo(&mut self) -> bool {
-        let Some((start_line, before, after)) = self.changetree.redo() else {
+        let Some(delta) = self.changetree.redo() else {
             return false;
         };
-        let before_lines = rope_line_count(&before);
-        replace_lines(&mut self.buf, start_line, before_lines, &after);
+        let before_lines = rope_line_count(&delta.before);
+        replace_lines(&mut self.buf, delta.start_line, before_lines, &delta.after);
         self.invalidate_wrap_cache();
-        self.land_cursor_at_line(start_line);
+        let (row, col) = delta.cursor_after;
+        self.land_cursor_at(row, col);
         true
     }
 
-    fn land_cursor_at_line(&mut self, line: usize) {
-        let line = line.min(self.buf.len_lines().saturating_sub(1));
-        if line < self.file_pos.row {
-            self.file_pos.row = line;
+    fn land_cursor_at(&mut self, row: usize, col: usize) {
+        let row = row.min(self.buf.len_lines().saturating_sub(1));
+        if row < self.file_pos.row {
+            self.file_pos.row = row;
         }
-        self.cursor_pos.row = (line - self.file_pos.row) as u16;
-        self.cursor_pos.col = 0;
-        self.file_pos.col = 0;
+        self.cursor_pos.row = (row - self.file_pos.row) as u16;
+        if col < self.file_pos.col {
+            self.file_pos.col = col;
+        }
+        self.cursor_pos.col = (col - self.file_pos.col) as u16;
         self.clamp_cursor();
     }
 
@@ -1462,54 +1487,80 @@ mod tests {
     // ---- undo / redo --------------------------------------------------
 
     #[test]
-    fn undo_reverts_insert_char() {
+    fn undo_reverts_insert_char_and_restores_cursor() {
         let mut s = mk("ab");
+        s.mode = EditingMode::Insert;
         s.cursor_pos = Position::<u16>::new(2, 0);
         s.insert_char('c');
         assert_eq!(s.buf.to_string(), "abc");
+        assert_eq!(cur_col(&s), 3);
         assert!(s.undo());
         assert_eq!(s.buf.to_string(), "ab");
+        // Cursor returns to the pre-edit column, not col 0.
+        assert_eq!(cur_col(&s), 2);
     }
 
     #[test]
-    fn redo_reapplies_insert_char() {
+    fn redo_reapplies_insert_char_and_restores_cursor() {
         let mut s = mk("ab");
+        s.mode = EditingMode::Insert;
         s.cursor_pos = Position::<u16>::new(2, 0);
         s.insert_char('c');
         s.undo();
         assert!(s.redo());
         assert_eq!(s.buf.to_string(), "abc");
+        assert_eq!(cur_col(&s), 3);
     }
 
     #[test]
-    fn undo_reverts_newline_split() {
+    fn undo_reverts_newline_split_with_cursor() {
         let mut s = mk("abcd");
         s.cursor_pos = Position::<u16>::new(2, 0);
         s.insert_char('\n');
         assert_eq!(s.buf.to_string(), "ab\ncd");
+        assert_eq!((cur_row(&s), cur_col(&s)), (1, 0));
         assert!(s.undo());
         assert_eq!(s.buf.to_string(), "abcd");
+        assert_eq!((cur_row(&s), cur_col(&s)), (0, 2));
         assert!(s.redo());
         assert_eq!(s.buf.to_string(), "ab\ncd");
+        assert_eq!((cur_row(&s), cur_col(&s)), (1, 0));
     }
 
     #[test]
-    fn undo_reverts_delete_char_join() {
+    fn undo_reverts_delete_char_join_with_cursor() {
         // Backspacing across the newline merges two lines; undo must restore
-        // the split.
+        // the split AND drop the cursor back before 'c' on line 1.
         let mut s = mk("ab\ncd");
         s.cursor_pos = Position::<u16>::new(0, 1); // before 'c'
         s.delete_char();
         assert_eq!(s.buf.to_string(), "abcd");
+        assert_eq!((cur_row(&s), cur_col(&s)), (0, 2));
         assert!(s.undo());
         assert_eq!(s.buf.to_string(), "ab\ncd");
+        assert_eq!((cur_row(&s), cur_col(&s)), (1, 0));
         assert!(s.redo());
         assert_eq!(s.buf.to_string(), "abcd");
+        assert_eq!((cur_row(&s), cur_col(&s)), (0, 2));
+    }
+
+    #[test]
+    fn undo_restores_column_mid_line() {
+        // 'x' deletes a non-leading char; undo should put the cursor back on
+        // the original column, not col 0.
+        let mut s = mk("hello");
+        s.cursor_pos = Position::<u16>::new(3, 0); // on 'l'
+        s.delete_char_at(Position::new(3, 0));
+        assert_eq!(s.buf.to_string(), "helo");
+        s.undo();
+        assert_eq!(s.buf.to_string(), "hello");
+        assert_eq!(cur_col(&s), 3);
     }
 
     #[test]
     fn undo_chain_then_new_edit_drops_redo() {
         let mut s = mk("");
+        s.mode = EditingMode::Insert;
         s.insert_char('a');
         s.insert_char('b');
         s.insert_char('c');
@@ -1517,11 +1568,11 @@ mod tests {
         s.undo();
         s.undo();
         assert_eq!(s.buf.to_string(), "a");
-        // Cursor lands at col 0 after undo, so 'Z' inserts at line start.
+        // Cursor was at col 1 (just after 'a') before the 'b' insert, so undo
+        // restored it there. 'Z' lands between 'a' and what was 'b'.
+        assert_eq!(cur_col(&s), 1);
         s.insert_char('Z');
-        assert_eq!(s.buf.to_string(), "Za");
-        // The "bc" branch is no longer the canonical redo target, so redo
-        // walks the new branch (no-op here — leaf has no children).
+        assert_eq!(s.buf.to_string(), "aZ");
         assert!(!s.redo());
     }
 

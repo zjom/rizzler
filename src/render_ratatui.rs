@@ -41,11 +41,7 @@ impl Renderer for RatatuiRenderer {
     fn render(&mut self, snap: StateSnapshot<'_>, frame_data: &RenderedFrame) -> io::Result<()> {
         // Cursor style is a terminal escape, not a ratatui widget — emit it
         // out-of-band before the frame draw.
-        let style = match snap.cursor_style {
-            CursorStyle::Bar => SetCursorStyle::SteadyBar,
-            CursorStyle::Block => SetCursorStyle::SteadyBlock,
-        };
-        execute!(io::stdout(), style)?;
+        execute!(io::stdout(), set_cursor_style(snap.cursor_style))?;
 
         self.term.draw(|f| {
             // Base layer: paint the whole frame with the `default` face's
@@ -139,11 +135,7 @@ impl Renderer for RatatuiRenderer {
             if let Some((x, y, cs)) = popup_cursor {
                 // A popup with `show_cursor` overrides the editor cursor and
                 // optionally its style — terminal-style popups want a bar.
-                let popup_style = match cs {
-                    CursorStyle::Bar => SetCursorStyle::SteadyBar,
-                    CursorStyle::Block => SetCursorStyle::SteadyBlock,
-                };
-                let _ = execute!(io::stdout(), popup_style);
+                let _ = execute!(io::stdout(), set_cursor_style(cs));
                 f.set_cursor_position((x, y));
             } else if snap.popups.is_empty()
                 && let Some((x, y)) = cursor
@@ -218,6 +210,13 @@ fn draw_popup(
         Some((x, y, cs))
     } else {
         None
+    }
+}
+
+fn set_cursor_style(cs: CursorStyle) -> SetCursorStyle {
+    match cs {
+        CursorStyle::Bar => SetCursorStyle::SteadyBar,
+        CursorStyle::Block => SetCursorStyle::SteadyBlock,
     }
 }
 

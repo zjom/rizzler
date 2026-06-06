@@ -271,6 +271,16 @@ impl Buffer {
         )
     }
 
+    /// Cursor's absolute file row — `file_pos.row + cursor_pos.row`.
+    pub fn abs_row(&self) -> usize {
+        self.file_pos.row + self.cursor_pos.row as usize
+    }
+
+    /// Cursor's absolute file column — `file_pos.col + cursor_pos.col`.
+    pub fn abs_col(&self) -> usize {
+        self.file_pos.col + self.cursor_pos.col as usize
+    }
+
     /// Reset rope content and cursor — used when the minibuffer finishes
     /// processing a command and needs to be empty again.
     pub fn clear(&mut self) {
@@ -474,7 +484,7 @@ impl Buffer {
             MK::HalfPageDown => self.half_page(1),
             MK::HalfPageUp => self.half_page(-1),
             MK::Center => {
-                let abs_row = self.cursor_pos.row as usize + self.file_pos.row;
+                let abs_row = self.abs_row();
                 self.center_on(abs_row);
             }
         }
@@ -519,12 +529,12 @@ impl Buffer {
 
     pub fn clamp_cursor(&mut self) {
         let last_line = self.buf.len_lines().saturating_sub(1);
-        let abs_row = (self.cursor_pos.row as usize + self.file_pos.row).min(last_line);
+        let abs_row = self.abs_row().min(last_line);
 
         // Vertical scroll. Skipped when viewport.row is 0 (e.g. tests without
         // a known terminal size) so pre-scroll behaviour is preserved.
         if self.viewport.row > 0 {
-            let abs_col_now = self.cursor_pos.col as usize + self.file_pos.col;
+            let abs_col_now = self.abs_col();
             self.file_pos.row = crate::scroll::clamp_scroll_top(
                 self.viewport.row,
                 self.wrap_cache.as_ref(),
@@ -551,7 +561,7 @@ impl Buffer {
             | EditingMode::VisualLine
             | EditingMode::VisualBlock => chars,
         };
-        let abs_col = (self.cursor_pos.col as usize + self.file_pos.col).min(max_col);
+        let abs_col = self.abs_col().min(max_col);
         self.cursor_pos.col = abs_col.saturating_sub(self.file_pos.col) as u16;
     }
 
@@ -585,7 +595,7 @@ impl Buffer {
     }
 
     fn cur_lnum(&self) -> usize {
-        self.cursor_pos.row as usize + self.file_pos.row
+        self.abs_row()
     }
 
     fn cur_line_start(&self) -> usize {

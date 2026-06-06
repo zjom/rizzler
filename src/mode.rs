@@ -26,6 +26,18 @@ impl EditingMode {
             Self::Command => "command",
         }
     }
+
+    /// Single-character glyph used by the status-line mode indicator.
+    pub fn as_glyph(&self) -> &'static str {
+        match self {
+            Self::Insert => "i",
+            Self::Normal => "n",
+            Self::Visual => "v",
+            Self::VisualLine => "V",
+            Self::VisualBlock => "^V",
+            Self::Command => "c",
+        }
+    }
 }
 
 impl FromStr for EditingMode {

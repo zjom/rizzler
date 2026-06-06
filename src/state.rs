@@ -178,47 +178,36 @@ impl State {
         Ok(state)
     }
 
-    /// Parse `src` as one lisp form and evaluate it in the embedded runtime.
-    /// Re-entrant calls panic — see [`crate::lisp::EditorGuard`].
-    pub fn eval_lisp(&mut self, src: &str) -> Result<Rc<Value>, RizzError> {
+    /// Install an [`EditorGuard`] and run `f` against the editor's lisp
+    /// runtime. The runtime is moved out of `self.lisp` for the call so
+    /// builtins reach the live `State` through the thread-local, never
+    /// through an aliased borrow. Re-entrant calls panic.
+    fn with_lisp<R>(&mut self, f: impl FnOnce(&mut LispRuntime) -> R) -> R {
         let mut lisp = self
             .lisp
             .take()
             .expect("recursive eval_lisp is not supported");
         let result = {
             let _guard = EditorGuard::new(self);
-            lisp.eval_str(src)
+            f(&mut lisp)
         };
         self.lisp = Some(lisp);
         result
+    }
+
+    /// Parse `src` as one lisp form and evaluate it in the embedded runtime.
+    pub fn eval_lisp(&mut self, src: &str) -> Result<Rc<Value>, RizzError> {
+        self.with_lisp(|lisp| lisp.eval_str(src))
     }
 
     /// Evaluate an already-parsed form. Used to dispatch keymap-bound lisp.
     pub fn eval_lisp_value(&mut self, form: Rc<Value>) -> Result<Rc<Value>, RizzError> {
-        let mut lisp = self
-            .lisp
-            .take()
-            .expect("recursive eval_lisp is not supported");
-        let result = {
-            let _guard = EditorGuard::new(self);
-            lisp.eval_value(form)
-        };
-        self.lisp = Some(lisp);
-        result
+        self.with_lisp(|lisp| lisp.eval_value(form))
     }
 
     /// Evaluate a multi-form script (e.g. `default.lisp`, `init.lisp`).
     pub fn eval_lisp_script(&mut self, src: &str) -> Result<(), RizzError> {
-        let mut lisp = self
-            .lisp
-            .take()
-            .expect("recursive eval_lisp is not supported");
-        let result = {
-            let _guard = EditorGuard::new(self);
-            lisp.eval_script(src)
-        };
-        self.lisp = Some(lisp);
-        result
+        self.with_lisp(|lisp| lisp.eval_script(src))
     }
 
     /// Read-only accessor for the focused buffer. Exposed for lisp builtins

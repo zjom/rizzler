@@ -277,15 +277,7 @@ fn builtin_status_segment(
     _theme: &Theme,
 ) -> Vec<Span<'static>> {
     let s = match b {
-        BuiltinId::ModeGlyph => match snap.focused().mode() {
-            EditingMode::Insert => "i",
-            EditingMode::Normal => "n",
-            EditingMode::Visual => "v",
-            EditingMode::VisualLine => "V",
-            EditingMode::VisualBlock => "^V",
-            EditingMode::Command => "c",
-        }
-        .to_string(),
+        BuiltinId::ModeGlyph => snap.focused().mode().as_glyph().to_string(),
         BuiltinId::LastKey => snap
             .keyevent
             .as_ref()
@@ -413,7 +405,7 @@ fn builtin_decorator(b: BuiltinId, buf: &Buffer, theme: &Theme) -> DecoratorRang
                 bg: Some(crate::styling::Color::DarkGray),
                 ..Default::default()
             });
-            let cur_row = buf.file_pos().row + buf.cursor_pos().row as usize;
+            let cur_row = buf.abs_row();
             ranges.push(StyledRange {
                 row: cur_row,
                 col: 0,

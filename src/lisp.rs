@@ -571,18 +571,12 @@ fn builtins() -> Env {
     });
 
     b!("cursor-line", 0, |_, env| {
-        let n = with_editor_mut(|st| {
-            let b = st.focused_buf();
-            b.cursor_pos().row as i64 + b.file_pos().row as i64
-        });
+        let n = with_editor_mut(|st| st.focused_buf().abs_row() as i64);
         Ok((Rc::new(n.into()), env.clone()))
     });
 
     b!("cursor-col", 0, |_, env| {
-        let n = with_editor_mut(|st| {
-            let b = st.focused_buf();
-            b.cursor_pos().col as i64 + b.file_pos().col as i64
-        });
+        let n = with_editor_mut(|st| st.focused_buf().abs_col() as i64);
         Ok((Rc::new(n.into()), env.clone()))
     });
 
@@ -776,39 +770,19 @@ fn builtins() -> Env {
     b!("overlay-put", 3, |args, env| {
         let id = crate::props::OverlayId(as_int(&args[0], "overlay-put")? as u64);
         let key = as_ident_or_str(&args[1], "overlay-put")?;
-        match key.as_ref() {
-            "face" => {
-                let face = args[2].clone();
-                with_editor_mut(|st| {
-                    if let Some(e) = st.focused_buf_mut().props_mut().overlay_mut(id) {
-                        e.face = Some(face);
-                    }
-                });
-            }
-            "priority" => {
-                let p = as_int(&args[2], "overlay-put")?;
-                with_editor_mut(|st| {
-                    if let Some(e) = st.focused_buf_mut().props_mut().overlay_mut(id) {
-                        e.priority = p;
-                    }
-                });
-            }
-            "pad-to-width" => {
-                let pad = args[2].is_truthy();
-                with_editor_mut(|st| {
-                    if let Some(e) = st.focused_buf_mut().props_mut().overlay_mut(id) {
-                        e.pad_to_width = pad;
-                    }
-                });
-            }
-            "display" => {
-                let disp = display_from_value(&args[2])?;
-                with_editor_mut(|st| {
-                    if let Some(e) = st.focused_buf_mut().props_mut().overlay_mut(id) {
-                        e.display = disp;
-                    }
-                });
-            }
+        // Decode the value up-front so we can apply it under a single
+        // `with_editor_mut` instead of one per branch.
+        enum Update {
+            Face(Rc<Value>),
+            Priority(i64),
+            PadToWidth(bool),
+            Display(Option<crate::render::Display>),
+        }
+        let update = match key.as_ref() {
+            "face" => Update::Face(args[2].clone()),
+            "priority" => Update::Priority(as_int(&args[2], "overlay-put")?),
+            "pad-to-width" => Update::PadToWidth(args[2].is_truthy()),
+            "display" => Update::Display(display_from_value(&args[2])?),
             other => {
                 return Err(RuntimeError::TypeMismatch {
                     name: "overlay-put".into(),
@@ -816,7 +790,17 @@ fn builtins() -> Env {
                     got: other.into(),
                 });
             }
-        }
+        };
+        with_editor_mut(|st| {
+            if let Some(e) = st.focused_buf_mut().props_mut().overlay_mut(id) {
+                match update {
+                    Update::Face(f) => e.face = Some(f),
+                    Update::Priority(p) => e.priority = p,
+                    Update::PadToWidth(b) => e.pad_to_width = b,
+                    Update::Display(d) => e.display = d,
+                }
+            }
+        });
         ok_unit(env)
     });
     b!("overlay-delete", 1, |args, env| {
@@ -828,15 +812,7 @@ fn builtins() -> Env {
     });
 
     b!("focused-mode", 0, |_, env| {
-        let m = with_editor_mut(|st| st.focused_buf().mode());
-        let s: &str = match m {
-            EditingMode::Normal => "normal",
-            EditingMode::Insert => "insert",
-            EditingMode::Visual => "visual",
-            EditingMode::VisualLine => "visual-line",
-            EditingMode::VisualBlock => "visual-block",
-            EditingMode::Command => "command",
-        };
+        let s = with_editor_mut(|st| st.focused_buf().mode().as_str());
         // Return Str (not Ident) — rizz re-evaluates a native fn's return
         // and a raw ident would try to resolve as a variable.
         Ok((Rc::new(Value::Str(s.into())), env.clone()))
@@ -1249,7 +1225,7 @@ fn parse_popup_props(v: &Rc<Value>) -> Result<PopupSpec, RuntimeError> {
                     .unwrap_or_default();
             }
             if let Some(sc) = m.get(&key("wrap-column")) {
-                spec.wrap_column = Some(as_int(sc, "popup-open.wrap-column")?.min(0) as u16)
+                spec.wrap_column = Some(as_int(sc, "popup-open.wrap-column")?.max(0) as u16)
             }
             if let Some(sc) = m.get(&key("break-indent")) {
                 spec.breakindent = sc.is_truthy();

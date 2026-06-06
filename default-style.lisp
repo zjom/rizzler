@@ -221,7 +221,7 @@
 
 
 ;; ---------------------------------------------------------------------------
-;; 7. Overlays + virtual text (unchanged: buffer-attached, not widgets)
+;; 7. Overlays + virtual text
 ;; ---------------------------------------------------------------------------
 
 (face-define "demo.lint.error"   {"fg": pal-error  "underline": 1})

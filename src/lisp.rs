@@ -598,6 +598,12 @@ fn builtins() -> Env {
         Ok((Rc::new(n.into()), env.clone()))
     });
 
+    b!("line-at", 1, |args, env| {
+        let idx = as_usize(&args[0], "line-at")?;
+        let s = with_editor_mut(|st| st.focused_buf().lines_at(idx).next().map(|s| s.to_string()));
+        Ok((Rc::new(s.into()), env.clone()))
+    });
+
     b!("cursor-col", 0, |_, env| {
         let n = with_editor_mut(|st| st.focused_buf().abs_col() as i64);
         Ok((Rc::new(n.into()), env.clone()))

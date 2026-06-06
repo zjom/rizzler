@@ -686,7 +686,7 @@ impl Buffer {
         self.cursor_pos.col = (col - self.file_pos.col) as u16;
     }
 
-    fn cur_line(&self) -> RopeSlice<'_> {
+    pub fn cur_line(&self) -> RopeSlice<'_> {
         self.buf.line(self.cur_lnum())
     }
 

@@ -207,6 +207,65 @@ pub struct Popup {
     pub show_cursor: bool,
 }
 
+/// Overlay stack, bottom-to-top. Top popup captures key input and contributes
+/// the focused buffer. Owns only the popup metadata; the backing buffers live
+/// in `State.bufs`, so the orchestration that creates/removes those (push to
+/// bufs, reindex on removal) stays in `State`.
+#[derive(Default)]
+pub struct PopupStack {
+    stack: Vec<Popup>,
+}
+
+impl PopupStack {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, popup: Popup) {
+        self.stack.push(popup);
+    }
+
+    pub fn pop(&mut self) -> Option<Popup> {
+        self.stack.pop()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.stack.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Popup> {
+        self.stack.iter()
+    }
+
+    /// Borrow as a slice — used to feed `StateSnapshot.popups`.
+    pub fn as_slice(&self) -> &[Popup] {
+        &self.stack
+    }
+
+    /// Topmost keymap layer of the topmost popup. Used by lisp `popup-mode`
+    /// (notify deduplication). Returns `None` when no popup is open or when
+    /// the top popup didn't push any layers.
+    pub fn top_mode(&self) -> Option<Rc<str>> {
+        self.stack
+            .last()
+            .and_then(|p| p.mode_layers.last().cloned())
+    }
+
+    pub fn top_bufno(&self) -> Option<usize> {
+        self.stack.last().map(|p| p.bufno)
+    }
+
+    /// Re-index `bufno` references after the buffer at `removed` was deleted
+    /// from `State.bufs`. Indices past `removed` shift down by one.
+    pub fn shift_bufnos_after_removal(&mut self, removed: usize) {
+        for p in &mut self.stack {
+            if p.bufno > removed {
+                p.bufno -= 1;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -13,10 +13,13 @@ use rizz_ringbuffer::RingBuffer;
 use crate::{
     action::Action,
     buffer::{Buffer, BufferKind},
+    buffer_list::{BufferList, CycleDir},
+    count_prefix::CountPrefix,
+    journal::Journal,
     keymap::KeymapRegistry,
     lisp::{EditorGuard, LispRuntime, init_script_path},
     mode::EditingMode,
-    popup::{Chrome, Placement, Popup},
+    popup::{Chrome, Placement, Popup, PopupStack},
     position::Position,
     regions::RegionRegistry,
     render::{CursorStyle, Renderer, StateSnapshot},
@@ -89,27 +92,22 @@ impl Default for PopupSpec {
 }
 
 pub struct State {
-    /// All live buffers. Index 0 is the minibuffer by construction; file
-    /// buffers occupy index 1..
-    bufs: Vec<Buffer>,
+    /// All live buffers. Owns the minibuffer index so reindex-on-removal
+    /// stays atomic with the underlying `Vec`.
+    bufs: BufferList,
     /// Tree of editor windows. Leaves point at indices into `bufs`. The
     /// minibuffer is not part of this tree.
     windows: WindowTree,
     /// When true, key events route to the minibuffer instead of the focused
     /// editor window.
     focus_minibuffer: bool,
-    /// Index of the minibuffer (always kind = Minibuffer).
-    minibuffer: usize,
-    /// Append-only history of every user-visible message. Surfaced by
-    /// `:messages`.
-    messages: RingBuffer<Rc<str>, 200>,
-    /// Append-only history of every user command. Surfaced by
-    /// `:history`.
-    history: RingBuffer<Rc<str>, 2000>,
+    /// Append-only history of user-visible messages and commands. Surfaced
+    /// by `:messages` / `:history`.
+    journal: Journal,
     /// Popup overlay stack, bottom-to-top. While non-empty, the top popup
     /// captures key input (resolved against its mode layers) and the
     /// focused buffer is the top popup's backing buffer.
-    popups: Vec<Popup>,
+    popups: PopupStack,
     quit: bool,
     keymap: KeymapRegistry,
     keyevents: RingBuffer<(KeyEvent, Instant), 100>,
@@ -119,7 +117,7 @@ pub struct State {
     /// [`Action::MoveCursor`] in the resolved sequence). Partial keymap
     /// sequences (`g` mid-way through `gg`) leave the count untouched so
     /// e.g. `3gg` still works.
-    pending_count: Option<u32>,
+    count_prefix: CountPrefix,
     renderer: Box<dyn Renderer>,
     /// Embedded lisp runtime. Held as `Option` so `eval_lisp*` can `take` it
     /// for the duration of an eval — this also blocks re-entrant evaluation.
@@ -144,18 +142,16 @@ impl State {
         // Layout: [minibuffer, first file buffer]. The window tree starts as
         // a single leaf pointing at the file buffer.
         let mut state = Self {
-            bufs: vec![Buffer::minibuffer(), Buffer::new()],
+            bufs: BufferList::new(),
             windows: WindowTree::new(1),
             focus_minibuffer: false,
-            minibuffer: 0,
-            messages: RingBuffer::new(),
-            history: RingBuffer::new(),
-            popups: Vec::new(),
+            journal: Journal::new(),
+            popups: PopupStack::new(),
             quit: false,
             keymap: KeymapRegistry::new(),
             keyevents: RingBuffer::new(),
             keycombo_timeout: config.keycombo_timeout,
-            pending_count: None,
+            count_prefix: CountPrefix::new(),
             renderer: config.renderer,
             lisp: Some(LispRuntime::new()),
             theme: ThemeCell::default(),
@@ -252,18 +248,18 @@ impl State {
     /// Append `msg` to the message history. The user-visible popup is the
     /// concern of the lisp `notify` fn; this only owns the storage.
     pub(crate) fn record_message(&mut self, msg: &str) {
-        self.messages.push_back(msg.into());
+        self.journal.record_message(msg);
     }
 
-    pub(crate) fn message_history(&mut self) -> impl Iterator<Item = &Rc<str>> {
-        self.messages.iter()
+    pub(crate) fn message_history(&self) -> impl Iterator<Item = &Rc<str>> {
+        self.journal.messages()
     }
 
     pub(crate) fn record_cmd(&mut self, msg: &str) {
-        self.history.push_back(msg.into());
+        self.journal.record_command(msg);
     }
-    pub(crate) fn cmd_history(&mut self) -> impl Iterator<Item = &Rc<str>> {
-        self.history.iter()
+    pub(crate) fn cmd_history(&self) -> impl Iterator<Item = &Rc<str>> {
+        self.journal.commands()
     }
 
     /// Bridge from Rust-internal failure paths (eval errors, render-callback
@@ -284,9 +280,7 @@ impl State {
     /// own popup). Returns `None` when no popup is open or when the top
     /// popup didn't push any layers.
     pub(crate) fn top_popup_mode(&self) -> Option<Rc<str>> {
-        self.popups
-            .last()
-            .and_then(|p| p.mode_layers.last().cloned())
+        self.popups.top_mode()
     }
 
     /// Push a popup onto the overlay stack. Creates a backing buffer of
@@ -327,15 +321,8 @@ impl State {
         let removed = popup.bufno;
         if removed < self.bufs.len() && self.bufs[removed].kind() == BufferKind::Popup {
             self.bufs.remove(removed);
-            if self.minibuffer > removed {
-                self.minibuffer -= 1;
-            }
-            for p in &mut self.popups {
-                if p.bufno > removed {
-                    p.bufno -= 1;
-                }
-            }
-            let first = self.first_file_buf();
+            self.popups.shift_bufnos_after_removal(removed);
+            let first = self.bufs.first_file_buf();
             self.windows.for_each_leaf_mut(|b| {
                 if *b == removed {
                     *b = first;
@@ -350,7 +337,7 @@ impl State {
 
     /// Bufno of the topmost popup, if one is open.
     pub(crate) fn top_popup_bufno(&self) -> Option<usize> {
-        self.popups.last().map(|p| p.bufno)
+        self.popups.top_bufno()
     }
 
     pub(crate) fn has_popup(&self) -> bool {
@@ -367,7 +354,7 @@ impl State {
     /// using the env already in scope (calling back into `eval_lisp` from here
     /// would re-take `self.lisp` and panic).
     pub(crate) fn take_minibuffer_command(&mut self) -> String {
-        let cmd = self.bufs[self.minibuffer].text();
+        let cmd = self.bufs.minibuffer().text();
         self.exit_minibuffer();
         cmd
     }
@@ -380,7 +367,7 @@ impl State {
     /// `3j`). Lisp `move-cursor` reads this to multiply the motion.
     /// Returns 1 when no count is pending so callers can blindly multiply.
     pub(crate) fn pending_count_or_one(&self) -> u32 {
-        self.pending_count.unwrap_or(1)
+        self.count_prefix.or_one()
     }
 
     pub(crate) fn keymap_registry(&self) -> &KeymapRegistry {
@@ -392,11 +379,11 @@ impl State {
     /// scroll the popup's content; `(insert-char …)` would edit it). This
     /// is what makes popups feel like overlayed buffers.
     pub(crate) fn focused_bufno(&self) -> usize {
-        if let Some(p) = self.popups.last() {
-            return p.bufno;
+        if let Some(bufno) = self.popups.top_bufno() {
+            return bufno;
         }
         if self.focus_minibuffer {
-            self.minibuffer
+            self.bufs.minibuffer_index()
         } else {
             self.windows.focused_bufno()
         }
@@ -423,7 +410,7 @@ impl State {
                 buf.viewport = Position::new(leaf.area.width, leaf.area.height);
             }
         }
-        self.bufs[self.minibuffer].viewport = Position::new(cols, MINIBUFFER_ROWS);
+        self.bufs.minibuffer_mut().viewport = Position::new(cols, MINIBUFFER_ROWS);
         // Popup viewports are the inner content rect — outer placement
         // minus the border inset on each side.
         let popups: Vec<(usize, Position<u16>)> = self
@@ -457,12 +444,10 @@ impl State {
         self.keyevents.push_back((event.into(), now));
 
         // Numeric-prefix gate. In Normal/Visual modes, digits typed while no
-        // keymap sequence is in flight feed `pending_count` instead of
-        // resolving against the keymap — `3j`, `12gg`, etc. `0` only counts
-        // when a digit has already been seen (it stays bound to `line-start`
-        // when the count is empty).
+        // keymap sequence is in flight feed the count prefix instead of
+        // resolving against the keymap — `3j`, `12gg`, etc.
         let ke: KeyEvent = event.into();
-        if self.try_accumulate_count(ke) {
+        if self.count_prefix.feed(ke, self.count_eligible()) {
             self.refresh_viewport();
             return self.render();
         }
@@ -477,7 +462,7 @@ impl State {
             // Drain the count only once a key has been resolved to an
             // action. Partial sequences (`g` mid-`gg`) leave it alone so
             // `3gg` still lands at file start with the count attached.
-            self.pending_count = None;
+            self.count_prefix.clear();
         }
         // Refresh after apply: window splits/closes and buffer switches may
         // have changed which buffer occupies which viewport.
@@ -487,41 +472,23 @@ impl State {
         self.render()
     }
 
-    /// Returns `true` when `ke` was absorbed into [`Self::pending_count`].
-    /// Conditions: keymap idle, no popup, focused mode is Normal or any
-    /// Visual variant, and the key is an ASCII digit (with `0` only counting
-    /// once a count is already in progress).
-    fn try_accumulate_count(&mut self, ke: KeyEvent) -> bool {
+    /// Conditions under which [`CountPrefix`] should consider absorbing a
+    /// digit: keymap idle, no popup, no minibuffer focus, focused mode is
+    /// Normal or any Visual variant.
+    fn count_eligible(&self) -> bool {
         if self.has_popup() || self.focus_minibuffer {
             return false;
         }
         if !self.keymap.is_idle() {
             return false;
         }
-        let mode = self.bufs[self.focused_bufno()].mode();
-        let eligible = matches!(
-            mode,
+        matches!(
+            self.bufs[self.focused_bufno()].mode(),
             EditingMode::Normal
                 | EditingMode::Visual
                 | EditingMode::VisualLine
                 | EditingMode::VisualBlock
-        );
-        if !eligible {
-            return false;
-        }
-        let crate::keymap::KeyCode::Char(c) = ke.code else {
-            return false;
-        };
-        if !c.is_ascii_digit() {
-            return false;
-        }
-        let d = (c as u8 - b'0') as u32;
-        if d == 0 && self.pending_count.is_none() {
-            return false;
-        }
-        let cur = self.pending_count.unwrap_or(0);
-        self.pending_count = Some(cur.saturating_mul(10).saturating_add(d));
-        true
+        )
     }
 
     pub fn apply(&mut self, actions: &[Rc<Action>]) -> io::Result<()> {
@@ -559,8 +526,8 @@ impl State {
                     let editor = self.windows.focused_bufno();
                     self.delete_buf(editor);
                 }
-                Action::BufNext => self.next_buffer(),
-                Action::BufPrev => self.previous_buffer(),
+                Action::BufNext => self.cycle_buffer(CycleDir::Next),
+                Action::BufPrev => self.cycle_buffer(CycleDir::Prev),
                 Action::BufEdit(path) => {
                     self.edit_buf(path.clone())?;
                 }
@@ -590,8 +557,8 @@ impl State {
     fn set_mode(&mut self, mode: EditingMode) {
         if mode == EditingMode::Command {
             // Wipe any leftover status text from a previous eval.
-            self.bufs[self.minibuffer].clear();
-            self.bufs[self.minibuffer].set_mode(EditingMode::Command);
+            self.bufs.minibuffer_mut().clear();
+            self.bufs.minibuffer_mut().set_mode(EditingMode::Command);
             self.focus_minibuffer = true;
         } else {
             let f = self.focused_bufno();
@@ -602,8 +569,8 @@ impl State {
     /// Clear the minibuffer, drop focus from it, and reset the focused
     /// editor buffer to Normal mode.
     fn exit_minibuffer(&mut self) {
-        self.bufs[self.minibuffer].clear();
-        self.bufs[self.minibuffer].set_mode(EditingMode::Command);
+        self.bufs.minibuffer_mut().clear();
+        self.bufs.minibuffer_mut().set_mode(EditingMode::Command);
         self.focus_minibuffer = false;
         let editor = self.windows.focused_bufno();
         self.bufs[editor].set_mode(EditingMode::Normal);
@@ -611,17 +578,10 @@ impl State {
 
     fn create_buf(&mut self, set_active: bool, path: Option<Rc<Path>>) -> io::Result<usize> {
         let buf = match path {
-            Some(ref p) => self
-                .bufs
-                .iter()
-                .find(|b| b.fs_path == path)
-                .cloned()
-                .unwrap_or_else(|| Buffer::with_path(p.clone())),
+            Some(p) => self.bufs.buffer_for_path(p),
             None => Buffer::new(),
         };
-
-        self.bufs.push(buf);
-        let bufno = self.bufs.len() - 1;
+        let bufno = self.bufs.push(buf);
         if set_active {
             self.windows.set_focused_bufno(bufno);
         }
@@ -629,27 +589,17 @@ impl State {
     }
 
     fn edit_buf(&mut self, path: Rc<Path>) -> io::Result<usize> {
-        let idx = self
-            .bufs
-            .iter()
-            .position(|b| b.fs_path.as_ref() == Some(&path));
-        match idx {
-            Some(idx) => {
-                self.windows.set_focused_bufno(idx);
-                Ok(idx)
-            }
-            None => {
-                self.bufs.push(Buffer::with_path(path));
-                let idx = self.bufs.len() - 1;
-                self.windows.set_focused_bufno(idx);
-                Ok(idx)
-            }
-        }
+        let idx = match self.bufs.find_by_path(&path) {
+            Some(idx) => idx,
+            None => self.bufs.push(crate::buffer_io::with_path(path)),
+        };
+        self.windows.set_focused_bufno(idx);
+        Ok(idx)
     }
 
     fn write_buf(&mut self, path: Option<Rc<Path>>) -> io::Result<()> {
         let editor = self.windows.focused_bufno();
-        self.bufs[editor].write(path)
+        crate::buffer_io::write(&mut self.bufs[editor], path)
     }
 
     /// Refuses to delete the minibuffer; keeps at least one file buffer alive.
@@ -658,20 +608,17 @@ impl State {
             return;
         }
 
-        if self.file_buf_count() == 1 {
+        if self.bufs.file_buf_count() == 1 {
             // Last file buffer: reset it in place instead of removing.
-            self.bufs[bufno] = Buffer::new();
+            self.bufs.reset(bufno);
             self.windows.for_each_leaf_mut(|b| *b = bufno);
             return;
         }
 
         self.bufs.remove(bufno);
-        if self.minibuffer > bufno {
-            self.minibuffer -= 1;
-        }
         // Reindex every leaf that pointed past the removed buffer; any leaf
         // that pointed AT the removed buffer falls back to the first file buf.
-        let first = self.first_file_buf();
+        let first = self.bufs.first_file_buf();
         self.windows.for_each_leaf_mut(|b| {
             if *b == bufno {
                 *b = first;
@@ -679,6 +626,7 @@ impl State {
                 *b -= 1;
             }
         });
+        self.popups.shift_bufnos_after_removal(bufno);
     }
 
     fn window_split(&mut self, dir: SplitDir) {
@@ -692,43 +640,11 @@ impl State {
         self.windows.close_focused();
     }
 
-    fn file_buf_count(&self) -> usize {
-        self.bufs
-            .iter()
-            .filter(|b| b.kind() != BufferKind::Minibuffer)
-            .count()
-    }
-
-    fn first_file_buf(&self) -> usize {
-        self.bufs
-            .iter()
-            .position(|b| b.kind() != BufferKind::Minibuffer)
-            .expect("at least one file buffer always exists")
-    }
-
-    /// Cycle the focused window to the previous file buffer in `bufs`,
-    /// skipping the minibuffer.
-    fn previous_buffer(&mut self) {
-        let n = self.bufs.len();
-        let mut i = self.windows.focused_bufno();
-        for _ in 0..n {
-            i = if i == 0 { n - 1 } else { i - 1 };
-            if self.bufs[i].kind() != BufferKind::Minibuffer {
-                self.windows.set_focused_bufno(i);
-                return;
-            }
-        }
-    }
-
-    fn next_buffer(&mut self) {
-        let n = self.bufs.len();
-        let mut i = self.windows.focused_bufno();
-        for _ in 0..n {
-            i = if i + 1 >= n { 0 } else { i + 1 };
-            if self.bufs[i].kind() != BufferKind::Minibuffer {
-                self.windows.set_focused_bufno(i);
-                return;
-            }
+    /// Cycle the focused window to the next/previous file buffer, skipping
+    /// the minibuffer.
+    fn cycle_buffer(&mut self, dir: CycleDir) {
+        if let Some(i) = self.bufs.cycle(self.windows.focused_bufno(), dir) {
+            self.windows.set_focused_bufno(i);
         }
     }
 
@@ -747,9 +663,9 @@ impl State {
             }
         }
         let snap = StateSnapshot {
-            bufs: &self.bufs,
+            bufs: self.bufs.as_slice(),
             windows: &self.windows,
-            minibuffer: &self.bufs[self.minibuffer],
+            minibuffer: self.bufs.minibuffer(),
             focus_minibuffer: self.focus_minibuffer,
             bufno: self.windows.focused_bufno(),
             keyevent: self.keyevents.peek_back().map(|(e, _)| e.to_owned()),
@@ -757,7 +673,7 @@ impl State {
                 EditingMode::Insert | EditingMode::Command => CursorStyle::Bar,
                 _ => CursorStyle::Block,
             },
-            popups: &self.popups,
+            popups: self.popups.as_slice(),
         };
         let result = self.renderer.render(snap, &frame);
         // Surface any render-callback error via the popup *after* the frame
@@ -772,140 +688,24 @@ impl State {
     /// `RenderedFrame` the renderer can consume without ever touching lisp.
     /// Returns the frame plus an optional error message (concatenated from
     /// the first few region failures) to surface to the minibuffer.
+    ///
+    /// Owns the lisp take/restore + guard installation; the actual frame
+    /// assembly is delegated to [`crate::precompute::compute`].
     pub(crate) fn precompute_frame(&mut self) -> (crate::render::RenderedFrame, Option<String>) {
-        use crate::regions::{
-            RegionAnchor, produce_decorator, produce_gutter, produce_status_span,
-            produce_strip_rows,
-        };
-        use crate::render::{RenderedBuffer, RenderedFrame, RenderedStrip};
-
         let lisp = self.lisp.take().expect("recursive render is not supported");
         let _editor_guard = crate::lisp::EditorGuard::new(self);
         let _phase_guard = crate::lisp::RenderPhaseGuard::enter();
 
-        // Snapshot the theme so callbacks that mutate it (`face-define`) only
-        // affect the next frame.
-        let theme = self.theme.borrow().clone();
-        let default_style = theme.resolve("default").unwrap_or_default();
-        let env = lisp.env().clone();
-
-        let mut error_chunks: Vec<String> = Vec::new();
-        let record = |chunks: &mut Vec<String>, region_name: &str, err: rizz::RizzError| {
-            if chunks.len() < 3 {
-                chunks.push(format!("[{region_name}] {err}"));
-            }
-        };
-
-        // Read-only snapshot status/strip producers consume.
-        let snap = StateSnapshot {
-            bufs: &self.bufs,
+        let result = crate::precompute::compute(crate::precompute::PrecomputeInput {
+            bufs: self.bufs.as_slice(),
             windows: &self.windows,
-            minibuffer: &self.bufs[self.minibuffer],
+            regions: &self.regions,
+            theme: &self.theme,
             focus_minibuffer: self.focus_minibuffer,
-            bufno: self.windows.focused_bufno(),
-            keyevent: self.keyevents.peek_back().map(|(ke, _)| ke.to_owned()),
-            cursor_style: CursorStyle::Block,
-            popups: &[],
-        };
-
-        // One pass over the registry, routing each region's output to the
-        // matching `RenderedFrame` bucket.
-        let mut top_extra: Vec<RenderedStrip> = Vec::new();
-        let mut bottom_extra: Vec<RenderedStrip> = Vec::new();
-        let mut status_left: Vec<ratatui::text::Span<'static>> = Vec::new();
-        let mut status_right: Vec<ratatui::text::Span<'static>> = Vec::new();
-        for region in self.regions.iter() {
-            match region.anchor {
-                RegionAnchor::Top => match produce_strip_rows(region, &theme, &env) {
-                    Ok(lines) => top_extra.push(RenderedStrip { lines }),
-                    Err(e) => record(&mut error_chunks, &region.name, e),
-                },
-                RegionAnchor::Bottom => match produce_strip_rows(region, &theme, &env) {
-                    Ok(lines) => bottom_extra.push(RenderedStrip { lines }),
-                    Err(e) => record(&mut error_chunks, &region.name, e),
-                },
-                RegionAnchor::StatusLeft => {
-                    match produce_status_span(region, &snap, &theme, &env) {
-                        Ok(spans) => status_left.extend(spans),
-                        Err(e) => record(&mut error_chunks, &region.name, e),
-                    }
-                }
-                RegionAnchor::StatusRight => {
-                    match produce_status_span(region, &snap, &theme, &env) {
-                        Ok(spans) => status_right.extend(spans),
-                        Err(e) => record(&mut error_chunks, &region.name, e),
-                    }
-                }
-                // Per-buffer anchors are handled in the loop below.
-                RegionAnchor::Gutter { .. } | RegionAnchor::Decorator => {}
-            }
-        }
-
-        // Per-buffer pass: gutters + decorators, in registration order
-        // (which is the renderer's left-to-right / layer order). Popup and
-        // minibuffer kinds skip the region phase — their visual shell is
-        // owned by their chrome / the minibuffer line — but they still get
-        // a `prop_ranges` pass so text-property / overlay APIs work on a
-        // popup buffer's content the same way they do on a file buffer.
-        let mut per_buf = Vec::with_capacity(self.bufs.len());
-        for (i, buf) in self.bufs.iter().enumerate() {
-            let mut rb = RenderedBuffer::default();
-            let participates_in_regions =
-                i != self.minibuffer && buf.kind() != crate::buffer::BufferKind::Popup;
-            if participates_in_regions {
-                for region in self.regions.iter() {
-                    match region.anchor {
-                        RegionAnchor::Gutter { .. } => {
-                            match produce_gutter(region, buf, &theme, &env) {
-                                Ok(g) => rb.gutters.push(g),
-                                Err(e) => record(&mut error_chunks, &region.name, e),
-                            }
-                        }
-                        RegionAnchor::Decorator => {
-                            match produce_decorator(region, buf, &theme, &env) {
-                                Ok(d) => rb.decorators.push(d),
-                                Err(e) => record(&mut error_chunks, &region.name, e),
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            // Text properties + overlays applied after user decorators so
-            // they layer on top — overlays themselves are priority-ordered
-            // inside `build_prop_ranges`. Run for popups too.
-            if i != self.minibuffer {
-                let prop_ranges = crate::props::build_prop_ranges(buf, &theme);
-                if !prop_ranges.ranges.is_empty() {
-                    rb.decorators.push(prop_ranges);
-                }
-            }
-
-            // Soft-wrap layout. Built after gutters so the wrap width is
-            // the actual content area (viewport - gutters). Bail early when
-            // wrap is off, the viewport hasn't been sized yet, or gutters
-            // ate the whole row.
-            if !matches!(buf.wrap_mode(), crate::wrap::WrapMode::None) && buf.viewport.row > 0 {
-                let gutter_w: u16 = rb.gutters.iter().map(|g| g.width).sum();
-                let content_w = buf
-                    .wrap_column()
-                    .unwrap_or_else(|| buf.viewport.col.saturating_sub(gutter_w));
-                if content_w > 0 {
-                    let cfg = crate::wrap::WrapConfig {
-                        mode: buf.wrap_mode(),
-                        width: content_w,
-                        breakindent: buf.breakindent(),
-                    };
-                    // Build a generous cache (several screenfuls) so single-step
-                    // movements like `j` near the viewport bottom can step
-                    // onto the next visual row without falling off the map.
-                    let budget = ((buf.viewport.row as usize) * 4).max(200);
-                    let map = crate::wrap::WrapMap::build(buf, buf.file_pos().row, budget, cfg);
-                    rb.wrap = Some(map);
-                }
-            }
-            per_buf.push(rb);
-        }
+            minibuffer: self.bufs.minibuffer_index(),
+            last_key: self.keyevents.peek_back().map(|(ke, _)| ke.to_owned()),
+            lisp_env: lisp.env(),
+        });
 
         // `runtime::apply` discards a callee's local bindings, so the env
         // hasn't moved. Drop both guards before restoring lisp.
@@ -913,24 +713,7 @@ impl State {
         drop(_editor_guard);
         self.lisp = Some(lisp);
 
-        let error_msg = if error_chunks.is_empty() {
-            None
-        } else {
-            Some(error_chunks.join("; "))
-        };
-
-        (
-            RenderedFrame {
-                default_style,
-                theme,
-                top_extra,
-                status_left,
-                status_right,
-                bottom_extra,
-                per_buf,
-            },
-            error_msg,
-        )
+        result
     }
 }
 
@@ -985,7 +768,7 @@ mod tests {
         let mut s = test_state();
         s.eval_lisp(r#"(notify "hello")"#).unwrap();
         assert_eq!(
-            s.messages.iter().cloned().collect::<Vec<_>>(),
+            s.message_history().cloned().collect::<Vec<_>>(),
             vec!["hello".into()]
         );
         assert!(s.has_popup());
@@ -1029,7 +812,7 @@ mod tests {
         s.eval_lisp(r#"(notify "a")"#).unwrap();
         s.eval_lisp(r#"(notify "b")"#).unwrap();
         assert_eq!(
-            s.messages.iter().cloned().collect::<Vec<_>>(),
+            s.message_history().cloned().collect::<Vec<_>>(),
             vec!["a".into(), "b".into()]
         );
         assert_eq!(top_popup_text(&s), "b");

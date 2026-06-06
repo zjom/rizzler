@@ -44,6 +44,17 @@ impl WrapMode {
     }
 }
 
+/// Per-buffer wrap settings. Stored on `Buffer`; combined with the resolved
+/// content width to build a [`WrapConfig`] each render.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WrapSettings {
+    pub mode: WrapMode,
+    /// Fixed wrap column. `None` = wrap to the content area width.
+    pub column: Option<u16>,
+    /// Indent continuation rows under the original line's leading whitespace.
+    pub breakindent: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct WrapConfig {
     pub mode: WrapMode,

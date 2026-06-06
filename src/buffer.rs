@@ -1,10 +1,5 @@
 use ropey::{Rope, RopeSlice, iter::Lines};
-use std::{
-    io::{self},
-    path::Path,
-    rc::Rc,
-    str::FromStr,
-};
+use std::{path::Path, rc::Rc, str::FromStr};
 
 use crate::{
     mode::EditingMode,
@@ -24,26 +19,6 @@ pub enum BufferKind {
     /// Backing buffer of a [`crate::popup::Popup`]. Excluded from
     /// user-visible buffer cycling and from `BufDelete`.
     Popup,
-}
-
-/// Vim-style character class for word motions. `Word` matches `\w`
-/// (alphanumeric + underscore), `Punct` is any other non-whitespace char.
-/// In "big-word" mode (`W`/`B`/`E`/`gE`), `Word` and `Punct` are collapsed.
-#[derive(PartialEq, Eq, Copy, Clone)]
-enum CharClass {
-    Ws,
-    Word,
-    Punct,
-}
-
-fn char_class(c: char, big: bool) -> CharClass {
-    if c.is_whitespace() {
-        CharClass::Ws
-    } else if big || c.is_alphanumeric() || c == '_' {
-        CharClass::Word
-    } else {
-        CharClass::Punct
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
@@ -142,14 +117,10 @@ pub struct Buffer {
     /// `put-text-property` / `overlay-create`; consumed by the precompute
     /// pass to emit decorator ranges.
     pub(crate) props: PropStore,
-    /// Soft-wrap mode. `None` = no wrapping (default). When non-`None`, the
+    /// Soft-wrap configuration. When `wrap.mode` is non-`None`, the
     /// precompute pass builds a `WrapMap` for this buffer and the renderer
     /// emits one visual row per `WrapMap` entry.
-    pub(crate) wrap_mode: WrapMode,
-    /// Fixed wrap column. `None` = wrap to the content area width.
-    pub(crate) wrap_column: Option<u16>,
-    /// Indent continuation rows under the original line's leading whitespace.
-    pub(crate) breakindent: bool,
+    pub(crate) wrap: crate::wrap::WrapSettings,
     /// Cached visual-line layout from the most recent render. Movement code
     /// reads it to step in visual rows; `None` means "no recent render" or
     /// "wrap is off" — fall back to file-row movement.
@@ -229,27 +200,33 @@ impl Buffer {
     }
 
     pub fn wrap_mode(&self) -> WrapMode {
-        self.wrap_mode
+        self.wrap.mode
     }
 
     pub fn set_wrap_mode(&mut self, m: WrapMode) {
-        self.wrap_mode = m;
+        self.wrap.mode = m;
     }
 
     pub fn wrap_column(&self) -> Option<u16> {
-        self.wrap_column
+        self.wrap.column
     }
 
     pub fn set_wrap_column(&mut self, col: Option<u16>) {
-        self.wrap_column = col;
+        self.wrap.column = col;
     }
 
     pub fn breakindent(&self) -> bool {
-        self.breakindent
+        self.wrap.breakindent
     }
 
     pub fn set_breakindent(&mut self, b: bool) {
-        self.breakindent = b;
+        self.wrap.breakindent = b;
+    }
+
+    /// Drop the cached visual-line layout. Called by every edit so the next
+    /// render builds a fresh map.
+    pub(crate) fn invalidate_wrap_cache(&mut self) {
+        self.wrap_cache = None;
     }
 
     /// Most recent visual-line layout (from the last render's precompute
@@ -283,65 +260,7 @@ impl Buffer {
     /// and `VisualBlock` joins each row's column slice with `\n`.
     pub fn selected_text(&self) -> Option<String> {
         let anchor = self.selection_anchor?;
-        let cursor = self.abs_pos();
-
-        match self.mode {
-            EditingMode::Visual => {
-                let (start, end) = if (anchor.row, anchor.col) <= (cursor.row, cursor.col) {
-                    (anchor, cursor)
-                } else {
-                    (cursor, anchor)
-                };
-                let s = self.buf.line_to_char(start.row) + start.col;
-                let e = (self.buf.line_to_char(end.row) + end.col + 1).min(self.buf.len_chars());
-                Some(self.buf.slice(s..e).to_string())
-            }
-            EditingMode::VisualLine => {
-                let (lo, hi) = if anchor.row <= cursor.row {
-                    (anchor.row, cursor.row)
-                } else {
-                    (cursor.row, anchor.row)
-                };
-                let s = self.buf.line_to_char(lo);
-                let last_line = self.buf.len_lines().saturating_sub(1);
-                let e = if hi >= last_line {
-                    self.buf.len_chars()
-                } else {
-                    self.buf.line_to_char(hi + 1)
-                };
-                Some(self.buf.slice(s..e).to_string())
-            }
-            EditingMode::VisualBlock => {
-                let (lo_row, hi_row) = if anchor.row <= cursor.row {
-                    (anchor.row, cursor.row)
-                } else {
-                    (cursor.row, anchor.row)
-                };
-                let (lo_col, hi_col) = if anchor.col <= cursor.col {
-                    (anchor.col, cursor.col)
-                } else {
-                    (cursor.col, anchor.col)
-                };
-                let mut out = String::new();
-                for row in lo_row..=hi_row {
-                    let line = self.buf.line(row);
-                    let mut len = line.len_chars();
-                    if len > 0 && line.char(len - 1) == '\n' {
-                        len -= 1;
-                    }
-                    let s = lo_col.min(len);
-                    let e = (hi_col + 1).min(len);
-                    if s < e {
-                        out.push_str(&line.slice(s..e).to_string());
-                    }
-                    if row != hi_row {
-                        out.push('\n');
-                    }
-                }
-                Some(out)
-            }
-            _ => None,
-        }
+        crate::selection::selected_text(&self.buf, self.mode, anchor, self.abs_pos())
     }
 
     /// Cursor's absolute file position (file_pos + cursor_pos).
@@ -358,12 +277,12 @@ impl Buffer {
         self.buf = Rope::new();
         self.cursor_pos = Position::default();
         self.file_pos = Position::default();
-        self.wrap_cache = None;
+        self.invalidate_wrap_cache();
     }
 
     pub fn clear_with(&mut self, text: &str) {
         self.buf = Rope::from_str(text);
-        self.wrap_cache = None;
+        self.invalidate_wrap_cache();
         self.clamp_cursor();
     }
 
@@ -372,51 +291,6 @@ impl Buffer {
         self.buf.to_string()
     }
 
-    pub fn from_reader(r: impl io::Read) -> io::Result<Self> {
-        Ok(Self {
-            buf: Rope::from_reader(r)?,
-            ..Self::default()
-        })
-    }
-
-    /// Creates a new buffer with `fs_path` set to `path`.
-    /// Attempts to read from path, if fails, creates empty buffer
-    /// Never fails.
-    pub fn with_path(path: Rc<Path>) -> Self {
-        let mut buf = std::fs::File::open(&path)
-            .and_then(Buffer::from_reader)
-            .unwrap_or_default();
-        buf.fs_path = Some(path);
-        buf
-    }
-
-    /// Writes the contents of the buffer to disk
-    ///
-    /// Sets [Self::fs_path] to whichever path was sucessful.
-    /// Priority:
-    /// 1. `path` arg
-    /// 2. [Self::fs_path]
-    ///
-    /// Noop if both are None (returns Ok)
-    pub fn write(&mut self, path: Option<Rc<Path>>) -> io::Result<()> {
-        // if !self.permissions.contains(Permissions::WRITE) {
-        //     return Ok(());
-        // }
-        let resolved = path.or_else(|| self.fs_path.take());
-
-        if let Some(path) = resolved {
-            let f = std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .open(&path)?;
-
-            self.buf.write_to(f)?;
-            self.fs_path = Some(path)
-        }
-
-        Ok(())
-    }
     pub fn cursor_pos(&self) -> Position<u16> {
         self.cursor_pos
     }
@@ -436,7 +310,7 @@ impl Buffer {
     pub fn insert_char(&mut self, c: char) {
         let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;
         self.buf.insert_char(cidx, c);
-        self.wrap_cache = None;
+        self.invalidate_wrap_cache();
 
         if c == '\n' {
             self.cursor_pos.row = self.cursor_pos.row.saturating_add(1);
@@ -463,7 +337,7 @@ impl Buffer {
         };
 
         _ = self.buf.try_remove(cidx - 1..cidx);
-        self.wrap_cache = None;
+        self.invalidate_wrap_cache();
     }
 
     pub fn delete_char_at(&mut self, Position { col, row }: Position<usize>) {
@@ -480,7 +354,7 @@ impl Buffer {
         }
         let cidx = line_start + col;
         _ = self.buf.try_remove(cidx..cidx + 1);
-        self.wrap_cache = None;
+        self.invalidate_wrap_cache();
         self.clamp_cursor();
     }
 
@@ -509,26 +383,11 @@ impl Buffer {
             MK::Relative(Position { col: dx, row: dy }) => {
                 let abs = self.abs_pos();
 
-                // Visual-row movement when wrap is on. Locate the current
-                // visual row, step by `dy` visual rows, then map back to a
-                // file (row, col). Falls through to file-row movement when
-                // the step exits the cached range — the next render rebuilds
-                // the cache around the new scroll position.
+                // Wrap-aware vertical step when the cache has us covered;
+                // otherwise fall through to file-row math (the next render
+                // will rebuild the cache around the new scroll position).
                 let visual_target = if dy != 0 {
-                    self.wrap_cache.as_ref().and_then(|wrap| {
-                        let total = wrap.rows.len() as isize;
-                        if total == 0 {
-                            return None;
-                        }
-                        let (cur_idx, cur_vcol) = wrap.locate(abs.row, abs.col)?;
-                        let target_idx_i = cur_idx as isize + dy as isize;
-                        if target_idx_i < 0 || target_idx_i >= total {
-                            return None;
-                        }
-                        let (tgt_row, tgt_col) =
-                            wrap.file_pos_at(target_idx_i as usize, cur_vcol)?;
-                        Some((tgt_row, tgt_col))
-                    })
+                    crate::scroll::visual_step(self.wrap_cache.as_ref(), abs.row, abs.col, dy)
                 } else {
                     None
                 };
@@ -595,14 +454,14 @@ impl Buffer {
                 self.file_pos.row = 0;
                 self.cursor_pos.row = last_line as u16;
             }
-            MK::WordStart => self.word_back_start(false),
-            MK::WordForward => self.word_forward(false),
-            MK::WordEnd => self.word_end(false),
-            MK::WordBackEnd => self.word_back_end(false),
-            MK::BigWordStart => self.word_back_start(true),
-            MK::BigWordForward => self.word_forward(true),
-            MK::BigWordEnd => self.word_end(true),
-            MK::BigWordBackEnd => self.word_back_end(true),
+            MK::WordStart => self.apply_motion(crate::motions::word_back_start, false),
+            MK::WordForward => self.apply_motion(crate::motions::word_forward, false),
+            MK::WordEnd => self.apply_motion(crate::motions::word_end, false),
+            MK::WordBackEnd => self.apply_motion(crate::motions::word_back_end, false),
+            MK::BigWordStart => self.apply_motion(crate::motions::word_back_start, true),
+            MK::BigWordForward => self.apply_motion(crate::motions::word_forward, true),
+            MK::BigWordEnd => self.apply_motion(crate::motions::word_end, true),
+            MK::BigWordBackEnd => self.apply_motion(crate::motions::word_back_end, true),
             MK::Absolute(Position { row, col }) => {
                 self.file_pos = Position::new(col, row);
                 self.cursor_pos = Position::default();
@@ -625,53 +484,36 @@ impl Buffer {
 
     /// Move the cursor by half the viewport height and re-center the
     /// viewport on the new cursor row (matches vim's C-d / C-u + zz fusion).
-    ///
-    /// When wrap is on, "half" is counted in *visual* rows — half-page over
-    /// a tall wrapped paragraph stays inside the paragraph instead of
-    /// skipping past it. Falls back to file rows if the target visual row
-    /// isn't in the cache.
+    /// "Half" is counted in *visual* rows when wrap is on so half-page over
+    /// a tall wrapped paragraph stays inside the paragraph.
     fn half_page(&mut self, direction: i16) {
-        let vh = self.viewport.row as usize;
-        if vh == 0 {
+        if self.viewport.row == 0 {
             return;
         }
-        let half = ((vh / 2).max(1)) as isize * direction as isize;
-
         let abs = self.abs_pos();
-        // Extract the target file (row, col) from the wrap cache *first*,
-        // then drop the borrow before mutating self via `center_on`.
-        let visual_target = self.wrap_cache.as_ref().and_then(|wrap| {
-            let total = wrap.rows.len() as isize;
-            if total == 0 {
-                return None;
+        let (tgt_row, tgt_col) = crate::scroll::half_page_target(
+            self.viewport.row,
+            self.wrap_cache.as_ref(),
+            abs.row,
+            abs.col,
+            direction,
+        );
+        self.center_on(tgt_row);
+        if let Some(col) = tgt_col {
+            if col < self.file_pos.col {
+                self.file_pos.col = col;
             }
-            let (cur_idx, cur_vcol) = wrap.locate(abs.row, abs.col)?;
-            let target_idx_i = (cur_idx as isize + half).clamp(0, total - 1);
-            wrap.file_pos_at(target_idx_i as usize, cur_vcol)
-        });
-
-        if let Some((tgt_row, tgt_col)) = visual_target {
-            self.center_on(tgt_row);
-            if tgt_col < self.file_pos.col {
-                self.file_pos.col = tgt_col;
-            }
-            self.cursor_pos.col = (tgt_col - self.file_pos.col) as u16;
-            return;
+            self.cursor_pos.col = (col - self.file_pos.col) as u16;
         }
-
-        let abs_row = (abs.row as isize).saturating_add(half).max(0) as usize;
-        self.center_on(abs_row);
     }
 
     /// Place `abs_row` at the vertical middle of the viewport. clamp_cursor
     /// applies the EOF cap and per-line column clamping afterwards.
     fn center_on(&mut self, abs_row: usize) {
-        let vh = self.viewport.row as usize;
-        if vh == 0 {
+        if self.viewport.row == 0 {
             return;
         }
-        let center_offset = vh / 2;
-        self.file_pos.row = abs_row.saturating_sub(center_offset);
+        self.file_pos.row = crate::scroll::centered_top(self.viewport.row, abs_row);
         self.cursor_pos.row = (abs_row - self.file_pos.row) as u16;
     }
 
@@ -679,64 +521,18 @@ impl Buffer {
         let last_line = self.buf.len_lines().saturating_sub(1);
         let abs_row = (self.cursor_pos.row as usize + self.file_pos.row).min(last_line);
 
-        // Scroll vertically so the cursor stays inside the viewport. Skipped
-        // when viewport.row is 0 (e.g. tests without a known terminal size)
-        // so pre-scroll behaviour is preserved.
+        // Vertical scroll. Skipped when viewport.row is 0 (e.g. tests without
+        // a known terminal size) so pre-scroll behaviour is preserved.
         if self.viewport.row > 0 {
-            let vh = self.viewport.row as usize;
-
-            // Visual-row scroll down: when wrap is on, the "cursor below
-            // viewport" check counts visual rows from the top of the wrap
-            // cache (which starts at file_pos.row). Up-scroll stays
-            // file-row based because the cache doesn't cover anything
-            // above its start.
             let abs_col_now = self.cursor_pos.col as usize + self.file_pos.col;
-            let visual_scrolled = self.wrap_cache.as_ref().and_then(|wrap| {
-                let (cur_idx, _) = wrap.locate(abs_row, abs_col_now)?;
-                if cur_idx >= vh {
-                    let target_top_visual = cur_idx + 1 - vh;
-                    // The visual row at target_top_visual maps to some
-                    // file row. If it's a continuation (start_col != 0)
-                    // we can't put file_pos there — the next render
-                    // starts the new cache at a file-row boundary — so
-                    // round up to the next file row.
-                    let target_file_row = wrap
-                        .rows
-                        .get(target_top_visual)
-                        .map(|r| {
-                            if r.start_col == 0 {
-                                r.file_row
-                            } else {
-                                r.file_row + 1
-                            }
-                        })
-                        .unwrap_or(abs_row);
-                    // Never scroll past the cursor's own file row — that
-                    // would push the cursor off the top.
-                    Some(target_file_row.min(abs_row))
-                } else {
-                    Some(self.file_pos.row)
-                }
-            });
-
-            if let Some(new_top) = visual_scrolled {
-                self.file_pos.row = new_top;
-                // Up-scroll if cursor is above the new top.
-                if abs_row < self.file_pos.row {
-                    self.file_pos.row = abs_row;
-                }
-            } else {
-                if abs_row < self.file_pos.row {
-                    self.file_pos.row = abs_row;
-                } else if abs_row >= self.file_pos.row + vh {
-                    self.file_pos.row = abs_row + 1 - vh;
-                }
-                // Pin viewport so the last file line never sits above the
-                // viewport bottom — only correct when 1 file row = 1
-                // visual row, i.e. wrap is off.
-                let max_file_pos = (last_line + 1).saturating_sub(vh);
-                self.file_pos.row = self.file_pos.row.min(max_file_pos);
-            }
+            self.file_pos.row = crate::scroll::clamp_scroll_top(
+                self.viewport.row,
+                self.wrap_cache.as_ref(),
+                self.file_pos.row,
+                abs_row,
+                abs_col_now,
+                last_line,
+            );
         }
         self.cursor_pos.row = abs_row.saturating_sub(self.file_pos.row) as u16;
 
@@ -759,111 +555,13 @@ impl Buffer {
         self.cursor_pos.col = abs_col.saturating_sub(self.file_pos.col) as u16;
     }
 
-    /// Move to the start of the next vim word. `big = false` treats word
-    /// chars (`\w`) and punctuation as distinct word classes (vim `w`);
-    /// `big = true` treats every non-whitespace char the same (vim `W`).
-    /// Newlines act as whitespace in either flavor.
-    fn word_forward(&mut self, big: bool) {
-        let len = self.buf.len_chars();
-        if len == 0 {
-            return;
-        }
-        let abs = self.abs_pos();
-        let mut i = self.buf.line_to_char(abs.row) + abs.col;
-        if i >= len {
-            return;
-        }
-        let start_class = char_class(self.buf.char(i), big);
-        if start_class != CharClass::Ws {
-            while i < len && char_class(self.buf.char(i), big) == start_class {
-                i += 1;
-            }
-        }
-        while i < len && char_class(self.buf.char(i), big) == CharClass::Ws {
-            i += 1;
-        }
-        // No further word: park on the last char so clamp_cursor keeps it in-buffer.
-        if i >= len {
-            i = len - 1;
-        }
-        self.set_abs_char(i);
-    }
-
-    /// Move to the start of the word at or before the cursor (vim `b` / `B`).
-    fn word_back_start(&mut self, big: bool) {
+    /// Resolve `motion` against the rope from the cursor's current absolute
+    /// char index and move there. Pairs with [`crate::motions`] free fns.
+    fn apply_motion(&mut self, motion: fn(&Rope, usize, bool) -> usize, big: bool) {
         let abs = self.abs_pos();
         let cidx = self.buf.line_to_char(abs.row) + abs.col;
-        if cidx == 0 {
-            return;
-        }
-        let mut i = cidx - 1;
-        while i > 0 && char_class(self.buf.char(i), big) == CharClass::Ws {
-            i -= 1;
-        }
-        // Either i == 0 or i sits on a non-ws char. Walk back to the start of its class.
-        let cls = char_class(self.buf.char(i), big);
-        if cls != CharClass::Ws {
-            while i > 0 && char_class(self.buf.char(i - 1), big) == cls {
-                i -= 1;
-            }
-        }
-        self.set_abs_char(i);
-    }
-
-    /// Move to the end of the word at or after the cursor (vim `e` / `E`).
-    fn word_end(&mut self, big: bool) {
-        let len = self.buf.len_chars();
-        if len == 0 {
-            return;
-        }
-        let abs = self.abs_pos();
-        let cidx = self.buf.line_to_char(abs.row) + abs.col;
-        if cidx + 1 >= len {
-            return;
-        }
-        let mut i = cidx + 1;
-        while i < len && char_class(self.buf.char(i), big) == CharClass::Ws {
-            i += 1;
-        }
-        if i >= len {
-            self.set_abs_char(len - 1);
-            return;
-        }
-        let cls = char_class(self.buf.char(i), big);
-        while i + 1 < len && char_class(self.buf.char(i + 1), big) == cls {
-            i += 1;
-        }
-        self.set_abs_char(i);
-    }
-
-    /// Move to the end of the previous word (vim `ge` / `gE`).
-    fn word_back_end(&mut self, big: bool) {
-        let abs = self.abs_pos();
-        let cidx = self.buf.line_to_char(abs.row) + abs.col;
-        if cidx == 0 {
-            return;
-        }
-        let mut i = cidx;
-        let len = self.buf.len_chars();
-        // Step out of the current word if we're on one — `ge` from inside a
-        // word lands at the end of the *previous* word, not this one's start.
-        if i < len {
-            let cls = char_class(self.buf.char(i), big);
-            if cls != CharClass::Ws {
-                while i > 0 && char_class(self.buf.char(i - 1), big) == cls {
-                    i -= 1;
-                }
-            }
-        }
-        if i == 0 {
-            self.set_abs_char(0);
-            return;
-        }
-        i -= 1;
-        while i > 0 && char_class(self.buf.char(i), big) == CharClass::Ws {
-            i -= 1;
-        }
-        self.set_abs_char(i);
+        let new = motion(&self.buf, cidx, big);
+        self.set_abs_char(new);
     }
 
     /// Place the cursor at absolute char index `cidx` in the rope. Adjusts

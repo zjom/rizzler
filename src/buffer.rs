@@ -4,8 +4,10 @@ use std::{path::Path, rc::Rc, str::FromStr};
 use crate::{
     mode::EditingMode,
     position::Position,
-    props::PropStore,
-    wrap::{WrapMap, WrapMode},
+    ui::{
+        props::PropStore,
+        wrap::{WrapMap, WrapMode},
+    },
 };
 
 /// What sort of buffer this is. Drives default mode and gates operations like
@@ -16,7 +18,7 @@ pub enum BufferKind {
     #[default]
     File,
     Minibuffer,
-    /// Backing buffer of a [`crate::popup::Popup`]. Excluded from
+    /// Backing buffer of a [`crate::ui::popup::Popup`]. Excluded from
     /// user-visible buffer cycling and from `BufDelete`.
     Popup,
 }
@@ -120,7 +122,7 @@ pub struct Buffer {
     /// Soft-wrap configuration. When `wrap.mode` is non-`None`, the
     /// precompute pass builds a `WrapMap` for this buffer and the renderer
     /// emits one visual row per `WrapMap` entry.
-    pub(crate) wrap: crate::wrap::WrapSettings,
+    pub(crate) wrap: crate::ui::wrap::WrapSettings,
     /// Cached visual-line layout from the most recent render. Movement code
     /// reads it to step in visual rows; `None` means "no recent render" or
     /// "wrap is off" — fall back to file-row movement.
@@ -397,7 +399,7 @@ impl Buffer {
                 // otherwise fall through to file-row math (the next render
                 // will rebuild the cache around the new scroll position).
                 let visual_target = if dy != 0 {
-                    crate::scroll::visual_step(self.wrap_cache.as_ref(), abs.row, abs.col, dy)
+                    crate::ui::scroll::visual_step(self.wrap_cache.as_ref(), abs.row, abs.col, dy)
                 } else {
                     None
                 };
@@ -501,7 +503,7 @@ impl Buffer {
             return;
         }
         let abs = self.abs_pos();
-        let (tgt_row, tgt_col) = crate::scroll::half_page_target(
+        let (tgt_row, tgt_col) = crate::ui::scroll::half_page_target(
             self.viewport.row,
             self.wrap_cache.as_ref(),
             abs.row,
@@ -523,7 +525,7 @@ impl Buffer {
         if self.viewport.row == 0 {
             return;
         }
-        self.file_pos.row = crate::scroll::centered_top(self.viewport.row, abs_row);
+        self.file_pos.row = crate::ui::scroll::centered_top(self.viewport.row, abs_row);
         self.cursor_pos.row = (abs_row - self.file_pos.row) as u16;
     }
 
@@ -535,7 +537,7 @@ impl Buffer {
         // a known terminal size) so pre-scroll behaviour is preserved.
         if self.viewport.row > 0 {
             let abs_col_now = self.abs_col();
-            self.file_pos.row = crate::scroll::clamp_scroll_top(
+            self.file_pos.row = crate::ui::scroll::clamp_scroll_top(
                 self.viewport.row,
                 self.wrap_cache.as_ref(),
                 self.file_pos.row,

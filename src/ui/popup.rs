@@ -1,6 +1,6 @@
 //! Popup overlay primitive.
 //!
-//! A popup is just a [`crate::widget::Widget`] with extras: a [`Placement`]
+//! A popup is just a [`crate::ui::widget::Widget`] with extras: a [`Placement`]
 //! that re-resolves against the editor area each frame, a stack of keymap
 //! modes that capture input while the popup is on top, and a backing buffer
 //! that input routes to. All chrome (border + title + faces) lives in the
@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use ratatui::layout::Rect;
 
-use crate::widget::Widget;
+use crate::ui::widget::Widget;
 
 /// A length measurement that can be expressed either as a cell count or as a
 /// fraction of the available editor area. `Frac` is clamped to `[0.0, 1.0]`

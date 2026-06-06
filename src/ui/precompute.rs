@@ -21,12 +21,12 @@ use rizz::runtime::{self, Value};
 
 use crate::buffer::{Buffer, BufferKind};
 use crate::mode::EditingMode;
-use crate::render::{
+use crate::ui::render::{
     DecoratorRanges, RenderedBuffer, RenderedFrame, RenderedGutter, StyledRange,
 };
-use crate::styling::{Color, Style, Theme, ThemeCell, spans_from_value};
-use crate::widget::{Widget, parse_widget};
-use crate::window::WindowTree;
+use crate::ui::styling::{Color, Style, Theme, ThemeCell, spans_from_value};
+use crate::ui::widget::{Widget, parse_widget};
+use crate::ui::window::WindowTree;
 
 /// Inputs the precompute pass reads from `State`. All references are
 /// immutable; the only mutation it performs is on its own local builders.
@@ -112,7 +112,7 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
 
         // Buffer-attached text properties + overlays.
         if i != minibuffer {
-            let prop_ranges = crate::props::build_prop_ranges(buf, &theme_snap);
+            let prop_ranges = crate::ui::props::build_prop_ranges(buf, &theme_snap);
             if !prop_ranges.ranges.is_empty() {
                 rb.decorators.push(prop_ranges);
             }
@@ -120,19 +120,19 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
 
         // Soft-wrap layout. Built after gutters so the wrap width is the
         // actual content area (viewport - gutters).
-        if !matches!(buf.wrap_mode(), crate::wrap::WrapMode::None) && buf.viewport.row > 0 {
+        if !matches!(buf.wrap_mode(), crate::ui::wrap::WrapMode::None) && buf.viewport.row > 0 {
             let gutter_w: u16 = rb.gutter.as_ref().map(|g| g.width).unwrap_or(0);
             let content_w = buf
                 .wrap_column()
                 .unwrap_or_else(|| buf.viewport.col.saturating_sub(gutter_w));
             if content_w > 0 {
-                let cfg = crate::wrap::WrapConfig {
+                let cfg = crate::ui::wrap::WrapConfig {
                     mode: buf.wrap_mode(),
                     width: content_w,
                     breakindent: buf.breakindent(),
                 };
                 let budget = ((buf.viewport.row as usize) * 4).max(200);
-                let map = crate::wrap::WrapMap::build(buf, buf.file_pos().row, budget, cfg);
+                let map = crate::ui::wrap::WrapMap::build(buf, buf.file_pos().row, budget, cfg);
                 rb.wrap = Some(map);
             }
         }
@@ -166,7 +166,7 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
 /// (or when one errors out). Renders editor windows + minibuffer with no
 /// gutter, no status line.
 fn default_layout() -> Widget {
-    use crate::widget::{ConstraintKind, StackDir};
+    use crate::ui::widget::{ConstraintKind, StackDir};
     Widget::Stack {
         dir: StackDir::Vertical,
         children: vec![

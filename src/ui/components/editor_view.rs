@@ -9,9 +9,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::buffer::Buffer;
-use crate::render::{Display, RenderedBuffer, StyledRange};
-use crate::styling::style_to_ratatui;
-use crate::wrap::WrapMap;
+use crate::ui::render::{Display, RenderedBuffer, StyledRange};
+use crate::ui::styling::style_to_ratatui;
+use crate::ui::wrap::WrapMap;
 
 pub struct EditorView;
 
@@ -130,7 +130,7 @@ impl EditorView {
 fn apply_decorators(
     lnum: usize,
     text: String,
-    decorators: &[crate::render::DecoratorRanges],
+    decorators: &[crate::ui::render::DecoratorRanges],
     area_width: u16,
 ) -> Line<'static> {
     let mut spans = vec![Span::raw(text)];
@@ -156,7 +156,7 @@ fn apply_decorators_segment(
     segment_start: usize,
     indent: u16,
     text: String,
-    decorators: &[crate::render::DecoratorRanges],
+    decorators: &[crate::ui::render::DecoratorRanges],
     area_width: u16,
 ) -> Line<'static> {
     let segment_len = text.chars().count();
@@ -183,7 +183,7 @@ fn apply_decorators_segment(
             let clipped_end = r_end
                 .saturating_sub(segment_start)
                 .min(segment_len.max(r_end));
-            let clipped = crate::render::StyledRange {
+            let clipped = crate::ui::render::StyledRange {
                 row: r.row,
                 col: clipped_col,
                 len: clipped_end.saturating_sub(clipped_col),

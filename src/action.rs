@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
-use crate::window::{FocusDir, SplitDir};
+use crate::ui::window::{FocusDir, SplitDir};
 use rizz::runtime::Value;
 
 /// Every input source (keymap, command line, scripted automation) ultimately

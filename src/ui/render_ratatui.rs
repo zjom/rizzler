@@ -10,12 +10,14 @@ use ratatui::{
 };
 
 use crate::{
-    components::{EditorView, MinibufferLine},
     mode::EditingMode,
-    popup::{BorderStyle, Popup},
-    render::{CursorStyle, RenderedFrame, Renderer, StateSnapshot},
-    styling::{Style, Theme, style_to_ratatui},
-    widget::{StackDir, Widget},
+    ui::{
+        components::{EditorView, MinibufferLine},
+        popup::{BorderStyle, Popup},
+        render::{CursorStyle, RenderedFrame, Renderer, StateSnapshot},
+        styling::{Style, Theme, style_to_ratatui},
+        widget::{StackDir, Widget},
+    },
 };
 
 /// Per-walk context. `popup` is `Some` when the walk is inside a popup's

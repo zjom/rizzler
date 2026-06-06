@@ -1,5 +1,5 @@
 use crate::keymap::KeyEvent;
-use crate::wrap::WrapMode;
+use crate::ui::wrap::WrapMode;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -20,12 +20,14 @@ use crate::{
     keymap::KeymapRegistry,
     lisp::{EditorGuard, LispRuntime, init_script_path},
     mode::EditingMode,
-    popup::{Placement, Popup, PopupStack},
     position::Position,
-    render::{CursorStyle, Renderer, StateSnapshot},
-    render_ratatui::RatatuiRenderer,
-    styling::ThemeCell,
-    window::{SplitDir, WindowTree},
+    ui::{
+        popup::{Placement, Popup, PopupStack},
+        render::{CursorStyle, Renderer, StateSnapshot},
+        render_ratatui::RatatuiRenderer,
+        styling::ThemeCell,
+        window::{SplitDir, WindowTree},
+    },
 };
 
 /// Bottom-of-screen reservation: one row for the status line, one for the
@@ -66,7 +68,7 @@ impl Config {
 pub struct PopupSpec {
     /// The widget tree drawn inside the popup's placement rect. Any chrome
     /// (block/border/title/face) lives here.
-    pub widget: crate::widget::Widget,
+    pub widget: crate::ui::widget::Widget,
     pub initial_text: Option<String>,
     pub placement: Placement,
     /// Keymap mode layers to push onto the popup's buffer. Ordered
@@ -81,7 +83,7 @@ pub struct PopupSpec {
 }
 
 impl PopupSpec {
-    pub fn new(widget: crate::widget::Widget) -> Self {
+    pub fn new(widget: crate::ui::widget::Widget) -> Self {
         Self {
             widget,
             initial_text: None,
@@ -242,7 +244,7 @@ impl State {
         &mut self.bufs[i]
     }
 
-    /// Accessor for the [`crate::styling::Theme`] cell. Used by `face-define`
+    /// Accessor for the [`crate::ui::styling::Theme`] cell. Used by `face-define`
     /// / `face-of` builtins.
     pub(crate) fn theme(&self) -> &ThemeCell {
         &self.theme
@@ -440,7 +442,7 @@ impl State {
             .iter()
             .map(|p| {
                 let outer = p.placement.resolve(editor_area);
-                let inner = crate::popup::buffer_view_rect(&p.widget, outer, p.bufno);
+                let inner = crate::ui::popup::buffer_view_rect(&p.widget, outer, p.bufno);
                 (p.bufno, Position::new(inner.width, inner.height))
             })
             .collect();
@@ -710,13 +712,13 @@ impl State {
     /// the first few region failures) to surface to the minibuffer.
     ///
     /// Owns the lisp take/restore + guard installation; the actual frame
-    /// assembly is delegated to [`crate::precompute::compute`].
-    pub(crate) fn precompute_frame(&mut self) -> (crate::render::RenderedFrame, Option<String>) {
+    /// assembly is delegated to [`crate::ui::precompute::compute`].
+    pub(crate) fn precompute_frame(&mut self) -> (crate::ui::render::RenderedFrame, Option<String>) {
         let lisp = self.lisp.take().expect("recursive render is not supported");
         let _editor_guard = crate::lisp::EditorGuard::new(self);
         let _phase_guard = crate::lisp::RenderPhaseGuard::enter();
 
-        let result = crate::precompute::compute(crate::precompute::PrecomputeInput {
+        let result = crate::ui::precompute::compute(crate::ui::precompute::PrecomputeInput {
             bufs: self.bufs.as_slice(),
             windows: &self.windows,
             frame_fn: self.frame_fn.as_ref(),
@@ -745,7 +747,7 @@ pub(crate) mod test_support {
         fn render(
             &mut self,
             _snap: StateSnapshot<'_>,
-            _frame: &crate::render::RenderedFrame,
+            _frame: &crate::ui::render::RenderedFrame,
         ) -> io::Result<()> {
             Ok(())
         }

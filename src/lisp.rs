@@ -23,13 +23,13 @@ use crate::action::Action;
 use crate::buffer::MoveKind;
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
-use crate::popup::{Dim, Placement, Side};
+use crate::ui::popup::{Dim, Placement, Side};
 use crate::position::Position;
 use crate::state::{PopupSpec, State};
-use crate::styling::{normalize_style_value, rgb_value, style_from_value, style_to_value};
-use crate::widget::parse_widget;
-use crate::window::{FocusDir, SplitDir};
-use crate::wrap::WrapMode;
+use crate::ui::styling::{normalize_style_value, rgb_value, style_from_value, style_to_value};
+use crate::ui::widget::parse_widget;
+use crate::ui::window::{FocusDir, SplitDir};
+use crate::ui::wrap::WrapMode;
 
 // ---------------------------------------------------------------------------
 // Editor bridge: thread-local pointer to the live `State`.
@@ -600,7 +600,7 @@ fn builtins() -> Env {
     b!("buffer-wrap", 0, |args, env| {
         if let Some(arg) = args.first() {
             let sym = as_ident_or_str(arg, "buffer-wrap")?;
-            let m = crate::wrap::WrapMode::from_str(&sym)
+            let m = crate::ui::wrap::WrapMode::from_str(&sym)
                 .ok_or_else(|| unknown_variant("buffer-wrap", &sym))?;
             with_editor_mut(|st| st.focused_buf_mut().set_wrap_mode(m));
             ok_unit(env)
@@ -694,7 +694,7 @@ fn builtins() -> Env {
     // The user's frame layout is one big function registered via
     // `(set-frame (fn () <widget-tree>))`. Each frame the precompute pass
     // calls it and parses the returned value into a `Widget` tree (see
-    // `crate::widget::Widget`).
+    // `crate::ui::widget::Widget`).
     //
     // The constructors below return tagged maps — that's how the parser
     // recognizes them. Inline maps without a recognized `"type"` tag are
@@ -884,7 +884,7 @@ fn builtins() -> Env {
         with_editor_mut(|st| {
             st.focused_buf_mut()
                 .props_mut()
-                .push_text_property(crate::props::PropEntry {
+                .push_text_property(crate::ui::props::PropEntry {
                     start: Position::new(start_col, start_row),
                     end: Position::new(end_col, end_row),
                     face: Some(face),
@@ -911,7 +911,7 @@ fn builtins() -> Env {
         let id = with_editor_mut(|st| {
             st.focused_buf_mut()
                 .props_mut()
-                .create_overlay(crate::props::PropEntry {
+                .create_overlay(crate::ui::props::PropEntry {
                     start: Position::new(start_col, start_row),
                     end: Position::new(end_col, end_row),
                     face: Some(face),
@@ -932,7 +932,7 @@ fn builtins() -> Env {
     //                      {"space": N}                    → replace with N spaces
     //                      ()                              → clear any display
     b!("overlay-put", 3, |args, env| {
-        let id = crate::props::OverlayId(as_int(&args[0], "overlay-put")? as u64);
+        let id = crate::ui::props::OverlayId(as_int(&args[0], "overlay-put")? as u64);
         let key = as_ident_or_str(&args[1], "overlay-put")?;
         // Decode the value up-front so we can apply it under a single
         // `with_editor_mut` instead of one per branch.
@@ -940,7 +940,7 @@ fn builtins() -> Env {
             Face(Rc<Value>),
             Priority(i64),
             PadToWidth(bool),
-            Display(Option<crate::render::Display>),
+            Display(Option<crate::ui::render::Display>),
         }
         let update = match key.as_ref() {
             "face" => Update::Face(args[2].clone()),
@@ -968,7 +968,7 @@ fn builtins() -> Env {
         ok_unit(env)
     });
     b!("overlay-delete", 1, |args, env| {
-        let id = crate::props::OverlayId(as_int(&args[0], "overlay-delete")? as u64);
+        let id = crate::ui::props::OverlayId(as_int(&args[0], "overlay-delete")? as u64);
         with_editor_mut(|st| {
             st.focused_buf_mut().props_mut().delete_overlay(id);
         });
@@ -1212,15 +1212,15 @@ fn as_usize(v: &Rc<Value>, name: &str) -> Result<usize, RuntimeError> {
     })
 }
 
-/// Parse a value into an optional [`crate::render::Display`]. Recognized
+/// Parse a value into an optional [`crate::ui::render::Display`]. Recognized
 /// shapes:
 ///
 /// * `()` — clear any display (returns `None`)
 /// * `Str` / `Ident` — display the literal text
 /// * `{"text": "..."}` — same as a bare string
 /// * `{"space": N}` — N blank cells
-fn display_from_value(v: &Rc<Value>) -> Result<Option<crate::render::Display>, RuntimeError> {
-    use crate::render::Display;
+fn display_from_value(v: &Rc<Value>) -> Result<Option<crate::ui::render::Display>, RuntimeError> {
+    use crate::ui::render::Display;
     match &**v {
         Value::Unit => Ok(None),
         Value::Str(s) | Value::Ident(s) => Ok(Some(Display::String(s.clone()))),
@@ -1619,8 +1619,8 @@ mod tests {
     fn rgb_builtin_round_trips_through_color_from_value() {
         let mut s = test_state();
         let v = s.eval_lisp("(rgb 60 90 130)").unwrap();
-        let c = crate::styling::color_from_value(&v).unwrap();
-        assert_eq!(c, Some(crate::styling::Color::Rgb(60, 90, 130)));
+        let c = crate::ui::styling::color_from_value(&v).unwrap();
+        assert_eq!(c, Some(crate::ui::styling::Color::Rgb(60, 90, 130)));
     }
 
     #[test]
@@ -1756,7 +1756,7 @@ mod tests {
             .find(|r| r.row == 0 && r.col == 2 && r.len == 6)
             .and_then(|r| r.display.clone());
         match got_display {
-            Some(crate::render::Display::String(s)) => assert_eq!(&*s, "..."),
+            Some(crate::ui::render::Display::String(s)) => assert_eq!(&*s, "..."),
             other => panic!("expected Display::String(...), got {other:?}"),
         }
     }

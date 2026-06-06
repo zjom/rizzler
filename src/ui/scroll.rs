@@ -6,7 +6,7 @@
 //! The buffer still owns the column clamp and the EOF row cap; everything
 //! visual-row aware lives here.
 
-use crate::wrap::WrapMap;
+use crate::ui::wrap::WrapMap;
 
 /// Top file row that puts `abs_row` at the vertical middle of a `viewport_h`
 /// viewport. Saturates at 0 near the top of the buffer.

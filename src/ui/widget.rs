@@ -30,8 +30,8 @@ use ratatui::layout::{Alignment, Constraint};
 use ratatui::text::Span;
 use rizz::runtime::{RuntimeError, Value};
 
-use crate::popup::BorderStyle;
-use crate::styling::{Theme, spans_from_value};
+use crate::ui::popup::BorderStyle;
+use crate::ui::styling::{Theme, spans_from_value};
 
 #[derive(Clone, Debug)]
 pub enum Widget {

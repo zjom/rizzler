@@ -12,7 +12,7 @@
 //! wins.
 //!
 //! Both kinds get walked once per frame in [`build_prop_ranges`] and emitted
-//! as [`crate::render::StyledRange`]s the renderer applies on top of the
+//! as [`crate::ui::render::StyledRange`]s the renderer applies on top of the
 //! base content.
 
 use std::rc::Rc;
@@ -21,8 +21,8 @@ use rizz::runtime::Value;
 
 use crate::buffer::Buffer;
 use crate::position::Position;
-use crate::render::{DecoratorRanges, Display, StyledRange};
-use crate::styling::{Theme, style_from_value};
+use crate::ui::render::{DecoratorRanges, Display, StyledRange};
+use crate::ui::styling::{Theme, style_from_value};
 
 // ---------------------------------------------------------------------------
 // Types

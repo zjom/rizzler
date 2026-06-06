@@ -5,11 +5,13 @@ use ratatui::text::Line;
 use crate::{
     buffer::Buffer,
     keymap::KeyEvent,
-    popup::Popup,
-    styling::{Style, Theme},
-    widget::Widget,
-    window::WindowTree,
-    wrap::WrapMap,
+    ui::{
+        popup::Popup,
+        styling::{Style, Theme},
+        widget::Widget,
+        window::WindowTree,
+        wrap::WrapMap,
+    },
 };
 
 /// Read-only view of the editor passed to renderers. Decoupling this from

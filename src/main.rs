@@ -2,27 +2,16 @@ mod action;
 mod buffer;
 mod buffer_io;
 mod buffer_list;
-mod components;
 mod count_prefix;
 mod journal;
 mod keymap;
 mod lisp;
 mod mode;
 mod motions;
-mod popup;
 mod position;
-mod precompute;
-mod props;
-mod render;
-mod render_ratatui;
-mod scroll;
 mod selection;
 mod state;
-mod styling;
-mod terminal;
-mod widget;
-mod window;
-mod wrap;
+mod ui;
 
 use std::{io, path::PathBuf, time::Duration};
 
@@ -30,11 +19,11 @@ use crossterm::event::{self, Event};
 
 use crate::{
     state::{Config, State},
-    terminal::TerminalGuard,
+    ui::terminal::TerminalGuard,
 };
 
 fn main() -> io::Result<()> {
-    terminal::install_panic_hook();
+    ui::terminal::install_panic_hook();
     let _guard = TerminalGuard::new()?;
     let path = std::env::args_os().nth(1).map(PathBuf::from);
 

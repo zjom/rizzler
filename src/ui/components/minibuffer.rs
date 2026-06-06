@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::render::StateSnapshot;
+use crate::ui::render::StateSnapshot;
 
 /// Single-row strip at the bottom of the frame. Renders the minibuffer's
 /// rope text and owns the cursor whenever focus is on the minibuffer.

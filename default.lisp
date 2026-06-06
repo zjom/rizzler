@@ -36,11 +36,18 @@
 (map 'normal "<right>" '(move-cursor 'right))
 
 (map 'normal "0"      '(move-cursor 'line-start))
+(map 'normal "^"      '(move-cursor 'line-first-non-blank))
 (map 'normal "$"      '(move-cursor 'line-end))
 (map 'normal "gg"     '(move-cursor 'file-start))
 (map 'normal "G"      '(move-cursor 'file-end))
 (map 'normal "b"      '(move-cursor 'word-start))
+(map 'normal "B"      '(move-cursor 'word-start))
+(map 'normal "w"      '(move-cursor 'word-forward))
+(map 'normal "W"      '(move-cursor 'word-forward))
 (map 'normal "e"      '(move-cursor 'word-end))
+(map 'normal "E"      '(move-cursor 'word-end))
+(map 'normal "ge"     '(move-cursor 'word-back-end))
+(map 'normal "gE"     '(move-cursor 'word-back-end))
 (map 'normal "<c-d>"  '(move-cursor 'half-page-down))
 (map 'normal "<c-u>"  '(move-cursor 'half-page-up))
 (map 'normal "zz"     '(move-cursor 'center))
@@ -79,11 +86,18 @@
       (map mode "l"        '(move-cursor 'right))
       (map mode "<right>"  '(move-cursor 'right))
       (map mode "0"        '(move-cursor 'line-start))
+      (map mode "^"        '(move-cursor 'line-first-non-blank))
       (map mode "$"        '(move-cursor 'line-end))
       (map mode "gg"       '(move-cursor 'file-start))
       (map mode "G"        '(move-cursor 'file-end))
       (map mode "b"        '(move-cursor 'word-start))
+      (map mode "B"        '(move-cursor 'word-start))
+      (map mode "w"        '(move-cursor 'word-forward))
+      (map mode "W"        '(move-cursor 'word-forward))
       (map mode "e"        '(move-cursor 'word-end))
+      (map mode "E"        '(move-cursor 'word-end))
+      (map mode "ge"       '(move-cursor 'word-back-end))
+      (map mode "gE"       '(move-cursor 'word-back-end))
       (map mode "<c-d>"    '(move-cursor 'half-page-down))
       (map mode "<c-u>"    '(move-cursor 'half-page-up))
       (map mode "zz"       '(move-cursor 'center))))
@@ -252,7 +266,7 @@
 ;; Bind the explorer to `<space>f`. Motion and dismiss keys are inherited
 ;; from the `popup` layer beneath `popup.files`, so only the explorer-
 ;; specific actions (open + parent-dir) need to be bound here.
-(keymap-set 'normal "<space>f" '(popup-files))
+(keymap-set 'normal "<c-e>" '(popup-files))
 
 ;; `<enter>` reads the current line out of the popup buffer (via
 ;; `selected-text`/`buf-text`) and asks the editor to edit it. The popup
@@ -303,3 +317,5 @@
           ()
         ))
      ))
+
+(map 'popup.files "<c-e>" '(popup-close))

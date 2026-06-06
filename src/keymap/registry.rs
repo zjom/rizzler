@@ -22,6 +22,13 @@ impl KeymapRegistry {
             prev_mode: None,
         }
     }
+
+    /// True when no key sequence is currently in flight. Callers use this to
+    /// decide whether an incoming digit can be claimed as a count prefix or
+    /// whether it might continue an existing binding (e.g. `g3`).
+    pub fn is_idle(&self) -> bool {
+        self.cur.is_none()
+    }
     /// Resolve `key` against the supplied layered modes. `modes` is ordered
     /// most-specific first — the first mode whose trie produces an
     /// `Action` or `Descend` wins. An in-progress sequence is only

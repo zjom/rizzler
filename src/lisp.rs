@@ -229,21 +229,24 @@ fn builtins() -> Env {
     b!("move-cursor", 1, |args, env| {
         let sym = as_ident(&args[0], "move-cursor")?;
         let mk = MoveKind::from_str(&sym).map_err(|_| unknown_variant("move-cursor", &sym))?;
-
-        apply(Action::MoveCursor(mk))?;
+        // Pick up the typed numeric prefix (`3` in `3j`) — State drains it
+        // automatically after the resolved key sequence finishes.
+        let count = with_editor_mut(|st| st.pending_count_or_one());
+        apply(Action::MoveCursor { kind: mk, count })?;
         ok_unit(env)
     });
     b!("move-cursor-rel", 2, |args, env| {
         let dx = as_int(&args[0], "move-cursor-rel")?;
         let dy = as_int(&args[1], "move-cursor-rel")?;
         let mk = MoveKind::Relative(Position::new(dx as i16, dy as i16));
-        apply(Action::MoveCursor(mk))?;
+        let count = with_editor_mut(|st| st.pending_count_or_one());
+        apply(Action::MoveCursor { kind: mk, count })?;
         ok_unit(env)
     });
     b!("line", 1, |args, env| {
         let n = as_int(&args[0], "line")?;
         let mk = MoveKind::LineNum(n.max(0) as usize);
-        apply(Action::MoveCursor(mk))?;
+        apply(Action::MoveCursor { kind: mk, count: 1 })?;
         ok_unit(env)
     });
 

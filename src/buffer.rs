@@ -29,11 +29,19 @@ pub enum BufferKind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum MoveKind {
     LineStart,
+    /// First non-blank character on the current line (vim `^`).
+    LineFirstNonBlank,
     LineEnd,
     FileStart,
     FileEnd,
+    /// Vim `b` — start of the word at/before the cursor.
     WordStart,
+    /// Vim `w` — start of the next word on the current line.
+    WordForward,
+    /// Vim `e` — end of the word at/after the cursor.
     WordEnd,
+    /// Vim `ge` — end of the previous word on the current line.
+    WordBackEnd,
     Relative(Position<i16>),   // up, down, left, right of cursor
     Absolute(Position<usize>), // position in file
     LineNum(usize),
@@ -53,11 +61,14 @@ impl FromStr for MoveKind {
             "left" => M::Relative(Position::new(-1, 0)),
             "right" => M::Relative(Position::new(1, 0)),
             "line-start" => M::LineStart,
+            "line-first-non-blank" => M::LineFirstNonBlank,
             "line-end" => M::LineEnd,
             "file-start" => M::FileStart,
             "file-end" => M::FileEnd,
             "word-start" => M::WordStart,
+            "word-forward" => M::WordForward,
             "word-end" => M::WordEnd,
+            "word-back-end" => M::WordBackEnd,
             "half-page-down" => M::HalfPageDown,
             "half-page-up" => M::HalfPageUp,
             "center" => M::Center,
@@ -433,6 +444,25 @@ impl Buffer {
         self.clamp_cursor();
     }
 
+    /// Apply `m` `count` times. For [`MoveKind::Relative`] the count
+    /// multiplies the delta in one shot; for every other variant we just
+    /// loop. `count == 0` is treated as 1 so a bare bind without a numeric
+    /// prefix still works.
+    pub fn move_cursor_n(&mut self, m: MoveKind, count: u32) {
+        let n = count.max(1);
+        if let MoveKind::Relative(Position { col, row }) = m {
+            let scaled = MoveKind::Relative(Position::new(
+                (col as i32).saturating_mul(n as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                (row as i32).saturating_mul(n as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+            ));
+            self.move_cursor(scaled);
+            return;
+        }
+        for _ in 0..n {
+            self.move_cursor(m);
+        }
+    }
+
     pub fn move_cursor(&mut self, m: MoveKind) {
         use MoveKind as MK;
         match m {
@@ -500,6 +530,21 @@ impl Buffer {
             MK::LineStart => {
                 self.cursor_pos.col = 0;
             }
+            MK::LineFirstNonBlank => {
+                let line = self.cur_line();
+                let len = line.len_chars();
+                let effective = if len > 0 && line.char(len - 1) == '\n' {
+                    len - 1
+                } else {
+                    len
+                };
+                let mut i = 0;
+                while i < effective && line.char(i).is_ascii_whitespace() {
+                    i += 1;
+                }
+                // All-blank line: stay at col 0, matching vim's `^`.
+                self.cursor_pos.col = if i == effective { 0 } else { i as u16 };
+            }
             MK::LineEnd => self.cursor_pos.col = self.cur_line().len_chars() as u16,
             MK::FileStart => {
                 self.cursor_pos = Position::default();
@@ -542,6 +587,63 @@ impl Buffer {
                     }
                     self.cursor_pos.col = i as u16;
                 }
+            }
+            MK::WordForward => {
+                let line = self.cur_line();
+                let len = line.len_chars();
+                let effective_len = if len > 0 && line.char(len - 1) == '\n' {
+                    len - 1
+                } else {
+                    len
+                };
+                let mut i = self.cursor_pos.col as usize;
+                // Step past the current word (non-whitespace), then past any
+                // whitespace, landing on the first char of the next word.
+                while i < effective_len && !line.char(i).is_ascii_whitespace() {
+                    i += 1;
+                }
+                while i < effective_len && line.char(i).is_ascii_whitespace() {
+                    i += 1;
+                }
+                self.cursor_pos.col = i as u16;
+            }
+            MK::WordBackEnd => {
+                // End of the previous word: walk the line up to the cursor and
+                // remember the position of the last non-whitespace char that
+                // closes a word. If the cursor itself sits inside that word,
+                // skip it and report the prior word's end instead.
+                let line = self.cur_line();
+                let len = line.len_chars();
+                let effective_len = if len > 0 && line.char(len - 1) == '\n' {
+                    len - 1
+                } else {
+                    len
+                };
+                let cur = self.cursor_pos.col as usize;
+                let mut last_word_end: Option<usize> = None;
+                let mut prev_word_end: Option<usize> = None;
+                let mut run_end: Option<usize> = None;
+                for i in 0..effective_len.min(cur + 1) {
+                    if !line.char(i).is_ascii_whitespace() {
+                        run_end = Some(i);
+                    } else if let Some(end) = run_end.take() {
+                        prev_word_end = last_word_end;
+                        last_word_end = Some(end);
+                    }
+                }
+                // Trailing word with no whitespace after it: close it out.
+                if let Some(end) = run_end {
+                    prev_word_end = last_word_end;
+                    last_word_end = Some(end);
+                }
+                let cur_in_word =
+                    cur < effective_len && !line.char(cur).is_ascii_whitespace();
+                let target = if cur_in_word {
+                    prev_word_end
+                } else {
+                    last_word_end
+                };
+                self.cursor_pos.col = target.unwrap_or(0) as u16;
             }
             MK::Absolute(Position { row, col }) => {
                 self.file_pos = Position::new(col, row);
@@ -940,6 +1042,101 @@ mod tests {
         s.cursor_pos = Position::<u16>::new(6, 0); // 'w' of "world"
         s.move_cursor(MoveKind::WordStart);
         assert_eq!(s.cursor_pos.col, 0); // 'h' of "hello"
+    }
+
+    // ---- move_cursor: WordForward (w) ---------------------------------
+
+    #[test]
+    fn word_forward_jumps_to_next_word_start() {
+        let mut s = mk("hello world foo");
+        s.cursor_pos = Position::<u16>::new(0, 0);
+        s.move_cursor(MoveKind::WordForward);
+        assert_eq!(s.cursor_pos.col, 6); // 'w' of "world"
+    }
+
+    #[test]
+    fn word_forward_from_middle_of_word_lands_on_next_word() {
+        let mut s = mk("hello world foo");
+        s.cursor_pos = Position::<u16>::new(2, 0); // 'l' of "hello"
+        s.move_cursor(MoveKind::WordForward);
+        assert_eq!(s.cursor_pos.col, 6); // 'w' of "world"
+    }
+
+    #[test]
+    fn word_forward_skips_over_multiple_spaces() {
+        let mut s = mk("a    b");
+        s.cursor_pos = Position::<u16>::new(0, 0);
+        s.move_cursor(MoveKind::WordForward);
+        assert_eq!(s.cursor_pos.col, 5); // 'b'
+    }
+
+    // ---- move_cursor: WordBackEnd (ge) --------------------------------
+
+    #[test]
+    fn word_back_end_from_inside_word_lands_on_prev_word_end() {
+        let mut s = mk("hello world foo");
+        s.cursor_pos = Position::<u16>::new(8, 0); // 'r' of "world"
+        s.move_cursor(MoveKind::WordBackEnd);
+        assert_eq!(s.cursor_pos.col, 4); // 'o' of "hello"
+    }
+
+    #[test]
+    fn word_back_end_from_whitespace_lands_on_prev_word_end() {
+        let mut s = mk("hello world");
+        s.cursor_pos = Position::<u16>::new(5, 0); // space
+        s.move_cursor(MoveKind::WordBackEnd);
+        assert_eq!(s.cursor_pos.col, 4); // 'o' of "hello"
+    }
+
+    #[test]
+    fn word_back_end_at_line_start_stays_put() {
+        let mut s = mk("hello");
+        s.cursor_pos = Position::<u16>::new(0, 0);
+        s.move_cursor(MoveKind::WordBackEnd);
+        assert_eq!(s.cursor_pos.col, 0);
+    }
+
+    // ---- move_cursor: LineFirstNonBlank (^) ---------------------------
+
+    #[test]
+    fn line_first_non_blank_skips_leading_whitespace() {
+        let mut s = mk("    hello");
+        s.cursor_pos = Position::<u16>::new(7, 0);
+        s.move_cursor(MoveKind::LineFirstNonBlank);
+        assert_eq!(s.cursor_pos.col, 4); // 'h'
+    }
+
+    #[test]
+    fn line_first_non_blank_on_blank_line_stays_at_zero() {
+        let mut s = mk("   \nabc");
+        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.move_cursor(MoveKind::LineFirstNonBlank);
+        assert_eq!(s.cursor_pos.col, 0);
+    }
+
+    // ---- move_cursor_n (count) ----------------------------------------
+
+    #[test]
+    fn move_cursor_n_scales_relative_delta() {
+        let mut s = mk("a\nb\nc\nd\ne");
+        s.cursor_pos = Position::<u16>::new(0, 0);
+        s.move_cursor_n(MoveKind::Relative(Position::new(0, 1)), 3);
+        assert_eq!(cur_row(&s), 3);
+    }
+
+    #[test]
+    fn move_cursor_n_loops_for_non_relative_kinds() {
+        let mut s = mk("aaa bbb ccc ddd");
+        s.cursor_pos = Position::<u16>::new(0, 0);
+        s.move_cursor_n(MoveKind::WordForward, 2);
+        assert_eq!(s.cursor_pos.col, 8); // 'c' of "ccc"
+    }
+
+    #[test]
+    fn move_cursor_n_count_zero_runs_once() {
+        let mut s = mk("a\nb\nc");
+        s.move_cursor_n(MoveKind::Relative(Position::new(0, 1)), 0);
+        assert_eq!(cur_row(&s), 1);
     }
 
     // ---- move_cursor: Relative / Absolute -----------------------------

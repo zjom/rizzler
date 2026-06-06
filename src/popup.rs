@@ -1,30 +1,17 @@
 //! Popup overlay primitive.
 //!
-//! A [`Popup`] is conceptually a buffer drawn on top of the editor area,
-//! with chrome (border + title), a placement that re-resolves against the
-//! editor area each frame, and a keymap mode that captures input while the
-//! popup is on top of the stack.
-//!
-//! Popups deliberately reuse the rest of the editor's machinery:
-//!
-//! * Content comes from a regular [`crate::buffer::Buffer`] of kind
-//!   [`crate::buffer::BufferKind::Popup`] — text properties, overlays, the
-//!   cursor, and editing modes all behave as they would in a window.
-//! * Styling references go through the shared [`crate::styling::Theme`] —
-//!   the `face` / `border_face` / `title_face` fields are face names and
-//!   resolve via the same `face-define` / `face-of` machinery used by
-//!   status segments and decorators.
-//! * Key bindings live in the same [`crate::keymap::KeymapRegistry`] under a
-//!   user-chosen mode (default `"popup"`). Custom popups can use names like
-//!   `"popup.files"` and bind keys to them in lisp.
-//!
-//! That is what lets a "popup terminal" or "popup file explorer" be a popup
-//! with a different `keymap_mode` and a producer filling its buffer — no
-//! popup-specific code path beyond placement and chrome.
+//! A popup is just a [`crate::widget::Widget`] with extras: a [`Placement`]
+//! that re-resolves against the editor area each frame, a stack of keymap
+//! modes that capture input while the popup is on top, and a backing buffer
+//! that input routes to. All chrome (border + title + faces) lives in the
+//! widget tree itself — typically `(block (buffer-view) {...})` — so popups
+//! reuse the same drawing path as the main UI.
 
 use std::rc::Rc;
 
 use ratatui::layout::Rect;
+
+use crate::widget::Widget;
 
 /// A length measurement that can be expressed either as a cell count or as a
 /// fraction of the available editor area. `Frac` is clamped to `[0.0, 1.0]`
@@ -172,29 +159,17 @@ impl BorderStyle {
     }
 }
 
-/// Visual decoration around the popup's content. Every face field references
-/// a name from the shared [`crate::styling::Theme`] — popups deliberately
-/// reuse the same face machinery as status segments, decorators, and gutters.
-#[derive(Clone, Debug, Default)]
-pub struct Chrome {
-    pub border: BorderStyle,
-    pub title: Option<Rc<str>>,
-    /// Face used to fill the popup's interior background. `None` falls back
-    /// to the editor's `default` face.
-    pub face: Option<Rc<str>>,
-    /// Face for the border characters.
-    pub border_face: Option<Rc<str>>,
-    /// Face for the title text drawn into the top border.
-    pub title_face: Option<Rc<str>>,
-}
-
 /// A popup overlay. `bufno` always points at a popup-kind buffer in
-/// `State.bufs` for the duration of the popup's life.
+/// `State.bufs` for the duration of the popup's life — that buffer captures
+/// input and is what `Widget::BufferView { bufno: None }` inside `widget`
+/// renders to.
 #[derive(Clone, Debug)]
 pub struct Popup {
     pub bufno: usize,
     pub placement: Placement,
-    pub chrome: Chrome,
+    /// The widget tree drawn at the resolved placement rect. Any chrome
+    /// (block/border/title/face) is encoded here.
+    pub widget: Widget,
     /// Keymap mode layers pushed onto the popup's buffer when it opens.
     /// Stored on the popup so callers can introspect (e.g. `popup-mode`
     /// returns the topmost layer for `notify` dedup) and so the layers
@@ -205,6 +180,31 @@ pub struct Popup {
     /// Off by default — viewing popups (messages, hints) don't want a
     /// cursor; editable popups (terminal, prompt) flip this on.
     pub show_cursor: bool,
+}
+
+/// Walk a popup widget tree and return the rect where the
+/// `(buffer-view)` leaf will be drawn, given the popup's outer placement
+/// rect. Handles the common patterns — `Block` strips its inset, single-
+/// child `Constrained` passes through, otherwise the outer rect is used
+/// as-is. `popup_bufno` is the popup's backing buffer, used to resolve
+/// `Widget::BufferView { bufno: None }` (the implicit form lisp emits as
+/// `(buffer-view)`).
+pub fn buffer_view_rect(widget: &Widget, outer: ratatui::layout::Rect, popup_bufno: usize) -> Rect {
+    match widget {
+        Widget::BufferView { bufno } if bufno.unwrap_or(popup_bufno) == popup_bufno => outer,
+        Widget::Block { border, child, .. } => {
+            let inset = border.inset();
+            let inner = Rect {
+                x: outer.x + inset,
+                y: outer.y + inset,
+                width: outer.width.saturating_sub(2 * inset),
+                height: outer.height.saturating_sub(2 * inset),
+            };
+            buffer_view_rect(child, inner, popup_bufno)
+        }
+        Widget::Constrained { child, .. } => buffer_view_rect(child, outer, popup_bufno),
+        _ => outer,
+    }
 }
 
 /// Overlay stack, bottom-to-top. Top popup captures key input and contributes

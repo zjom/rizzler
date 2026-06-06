@@ -150,21 +150,27 @@
 (fn notify (msg . args)
   (do
     (notify-record msg)
-    (if (> (len msg) _notify-popup-threshold)
-        (if (= (popup-mode) "popup")
-            (buf-text-set (popup-bufno) msg)
-            (popup-open
-              {"text":        msg
-               "modes":       ['popup]
-               "placement":   {"kind": "center" "w": 0.6 "h": 0.6}
-               "border":      "plain"
-               "title":       " message — q/<esc>/<enter> to dismiss "
-               "face":        "popup.default"
-               "border-face": "popup.border"
-               "title-face":  "popup.title"
-               "wrap-mode":   'word}))
+    (let args (car args))
+    (if (or (and (= 'map (typeof args))
+                 (get args "force"))
+            (> (len msg) _notify-popup-threshold))
+            (if (= (popup-mode) "popup")
+                (buf-text-set (popup-bufno) msg)
+                (popup-open
+                  (block (buffer-view)
+                    {"border":      "plain"
+                     "title":       " message — q/<esc>/<enter> to dismiss "
+                     "face":        "popup.default"
+                     "border-face": "popup.border"
+                     "title-face":  "popup.title"})
+                  {"text":      msg
+                   "modes":     ['popup]
+                   "placement": {"kind": "center" "w": 0.6 "h": 0.6}
+                   "wrap-mode": 'word}))
         (buf-text-set (minibuffer-bufno) msg))
-    ()))
+      ()
+      )
+    )
 
 ;; `:messages` — open the popup with the full notification history. Same
 ;; chrome as `notify`, but seeded with every recorded message instead of
@@ -174,14 +180,15 @@
     (fn _row (i line) (str-join [(to-str i) line] ". "))
     (let rows (fmapi _row (message-history)))
     (popup-open
-      {"text":        (str-join rows "\n")
-       "modes":       ['popup]
-       "placement":   {"kind": "center" "w": 0.6 "h": 0.6}
-       "border":      "plain"
-       "title":       " messages — q/<esc>/<enter> to dismiss "
-       "face":        "popup.default"
-       "border-face": "popup.border"
-       "title-face":  "popup.title"})
+      (block (buffer-view)
+        {"border":      "plain"
+         "title":       " messages — q/<esc>/<enter> to dismiss "
+         "face":        "popup.default"
+         "border-face": "popup.border"
+         "title-face":  "popup.title"})
+      {"text":      (str-join rows "\n")
+       "modes":     ['popup]
+       "placement": {"kind": "center" "w": 0.6 "h": 0.6}})
     ()))
 
 
@@ -190,14 +197,15 @@
     (fn _row (i line) (str-join [(to-str (+ 1 i)) line] ". "))
     (let rows (fmapi _row (command-history)))
     (popup-open
-      {"text":        (str-join rows "\n")
-       "modes":       ['popup]
-       "placement":   {"kind": "side" "side": "bottom" "size": (clamp (len rows) 5 50 ) }
-       "border":      "rounded"
-       "title":       " command history — q/<esc>/<enter> to dismiss "
-       "face":        "popup.default"
-       "border-face": "popup.border"
-       "title-face":  "popup.title"})
+      (block (buffer-view)
+        {"border":      "rounded"
+         "title":       " command history — q/<esc>/<enter> to dismiss "
+         "face":        "popup.default"
+         "border-face": "popup.border"
+         "title-face":  "popup.title"})
+      {"text":      (str-join rows "\n")
+       "modes":     ['popup]
+       "placement": {"kind": "side" "side": "bottom" "size": (clamp (len rows) 5 50)}})
     ()))
 
 ;; ----- popup mode ------------------------------------------------------
@@ -261,15 +269,16 @@
                  (buf-path)
                  (workdir)))
     (popup-open
+      (block (buffer-view)
+        {"border":      "rounded"
+         "title":       (str-join [" files: " (to-str dir) " "] "")
+         "face":        "popup.default"
+         "border-face": "popup.border"
+         "title-face":  "popup.title"})
       {"text":        (_popup-files-render dir)
        "modes":       ['popup 'popup.files]
        "buffer-mode": 'normal
        "placement":   'full
-       "border":      "rounded"
-       "title":       (str-join [" files: " (to-str dir) " "] "")
-       "face":        "popup.default"
-       "border-face": "popup.border"
-       "title-face":  "popup.title"
        "show-cursor": 1})))
 
 ;; Bind the explorer to `<space>f`. Motion and dismiss keys are inherited
@@ -290,15 +299,16 @@
          ()
      (if (fs-isdir target)
           (popup-open
+            (block (buffer-view)
+              {"border":      "rounded"
+               "title":       (str-join [" files: " target " "] "")
+               "face":        "popup.default"
+               "border-face": "popup.border"
+               "title-face":  "popup.title"})
             {"text":        (_popup-files-render target)
              "mode":        'popup.files
              "buffer-mode": 'normal
              "placement":   "full"
-             "border":      "rounded"
-             "title":       (str-join [" files: " target " "] "")
-             "face":        "popup.default"
-             "border-face": "popup.border"
-             "title-face":  "popup.title"
              "show-cursor": 1})
      (edit target)
      ))
@@ -313,15 +323,16 @@
           ()
         (if (fs-isdir target)
           (popup-open
+            (block (buffer-view)
+              {"border":      "rounded"
+               "title":       (str-join [" files: " target " "] "")
+               "face":        "popup.default"
+               "border-face": "popup.border"
+               "title-face":  "popup.title"})
             {"text":        (_popup-files-render target)
              "mode":        'popup.files
              "buffer-mode": 'normal
              "placement":   "full"
-             "border":      "rounded"
-             "title":       (str-join [" files: " target " "] "")
-             "face":        "popup.default"
-             "border-face": "popup.border"
-             "title-face":  "popup.title"
              "show-cursor": 1})
           ()
         ))

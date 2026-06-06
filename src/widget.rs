@@ -21,6 +21,7 @@
 //! | `(block child {...})`                | `Block`          |
 //! | `(editor-tree {...})`                | `EditorTree`     |
 //! | `(minibuffer)`                       | `Minibuffer`     |
+//! | `(buffer-view)` / `(buffer-view N)`  | `BufferView`     |
 //! | `()` / unrecognized                  | `Empty`          |
 
 use std::rc::Rc;
@@ -76,6 +77,11 @@ pub enum Widget {
     },
     /// The minibuffer leaf. Single row.
     Minibuffer,
+    /// Render a single buffer into the allocated rect via `EditorView`. When
+    /// `bufno` is `None`, the renderer fills it in with the enclosing popup's
+    /// backing buffer — that's what lets a popup widget declare
+    /// `(buffer-view)` without knowing its own bufno yet.
+    BufferView { bufno: Option<usize> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +164,7 @@ pub fn parse_widget(v: &Rc<Value>, theme: &Theme) -> Result<Widget, RuntimeError
                 "block" => parse_block(m, theme),
                 "editor-tree" => parse_editor_tree(m),
                 "minibuffer" => Ok(Widget::Minibuffer),
+                "buffer-view" => parse_buffer_view(m),
                 "empty" => Ok(Widget::Empty),
                 // A bare span map ({text, style}) — render as a single-line.
                 _ if m.contains_key(&key("text")) => Ok(Widget::Line {
@@ -285,6 +292,14 @@ fn parse_block(
         title_face,
         child,
     })
+}
+
+fn parse_buffer_view(m: &im::HashMap<Rc<Value>, Rc<Value>>) -> Result<Widget, RuntimeError> {
+    let bufno = m
+        .get(&key("bufno"))
+        .and_then(|v| v.as_int())
+        .map(|n| n.max(0) as usize);
+    Ok(Widget::BufferView { bufno })
 }
 
 fn parse_editor_tree(m: &im::HashMap<Rc<Value>, Rc<Value>>) -> Result<Widget, RuntimeError> {

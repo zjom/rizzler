@@ -18,6 +18,22 @@ use crate::{
     widget::{StackDir, Widget},
 };
 
+/// Per-walk context. `popup` is `Some` when the walk is inside a popup's
+/// widget tree — that's what resolves `Widget::BufferView { None }` to the
+/// enclosing popup's backing buffer and what lets the walker place the
+/// cursor inside the popup when it's on top.
+#[derive(Clone, Copy, Default)]
+struct WalkCtx {
+    popup: Option<PopupCtx>,
+}
+
+#[derive(Clone, Copy)]
+struct PopupCtx {
+    bufno: usize,
+    is_top: bool,
+    show_cursor: bool,
+}
+
 /// Concrete ratatui renderer. Walks the widget tree produced by the
 /// precompute pass into ratatui draws. Stateless wrt customization — every
 /// widget tree was assembled in lisp; this renderer just translates it.
@@ -55,16 +71,20 @@ impl Renderer for RatatuiRenderer {
             f.render_widget(Block::default().style(base_style), f.area());
 
             let mut cur = CursorPlacement::default();
-            walk(&frame_data.root, f.area(), &snap, frame_data, f, &mut cur);
+            walk(
+                &frame_data.root,
+                f.area(),
+                &snap,
+                frame_data,
+                f,
+                &mut cur,
+                WalkCtx::default(),
+            );
 
             // Popups draw last, bottom-up so the last entry ends up on top.
             for (i, popup) in snap.popups.iter().enumerate() {
                 let is_top = i + 1 == snap.popups.len();
-                let popup_cursor =
-                    draw_popup(popup, f.area(), &snap, frame_data, is_top, f);
-                if is_top {
-                    cur.popup = popup_cursor;
-                }
+                draw_popup(popup, f.area(), &snap, frame_data, is_top, f, &mut cur);
             }
 
             if let Some((x, y, cs)) = cur.popup {
@@ -82,7 +102,10 @@ impl Renderer for RatatuiRenderer {
 
 /// Recursive widget walker. Lays each widget out in `area` and renders to
 /// the ratatui frame. Editor windows update `cur.editor` so the renderer
-/// can place the cursor after the frame is drawn.
+/// can place the cursor after the frame is drawn. `ctx` propagates the
+/// enclosing popup info so `BufferView` leaves resolve to the right buffer
+/// and can publish their cursor.
+#[allow(clippy::too_many_arguments)]
 fn walk(
     w: &Widget,
     area: Rect,
@@ -90,6 +113,7 @@ fn walk(
     fd: &RenderedFrame,
     f: &mut Frame,
     cur: &mut CursorPlacement,
+    ctx: WalkCtx,
 ) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -102,8 +126,10 @@ fn walk(
                 area,
             );
         }
-        Widget::Stack { dir, children } => walk_stack(*dir, children, area, snap, fd, f, cur),
-        Widget::Constrained { child, .. } => walk(child, area, snap, fd, f, cur),
+        Widget::Stack { dir, children } => {
+            walk_stack(*dir, children, area, snap, fd, f, cur, ctx)
+        }
+        Widget::Constrained { child, .. } => walk(child, area, snap, fd, f, cur, ctx),
         Widget::Block {
             border,
             title,
@@ -123,6 +149,7 @@ fn walk(
             fd,
             f,
             cur,
+            ctx,
         ),
         Widget::EditorTree { .. } => walk_editor_tree(area, snap, fd, f, cur),
         Widget::Minibuffer => {
@@ -131,9 +158,13 @@ fn walk(
                 cur.editor = Some(pos);
             }
         }
+        Widget::BufferView { bufno } => {
+            walk_buffer_view(*bufno, area, snap, fd, f, cur, ctx);
+        }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk_stack(
     dir: StackDir,
     children: &[Widget],
@@ -142,6 +173,7 @@ fn walk_stack(
     fd: &RenderedFrame,
     f: &mut Frame,
     cur: &mut CursorPlacement,
+    ctx: WalkCtx,
 ) {
     if children.is_empty() {
         return;
@@ -156,7 +188,7 @@ fn walk_stack(
         .constraints(constraints)
         .split(area);
     for (child, rect) in children.iter().zip(rects.iter()) {
-        walk(child.unwrap_constraint(), *rect, snap, fd, f, cur);
+        walk(child.unwrap_constraint(), *rect, snap, fd, f, cur, ctx);
     }
 }
 
@@ -173,6 +205,7 @@ fn walk_block(
     fd: &RenderedFrame,
     f: &mut Frame,
     cur: &mut CursorPlacement,
+    ctx: WalkCtx,
 ) {
     let bg = resolve_face(&fd.theme, face).unwrap_or_else(|| fd.default_style.clone());
     let border_style = resolve_face(&fd.theme, border_face).unwrap_or_else(|| bg.clone());
@@ -193,7 +226,45 @@ fn walk_block(
     }
     let inner = block.inner(area);
     f.render_widget(block, area);
-    walk(child, inner, snap, fd, f, cur);
+    walk(child, inner, snap, fd, f, cur, ctx);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_buffer_view(
+    explicit_bufno: Option<usize>,
+    area: Rect,
+    snap: &StateSnapshot<'_>,
+    fd: &RenderedFrame,
+    f: &mut Frame,
+    cur: &mut CursorPlacement,
+    ctx: WalkCtx,
+) {
+    let Some(bufno) = explicit_bufno.or(ctx.popup.map(|p| p.bufno)) else {
+        return;
+    };
+    let Some(buf) = snap.bufs.get(bufno) else {
+        return;
+    };
+    let buf_frame = fd.per_buf.get(bufno);
+    EditorView::render(buf, area, buf_frame, f);
+
+    // Publish the cursor when this buffer view sits inside the topmost
+    // popup and that popup wants its cursor visible.
+    if let Some(pctx) = ctx.popup
+        && pctx.is_top
+        && pctx.show_cursor
+        && pctx.bufno == bufno
+    {
+        let (x, y) = match buf_frame.and_then(|bf| bf.wrap.as_ref()) {
+            Some(wrap) => EditorView::cursor_wrapped(buf, area, buf_frame, wrap),
+            None => EditorView::cursor(buf, area, buf_frame),
+        };
+        let cs = match buf.mode() {
+            EditingMode::Insert | EditingMode::Command => CursorStyle::Bar,
+            _ => CursorStyle::Block,
+        };
+        cur.popup = Some((x, y, cs));
+    }
 }
 
 fn walk_editor_tree(
@@ -219,14 +290,11 @@ fn walk_editor_tree(
     }
 }
 
-/// Draw a single popup. Pipeline:
-///
-///   1. `Placement::resolve` → outer rect.
-///   2. Clear + fill with the popup's background face (or `default`).
-///   3. Optional border + title, styled via `border_face` / `title_face`.
-///   4. Render the popup's backing buffer via [`EditorView`].
-///
-/// Returns the cursor position (if `is_top && popup.show_cursor`).
+/// Draw a single popup. Resolves the placement rect, clears it (so the
+/// editor underneath stops bleeding through), then walks the popup's
+/// widget tree at that rect. Any chrome (block/border/title/face) and the
+/// buffer rendering both come from the widget tree — there are no
+/// popup-specific draw paths anymore.
 fn draw_popup(
     popup: &Popup,
     area: Rect,
@@ -234,53 +302,21 @@ fn draw_popup(
     fd: &RenderedFrame,
     is_top: bool,
     f: &mut Frame,
-) -> Option<(u16, u16, CursorStyle)> {
+    cur: &mut CursorPlacement,
+) {
     let outer = popup.placement.resolve(area);
     if outer.width == 0 || outer.height == 0 {
-        return None;
+        return;
     }
     f.render_widget(Clear, outer);
-
-    let bg_style = resolve_face(&fd.theme, popup.chrome.face.as_deref())
-        .unwrap_or_else(|| fd.default_style.clone());
-    let border_style = resolve_face(&fd.theme, popup.chrome.border_face.as_deref())
-        .unwrap_or_else(|| bg_style.clone());
-    let title_style = resolve_face(&fd.theme, popup.chrome.title_face.as_deref())
-        .unwrap_or_else(|| border_style.clone());
-
-    let mut block = Block::default().style(style_to_ratatui(&bg_style));
-    if popup.chrome.border != BorderStyle::None {
-        block = block
-            .borders(Borders::ALL)
-            .border_type(border_type(popup.chrome.border))
-            .border_style(style_to_ratatui(&border_style));
-    }
-    if let Some(title) = &popup.chrome.title {
-        block = block.title(Span::styled(
-            format!(" {title} "),
-            style_to_ratatui(&title_style),
-        ));
-    }
-    let inner = block.inner(outer);
-    f.render_widget(block, outer);
-
-    let buf = snap.bufs.get(popup.bufno)?;
-    let buf_frame = fd.per_buf.get(popup.bufno);
-    EditorView::render(buf, inner, buf_frame, f);
-
-    if is_top && popup.show_cursor {
-        let (x, y) = match buf_frame.and_then(|bf| bf.wrap.as_ref()) {
-            Some(wrap) => EditorView::cursor_wrapped(buf, inner, buf_frame, wrap),
-            None => EditorView::cursor(buf, inner, buf_frame),
-        };
-        let cs = match buf.mode() {
-            EditingMode::Insert | EditingMode::Command => CursorStyle::Bar,
-            _ => CursorStyle::Block,
-        };
-        Some((x, y, cs))
-    } else {
-        None
-    }
+    let ctx = WalkCtx {
+        popup: Some(PopupCtx {
+            bufno: popup.bufno,
+            is_top,
+            show_cursor: popup.show_cursor,
+        }),
+    };
+    walk(&popup.widget, outer, snap, fd, f, cur, ctx);
 }
 
 fn set_cursor_style(cs: CursorStyle) -> SetCursorStyle {

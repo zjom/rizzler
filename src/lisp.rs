@@ -23,10 +23,11 @@ use crate::action::Action;
 use crate::buffer::MoveKind;
 use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
-use crate::popup::{BorderStyle, Dim, Placement, Side};
+use crate::popup::{Dim, Placement, Side};
 use crate::position::Position;
 use crate::state::{PopupSpec, State};
 use crate::styling::{normalize_style_value, rgb_value, style_from_value, style_to_value};
+use crate::widget::parse_widget;
 use crate::window::{FocusDir, SplitDir};
 use crate::wrap::WrapMode;
 
@@ -479,20 +480,27 @@ fn builtins() -> Env {
         Ok((Rc::new(Value::Array(cmds)), env.clone()))
     });
 
-    // popups — generalized overlay surface. A popup is conceptually a buffer
-    // drawn on top of the editor area with chrome (border/title) and a
-    // keymap mode that captures input while the popup is on top of the
-    // stack. The message popup is a thin preset on top of these; user
-    // popups (file picker, terminal, prompt, …) plug in placement, chrome,
-    // and keymap mode to express whatever shape they want.
+    // popups — generalized overlay surface. A popup is just a widget tree
+    // with extras: a placement that re-resolves against the editor area
+    // each frame, and a stack of keymap modes that capture input while
+    // the popup is on top.
     //
-    // (popup-open props) — `props` is a map (see `parse_popup_props`).
-    //                     Returns the popup buffer's bufno.
-    // (popup-close)      — closes the topmost popup. Returns 1 / 0.
-    // (popup-bufno)      — bufno of the topmost popup, or `()`.
-    // (popup?)           — 1 if any popup is open, else 0.
+    // (popup-open widget)         — open with default options.
+    // (popup-open widget options) — `options` is a map (see
+    //                               `parse_popup_options`). Both forms
+    //                               return the backing buffer's bufno.
+    // (popup-close)               — closes the topmost popup. Returns 1/0.
+    // (popup-bufno)               — bufno of the topmost popup, or `()`.
+    // (popup?)                    — 1 if any popup is open, else 0.
     b!("popup-open", 1, |args, env| {
-        let spec = parse_popup_props(&args[0])?;
+        let widget = with_editor_mut(|st| {
+            let theme = st.theme().borrow();
+            parse_widget(&args[0], &theme)
+        })?;
+        let mut spec = PopupSpec::new(widget);
+        if let Some(opts) = args.get(1) {
+            parse_popup_options(opts, &mut spec)?;
+        }
         let bufno = with_editor_mut(|st| st.open_popup(spec));
         Ok((Rc::new(Value::Int(bufno as i64)), env.clone()))
     });
@@ -836,6 +844,21 @@ fn builtins() -> Env {
     b!("empty", 0, |_, env| {
         let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
         m.insert(strkey("type"), Rc::new(Value::Str("empty".into())));
+        Ok((Rc::new(Value::Map(m)), env.clone()))
+    });
+
+    // (buffer-view)         — render the enclosing popup's backing buffer.
+    // (buffer-view BUFNO)   — render an explicit buffer by index.
+    //
+    // Lives inside a popup's widget tree (typically wrapped in `block`) to
+    // give the popup a buffer to scroll, edit, and route input to.
+    b!("buffer-view", 0, |args, env| {
+        let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+        m.insert(strkey("type"), Rc::new(Value::Str("buffer-view".into())));
+        if let Some(arg) = args.first() {
+            let bufno = as_int(arg, "buffer-view.bufno")?.max(0);
+            m.insert(strkey("bufno"), Rc::new(Value::Int(bufno)));
+        }
         Ok((Rc::new(Value::Map(m)), env.clone()))
     });
 
@@ -1302,87 +1325,63 @@ fn parse_mode_layers(v: &Rc<Value>) -> Result<Vec<Rc<str>>, RuntimeError> {
 // Popup property parsing
 // ---------------------------------------------------------------------------
 
-/// Build a [`PopupSpec`] from the property map passed to `popup-open`.
-/// Recognized top-level keys (all optional):
+/// Apply the options map passed as the second arg to `popup-open` onto a
+/// mutable [`PopupSpec`]. The first arg (widget) carries the visual tree;
+/// this map only sets popup-specific extras and the configuration of the
+/// auto-created backing buffer.
 ///
-/// * `"text"`        — initial text content (str).
+/// Recognized keys (all optional):
+///
+/// * `"text"`        — initial text content of the backing buffer (str).
 /// * `"mode"`        — keymap mode name (str / ident). Default `"popup"`.
-/// * `"buffer-mode"` — editing mode for the popup buffer (str / ident). Default `"normal"`.
+/// * `"modes"`       — array of mode names (least-recent first).
+/// * `"buffer-mode"` — editing mode for the backing buffer. Default `"normal"`.
 /// * `"placement"`   — see [`parse_placement`].
-/// * `"border"`      — `"none" | "plain" | "rounded" | "double" | "thick"`.
-/// * `"title"`       — str shown in the top border.
-/// * `"face"`        — face for the popup's background fill.
-/// * `"border-face"` — face for the border characters.
-/// * `"title-face"`  — face for the title text.
 /// * `"show-cursor"` — truthy/falsy. Off by default.
-/// * `"wrap-mode"`   — see [`WrapMode::from_str`]
-/// * `"wrap-column"` — Fixed wrap column.
-/// * `"break-indent"` — Indent continuation rows under the original line's leading whitespace.
-///
-/// A bare string is also accepted and treated as `{"text": <string>}` so
-/// `(popup-open "hi")` works for quick demos.
-fn parse_popup_props(v: &Rc<Value>) -> Result<PopupSpec, RuntimeError> {
-    let mut spec = PopupSpec::new();
-    match &**v {
-        Value::Unit => Ok(spec),
-        Value::Str(s) | Value::Ident(s) => {
-            spec.initial_text = Some(s.to_string());
-            Ok(spec)
+/// * `"wrap-mode"`   — see [`WrapMode::from_str`].
+/// * `"wrap-column"` — fixed wrap column.
+/// * `"break-indent"` — indent continuation rows under leading whitespace.
+fn parse_popup_options(v: &Rc<Value>, spec: &mut PopupSpec) -> Result<(), RuntimeError> {
+    let m = match &**v {
+        Value::Unit => return Ok(()),
+        Value::Map(m) => m,
+        _ => {
+            return Err(RuntimeError::type_mismatch(
+                "popup-open.options",
+                "map | ()",
+                v,
+            ));
         }
-        Value::Map(m) => {
-            let key = |k: &str| Rc::new(Value::Str(k.into()));
-            if let Some(t) = m.get(&key("text")) {
-                spec.initial_text = Some(as_str(t, "popup-open.text")?.to_string());
-            }
-            // `modes` (array) is the canonical form; `mode` (single name)
-            // is a convenience shorthand for a one-layer stack.
-            if let Some(modes) = m.get(&key("modes")) {
-                spec.mode_layers = parse_mode_layers(modes)?;
-            } else if let Some(mode) = m.get(&key("mode")) {
-                spec.mode_layers = vec![parse_mode_name(mode)?];
-            }
-            if let Some(bm) = m.get(&key("buffer-mode")) {
-                spec.buffer_mode = parse_mode_ident(bm)?;
-            }
-            if let Some(p) = m.get(&key("placement")) {
-                spec.placement = parse_placement(p)?;
-            }
-            if let Some(b) = m.get(&key("border")) {
-                spec.chrome.border = parse_border(b)?;
-            }
-            if let Some(t) = m.get(&key("title")) {
-                spec.chrome.title = Some(as_str(t, "popup-open.title")?);
-            }
-            if let Some(f) = m.get(&key("face")) {
-                spec.chrome.face = Some(as_ident_or_str(f, "popup-open.face")?);
-            }
-            if let Some(f) = m.get(&key("border-face")) {
-                spec.chrome.border_face = Some(as_ident_or_str(f, "popup-open.border-face")?);
-            }
-            if let Some(f) = m.get(&key("title-face")) {
-                spec.chrome.title_face = Some(as_ident_or_str(f, "popup-open.title-face")?);
-            }
-            if let Some(sc) = m.get(&key("show-cursor")) {
-                spec.show_cursor = sc.is_truthy();
-            }
-            if let Some(sc) = m.get(&key("wrap-mode")) {
-                spec.wrap_mode = WrapMode::from_str(&as_ident_or_str(sc, "popup-open.wrap-mode")?)
-                    .unwrap_or_default();
-            }
-            if let Some(sc) = m.get(&key("wrap-column")) {
-                spec.wrap_column = Some(as_int(sc, "popup-open.wrap-column")?.max(0) as u16)
-            }
-            if let Some(sc) = m.get(&key("break-indent")) {
-                spec.breakindent = sc.is_truthy();
-            }
-            Ok(spec)
-        }
-        _ => Err(RuntimeError::type_mismatch(
-            "popup-open",
-            "map | str | ()",
-            v,
-        )),
+    };
+    let key = |k: &str| Rc::new(Value::Str(k.into()));
+    if let Some(t) = m.get(&key("text")) {
+        spec.initial_text = Some(as_str(t, "popup-open.text")?.to_string());
     }
+    if let Some(modes) = m.get(&key("modes")) {
+        spec.mode_layers = parse_mode_layers(modes)?;
+    } else if let Some(mode) = m.get(&key("mode")) {
+        spec.mode_layers = vec![parse_mode_name(mode)?];
+    }
+    if let Some(bm) = m.get(&key("buffer-mode")) {
+        spec.buffer_mode = parse_mode_ident(bm)?;
+    }
+    if let Some(p) = m.get(&key("placement")) {
+        spec.placement = parse_placement(p)?;
+    }
+    if let Some(sc) = m.get(&key("show-cursor")) {
+        spec.show_cursor = sc.is_truthy();
+    }
+    if let Some(sc) = m.get(&key("wrap-mode")) {
+        spec.wrap_mode =
+            WrapMode::from_str(&as_ident_or_str(sc, "popup-open.wrap-mode")?).unwrap_or_default();
+    }
+    if let Some(sc) = m.get(&key("wrap-column")) {
+        spec.wrap_column = Some(as_int(sc, "popup-open.wrap-column")?.max(0) as u16);
+    }
+    if let Some(sc) = m.get(&key("break-indent")) {
+        spec.breakindent = sc.is_truthy();
+    }
+    Ok(())
 }
 
 /// Parse a placement value. Accepted shapes:
@@ -1493,18 +1492,6 @@ fn parse_dim(v: &Rc<Value>) -> Result<Dim, RuntimeError> {
         Value::Float(f) => Ok(Dim::Frac(f.into_inner() as f32)),
         _ => Err(RuntimeError::type_mismatch("dim", "int|float", v)),
     }
-}
-
-fn parse_border(v: &Rc<Value>) -> Result<BorderStyle, RuntimeError> {
-    let s = as_ident_or_str(v, "border")?;
-    Ok(match s.as_ref() {
-        "none" => BorderStyle::None,
-        "plain" => BorderStyle::Plain,
-        "rounded" => BorderStyle::Rounded,
-        "double" => BorderStyle::Double,
-        "thick" => BorderStyle::Thick,
-        other => return Err(unknown_variant("border", other)),
-    })
 }
 
 fn unknown_variant(name: &str, got: &str) -> RuntimeError {

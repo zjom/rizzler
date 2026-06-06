@@ -19,7 +19,7 @@ use crate::{
     keymap::KeymapRegistry,
     lisp::{EditorGuard, LispRuntime, init_script_path},
     mode::EditingMode,
-    popup::{Chrome, Placement, Popup, PopupStack},
+    popup::{Placement, Popup, PopupStack},
     position::Position,
     render::{CursorStyle, Renderer, StateSnapshot},
     render_ratatui::RatatuiRenderer,
@@ -51,12 +51,14 @@ impl Config {
 }
 
 /// Builder-style spec describing a popup to open. Built by the lisp
-/// `popup-open` builtin from a property map; there are no Rust-side
-/// callers — message popups are constructed in lisp on top of `popup-open`.
+/// `popup-open` builtin from a widget value plus an options map; there are
+/// no Rust-side callers — popups are constructed in lisp.
 pub struct PopupSpec {
+    /// The widget tree drawn inside the popup's placement rect. Any chrome
+    /// (block/border/title/face) lives here.
+    pub widget: crate::widget::Widget,
     pub initial_text: Option<String>,
     pub placement: Placement,
-    pub chrome: Chrome,
     /// Keymap mode layers to push onto the popup's buffer. Ordered
     /// least-recent first — the last entry ends up at the top of the
     /// stack and shadows the rest during keymap resolution.
@@ -69,11 +71,11 @@ pub struct PopupSpec {
 }
 
 impl PopupSpec {
-    pub fn new() -> Self {
+    pub fn new(widget: crate::widget::Widget) -> Self {
         Self {
+            widget,
             initial_text: None,
             placement: Placement::default(),
-            chrome: Chrome::default(),
             mode_layers: vec![Rc::<str>::from("popup")],
             buffer_mode: EditingMode::Normal,
             show_cursor: false,
@@ -81,12 +83,6 @@ impl PopupSpec {
             wrap_column: None,
             breakindent: false,
         }
-    }
-}
-
-impl Default for PopupSpec {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -303,7 +299,7 @@ impl State {
         self.popups.push(Popup {
             bufno,
             placement: spec.placement,
-            chrome: spec.chrome,
+            widget: spec.widget,
             mode_layers: spec.mode_layers,
             show_cursor: spec.show_cursor,
         });
@@ -415,17 +411,18 @@ impl State {
             }
         }
         self.bufs.minibuffer_mut().viewport = Position::new(cols, MINIBUFFER_ROWS);
-        // Popup viewports are the inner content rect — outer placement
-        // minus the border inset on each side.
+        // Popup viewports come from walking the popup's widget tree to find
+        // the buffer-view rect inside its resolved placement. The common
+        // case (block wrapping a buffer-view) yields the inner rect; widget
+        // trees that don't render the popup's buffer get the outer rect as
+        // a fallback.
         let popups: Vec<(usize, Position<u16>)> = self
             .popups
             .iter()
             .map(|p| {
                 let outer = p.placement.resolve(editor_area);
-                let inset = p.chrome.border.inset();
-                let inner_w = outer.width.saturating_sub(2 * inset);
-                let inner_h = outer.height.saturating_sub(2 * inset);
-                (p.bufno, Position::new(inner_w, inner_h))
+                let inner = crate::popup::buffer_view_rect(&p.widget, outer, p.bufno);
+                (p.bufno, Position::new(inner.width, inner.height))
             })
             .collect();
         for (bufno, viewport) in popups {
@@ -768,7 +765,7 @@ mod tests {
         // and `popup-open` — exercising it confirms the lisp-side bridge is
         // wired up and that history storage still lives in Rust.
         let mut s = test_state();
-        s.eval_lisp(r#"(notify "hello")"#).unwrap();
+        s.eval_lisp(r#"(notify "hello" {"force": 1})"#).unwrap();
         assert_eq!(
             s.message_history().cloned().collect::<Vec<_>>(),
             vec!["hello".into()]
@@ -782,7 +779,7 @@ mod tests {
         // `q` is bound to (popup-close) in the bundled `popup` keymap mode.
         use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
         let mut s = test_state();
-        s.eval_lisp(r#"(notify "oops")"#).unwrap();
+        s.eval_lisp(r#"(notify "oops" {"force": 1})"#).unwrap();
         assert!(s.has_popup());
         s.handle_key_event(CT::new(KeyCode::Char('q'), KeyModifiers::NONE))
             .unwrap();
@@ -795,7 +792,8 @@ mod tests {
         // editor binding, exercising the "popup is just a buffer" model.
         use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
         let mut s = test_state();
-        s.eval_lisp(r#"(notify "line1\nline2\nline3")"#).unwrap();
+        s.eval_lisp(r#"(notify "line1\nline2\nline3" {"force": 1})"#)
+            .unwrap();
         s.handle_key_event(CT::new(KeyCode::Char('j'), KeyModifiers::NONE))
             .unwrap();
         assert!(s.has_popup(), "popup must still be visible");
@@ -811,8 +809,8 @@ mod tests {
         // The lisp-side `notify` dedups against the topmost popup so a flood
         // of notifications doesn't stack overlays.
         let mut s = test_state();
-        s.eval_lisp(r#"(notify "a")"#).unwrap();
-        s.eval_lisp(r#"(notify "b")"#).unwrap();
+        s.eval_lisp(r#"(notify "a" {"force": 1})"#).unwrap();
+        s.eval_lisp(r#"(notify "b" {"force": 1})"#).unwrap();
         assert_eq!(
             s.message_history().cloned().collect::<Vec<_>>(),
             vec!["a".into(), "b".into()]
@@ -824,7 +822,7 @@ mod tests {
     #[test]
     fn messages_builtin_opens_popup_with_history() {
         let mut s = test_state();
-        s.eval_lisp(r#"(notify "first")"#).unwrap();
+        s.eval_lisp(r#"(notify "first" {"force": 1})"#).unwrap();
         // Dismiss the popup the `notify` call opened so we can re-check
         // that `(messages)` reopens with the joined history.
         s.close_popup();

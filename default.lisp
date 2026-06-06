@@ -26,6 +26,8 @@
                            (move-cursor 'up)))
 
 (map 'normal "x"      '(delete-char-at (cursor-col) (cursor-line)))
+(map 'normal "u"      '(undo))
+(map 'normal "<c-r>"  '(redo))
 (map 'normal "j"      '(move-cursor 'down))
 (map 'normal "<down>" '(move-cursor 'down))
 (map 'normal "k"      '(move-cursor 'up))

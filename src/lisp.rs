@@ -224,6 +224,14 @@ fn builtins() -> Env {
         apply(Action::InsertNewline)?;
         ok_unit(env)
     });
+    b!("undo", 0, |_, env| {
+        apply(Action::Undo)?;
+        ok_unit(env)
+    });
+    b!("redo", 0, |_, env| {
+        apply(Action::Redo)?;
+        ok_unit(env)
+    });
 
     // cursor movement
     b!("move-cursor", 1, |args, env| {

@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 mod nodes;
 
+#[derive(Debug, Clone)]
 pub struct ChangeTree {
     trunk: usize,
     nodes: HashMap<usize, Node>,
@@ -64,7 +65,14 @@ impl ChangeTree {
                 .get(&self.cur)
                 .expect("self.cur must refer to a valid node");
             match cur {
-                Node::Leaf(leaf) => (leaf.parent, (leaf.delta.0, Rc::clone(&leaf.delta.1))),
+                Node::Leaf(leaf) => (
+                    leaf.parent,
+                    (
+                        leaf.delta.0,
+                        Rc::clone(&leaf.delta.1),
+                        Rc::clone(&leaf.delta.2),
+                    ),
+                ),
                 Node::Root(_) => unreachable!("trunk handled by the guard above"),
             }
         };
@@ -96,7 +104,11 @@ impl ChangeTree {
             .get(&child_id)
             .expect("child id from redo target must be valid")
         {
-            Node::Leaf(leaf) => (leaf.delta.0, Rc::clone(&leaf.delta.1)),
+            Node::Leaf(leaf) => (
+                leaf.delta.0,
+                Rc::clone(&leaf.delta.1),
+                Rc::clone(&leaf.delta.2),
+            ),
             Node::Root(_) => unreachable!("a root is never a child"),
         };
 

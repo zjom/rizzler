@@ -1,7 +1,10 @@
 use std::{cmp::Ordering, collections::BinaryHeap, rc::Rc, time::Instant};
 
-/// line number, and changed line
-pub type Delta = (usize, Rc<str>);
+/// Edit recorded in the change tree. A contiguous span starting at
+/// `start_line` had text `before` and is now `after` — undo restores
+/// `before`, redo applies `after`. Both snapshots are line-aligned blobs:
+/// the number of lines each occupies is derived from the string itself.
+pub type Delta = (usize, Rc<str>, Rc<str>);
 
 /// identifier of nodes.
 ///

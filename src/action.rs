@@ -23,6 +23,10 @@ pub enum Action {
     InsertNewline,
     DeleteChar,
     DeleteCharAt(Position<usize>),
+    /// Reverse the focused buffer's most recent tracked edit.
+    Undo,
+    /// Re-apply the most recently undone edit on the focused buffer.
+    Redo,
     /// Move the cursor by `kind`, repeated `count` times (0/1 == once).
     /// Count is the numeric prefix consumed by [`crate::state::State`]
     /// before resolving the keymap.

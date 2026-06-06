@@ -532,6 +532,14 @@ impl State {
                     let f = self.focused_bufno();
                     self.bufs[f].delete_char_at(*pos);
                 }
+                Action::Undo => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].undo();
+                }
+                Action::Redo => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].redo();
+                }
                 Action::MoveCursor { kind, count } => {
                     let f = self.focused_bufno();
                     self.bufs[f].move_cursor_n(*kind, *count);

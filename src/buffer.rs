@@ -1,3 +1,4 @@
+use rizz_changetree::ChangeTree;
 use ropey::{Rope, RopeSlice, iter::Lines};
 use std::{path::Path, rc::Rc, str::FromStr};
 
@@ -129,7 +130,7 @@ pub struct Buffer {
     ///
     /// Edits (insert/delete) invalidate this; the next render rebuilds it.
     pub(crate) wrap_cache: Option<WrapMap>,
-    // pub(crate) permissions: Permissions,
+    pub(crate) changetree: ChangeTree,
 }
 
 impl Buffer {
@@ -321,6 +322,9 @@ impl Buffer {
 
     pub fn insert_char(&mut self, c: char) {
         let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;
+        let start_line = self.abs_row();
+        let before = snapshot_lines(&self.buf, start_line, 1);
+
         self.buf.insert_char(cidx, c);
         self.invalidate_wrap_cache();
 
@@ -330,6 +334,11 @@ impl Buffer {
         } else {
             self.cursor_pos.col = self.cursor_pos.col.saturating_add(1);
         }
+
+        let after_lines = if c == '\n' { 2 } else { 1 };
+        let after = snapshot_lines(&self.buf, start_line, after_lines);
+        self.changetree
+            .track_change((start_line, before.into(), after.into()));
     }
 
     pub fn delete_char(&mut self) {
@@ -337,6 +346,17 @@ impl Buffer {
         if cidx == 0 {
             return;
         }
+
+        // Snapshot before any rope mutation. Joining lines spans two lines;
+        // an in-line delete spans one.
+        let removed_is_nl = matches!(self.buf.get_char(cidx - 1), Some('\n'));
+        let start_line = if removed_is_nl {
+            self.abs_row().saturating_sub(1)
+        } else {
+            self.abs_row()
+        };
+        let before_lines = if removed_is_nl { 2 } else { 1 };
+        let before = snapshot_lines(&self.buf, start_line, before_lines);
 
         match self.buf.get_char(cidx - 1) {
             Some('\n') => {
@@ -350,6 +370,10 @@ impl Buffer {
 
         _ = self.buf.try_remove(cidx - 1..cidx);
         self.invalidate_wrap_cache();
+
+        let after = snapshot_lines(&self.buf, start_line, 1);
+        self.changetree
+            .track_change((start_line, before.into(), after.into()));
     }
 
     pub fn delete_char_at(&mut self, Position { col, row }: Position<usize>) {
@@ -364,9 +388,50 @@ impl Buffer {
         if col >= line_len {
             return;
         }
+        let before = snapshot_lines(&self.buf, row, 1);
         let cidx = line_start + col;
         _ = self.buf.try_remove(cidx..cidx + 1);
         self.invalidate_wrap_cache();
+        self.clamp_cursor();
+        let after = snapshot_lines(&self.buf, row, 1);
+        self.changetree
+            .track_change((row, before.into(), after.into()));
+    }
+
+    /// Reverse the most recent tracked edit and return whether anything
+    /// happened. Cursor lands at the start of the restored region.
+    pub fn undo(&mut self) -> bool {
+        let Some((start_line, before, after)) = self.changetree.undo() else {
+            return false;
+        };
+        let after_lines = rope_line_count(&after);
+        replace_lines(&mut self.buf, start_line, after_lines, &before);
+        self.invalidate_wrap_cache();
+        self.land_cursor_at_line(start_line);
+        true
+    }
+
+    /// Reapply the most recently undone edit, if any. Cursor lands at the
+    /// start of the re-applied region.
+    pub fn redo(&mut self) -> bool {
+        let Some((start_line, before, after)) = self.changetree.redo() else {
+            return false;
+        };
+        let before_lines = rope_line_count(&before);
+        replace_lines(&mut self.buf, start_line, before_lines, &after);
+        self.invalidate_wrap_cache();
+        self.land_cursor_at_line(start_line);
+        true
+    }
+
+    fn land_cursor_at_line(&mut self, line: usize) {
+        let line = line.min(self.buf.len_lines().saturating_sub(1));
+        if line < self.file_pos.row {
+            self.file_pos.row = line;
+        }
+        self.cursor_pos.row = (line - self.file_pos.row) as u16;
+        self.cursor_pos.col = 0;
+        self.file_pos.col = 0;
         self.clamp_cursor();
     }
 
@@ -607,6 +672,53 @@ impl Buffer {
     fn cur_line_start(&self) -> usize {
         self.buf.line_to_char(self.cur_lnum())
     }
+}
+
+/// Read lines `[start..start+n_lines)` as a single string. Caps at EOF so the
+/// snapshot is well-defined even when the requested range overshoots.
+fn snapshot_lines(rope: &Rope, start: usize, n_lines: usize) -> String {
+    let total = rope.len_lines();
+    if start >= total {
+        return String::new();
+    }
+    let start_char = rope.line_to_char(start);
+    let end_line = (start + n_lines).min(total);
+    let end_char = if end_line >= total {
+        rope.len_chars()
+    } else {
+        rope.line_to_char(end_line)
+    };
+    rope.slice(start_char..end_char).to_string()
+}
+
+/// Replace lines `[start..start+n_lines)` with `text`. Used by undo/redo to
+/// swap in the opposite snapshot of a recorded delta.
+fn replace_lines(rope: &mut Rope, start: usize, n_lines: usize, text: &str) {
+    let total = rope.len_lines();
+    let start_char = if start >= total {
+        rope.len_chars()
+    } else {
+        rope.line_to_char(start)
+    };
+    let end_line = (start + n_lines).min(total);
+    let end_char = if end_line >= total {
+        rope.len_chars()
+    } else {
+        rope.line_to_char(end_line)
+    };
+    rope.remove(start_char..end_char);
+    rope.insert(start_char, text);
+}
+
+/// Count the number of ropey-style lines the snapshot occupies. A trailing
+/// `\n` closes the final line; otherwise the dangling content counts as one
+/// more line.
+fn rope_line_count(s: &str) -> usize {
+    if s.is_empty() {
+        return 0;
+    }
+    let nls = s.bytes().filter(|b| *b == b'\n').count();
+    if s.ends_with('\n') { nls } else { nls + 1 }
 }
 
 impl FromStr for Buffer {
@@ -1345,6 +1457,79 @@ mod tests {
         // row 2 "k"      → cols capped to len 1, empty slice
         // Trailing newline after row 1 is emitted before the empty row 2.
         assert_eq!(s.selected_text().as_deref(), Some("b\nghi\n"));
+    }
+
+    // ---- undo / redo --------------------------------------------------
+
+    #[test]
+    fn undo_reverts_insert_char() {
+        let mut s = mk("ab");
+        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.insert_char('c');
+        assert_eq!(s.buf.to_string(), "abc");
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "ab");
+    }
+
+    #[test]
+    fn redo_reapplies_insert_char() {
+        let mut s = mk("ab");
+        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.insert_char('c');
+        s.undo();
+        assert!(s.redo());
+        assert_eq!(s.buf.to_string(), "abc");
+    }
+
+    #[test]
+    fn undo_reverts_newline_split() {
+        let mut s = mk("abcd");
+        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.insert_char('\n');
+        assert_eq!(s.buf.to_string(), "ab\ncd");
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "abcd");
+        assert!(s.redo());
+        assert_eq!(s.buf.to_string(), "ab\ncd");
+    }
+
+    #[test]
+    fn undo_reverts_delete_char_join() {
+        // Backspacing across the newline merges two lines; undo must restore
+        // the split.
+        let mut s = mk("ab\ncd");
+        s.cursor_pos = Position::<u16>::new(0, 1); // before 'c'
+        s.delete_char();
+        assert_eq!(s.buf.to_string(), "abcd");
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "ab\ncd");
+        assert!(s.redo());
+        assert_eq!(s.buf.to_string(), "abcd");
+    }
+
+    #[test]
+    fn undo_chain_then_new_edit_drops_redo() {
+        let mut s = mk("");
+        s.insert_char('a');
+        s.insert_char('b');
+        s.insert_char('c');
+        assert_eq!(s.buf.to_string(), "abc");
+        s.undo();
+        s.undo();
+        assert_eq!(s.buf.to_string(), "a");
+        // Cursor lands at col 0 after undo, so 'Z' inserts at line start.
+        s.insert_char('Z');
+        assert_eq!(s.buf.to_string(), "Za");
+        // The "bc" branch is no longer the canonical redo target, so redo
+        // walks the new branch (no-op here — leaf has no children).
+        assert!(!s.redo());
+    }
+
+    #[test]
+    fn undo_on_fresh_buffer_is_noop() {
+        let mut s = mk("hello");
+        assert!(!s.undo());
+        assert_eq!(s.buf.to_string(), "hello");
     }
 
     #[test]

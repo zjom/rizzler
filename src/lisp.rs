@@ -25,7 +25,6 @@ use crate::keymap::KeyEvent;
 use crate::mode::EditingMode;
 use crate::popup::{BorderStyle, Dim, Placement, Side};
 use crate::position::Position;
-use crate::regions::{BuiltinId, Producer, Region, RegionAnchor};
 use crate::state::{PopupSpec, State};
 use crate::styling::{normalize_style_value, rgb_value, style_from_value, style_to_value};
 use crate::window::{FocusDir, SplitDir};
@@ -669,38 +668,167 @@ fn builtins() -> Env {
         Ok((Rc::new(Value::Map(m)), env.clone()))
     });
 
-    // region registration. The anchor argument decides where the region
-    // appears on screen; the handler is one of:
-    //   * ident → resolved via `BuiltinId::parse` (must match the anchor)
-    //   * callable → invoked each frame
-    //   * any other value → stored as a Static lisp value
+    // ---- widget tree builtins ---------------------------------------------
     //
-    // Anchor syntax (see `parse_anchor`):
-    //   'status-left | 'status-right | 'decorator
-    //   'top         | 'bottom              (full-width strip)
-    //   {"gutter": N}                       (left column, N wide)
+    // The user's frame layout is one big function registered via
+    // `(set-frame (fn () <widget-tree>))`. Each frame the precompute pass
+    // calls it and parses the returned value into a `Widget` tree (see
+    // `crate::widget::Widget`).
     //
-    // Names are globally unique across all anchors — re-adding by the same
-    // name replaces the previous registration in place.
-    b!("region-add", 3, |args, env| {
-        let name = as_ident_or_str(&args[0], "region-add")?;
-        let anchor = parse_anchor(&args[1])?;
-        let producer = parse_handler(&args[2], "region-add", &anchor)?;
-        with_editor_mut(|st| {
-            st.regions_mut().add(Region {
-                name,
-                anchor,
-                producer,
-            });
-        });
+    // The constructors below return tagged maps — that's how the parser
+    // recognizes them. Inline maps without a recognized `"type"` tag are
+    // treated as bare span maps (so `{"text": "..." "style": ...}` works
+    // as a widget too).
+
+    b!("set-frame", 1, |args, env| {
+        let v = args[0].clone();
+        let opt = if v.is_unit() { None } else { Some(v) };
+        with_editor_mut(|st| st.set_frame_fn(opt));
         ok_unit(env)
     });
-    b!("region-remove", 1, |args, env| {
-        let name = as_ident_or_str(&args[0], "region-remove")?;
-        with_editor_mut(|st| {
-            st.regions_mut().remove(&name);
-        });
-        ok_unit(env)
+
+    // (text "..." ()       ) — a styled span. Identical to (span "..." style),
+    // (text "..." 'face    ) and accepted both as a stand-alone widget (the
+    // widget parser recognizes a bare {text, style} map as a single-row line)
+    // and as a child inside `(line [...])`.
+    b!("text", 2, |args, env| {
+        let text = as_str(&args[0], "text")?;
+        let style_val = with_editor_mut(|st| {
+            let theme = st.theme().borrow();
+            normalize_style_value(&args[1], &theme)
+        })?;
+        let mut span: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+        span.insert(strkey("text"), Rc::new(Value::Str(text)));
+        if !style_val.is_unit() {
+            span.insert(strkey("style"), style_val);
+        }
+        Ok((Rc::new(Value::Map(span)), env.clone()))
+    });
+
+    // (line [span1 span2 ...]) — a single screen row composed of styled spans.
+    b!("line", 1, |args, env| {
+        let spans: Vec<Rc<Value>> = value_iter(&args[0]).collect();
+        Ok((widget_line(spans), env.clone()))
+    });
+
+    // (right-align line) / (center-align line) — return the given `line`
+    // widget value with its alignment set. Pass-through for non-line values.
+    b!("right-align", 1, |args, env| {
+        Ok((widget_set_align(args[0].clone(), "right"), env.clone()))
+    });
+    b!("center-align", 1, |args, env| {
+        Ok((widget_set_align(args[0].clone(), "center"), env.clone()))
+    });
+
+    // (vstack [child1 child2 ...]) / (hstack [...]) — stack children with
+    // ratatui constraints. Wrap individual children in
+    // (cells|min-cells|fill|frac ...) for an explicit constraint; raw children
+    // default to (min-cells 1).
+    b!("vstack", 1, |args, env| {
+        Ok((widget_stack("vertical", &args[0]), env.clone()))
+    });
+    b!("hstack", 1, |args, env| {
+        Ok((widget_stack("horizontal", &args[0]), env.clone()))
+    });
+
+    // (cells N child) / (min-cells N child) / (fill N child)
+    // (frac N M child)
+    b!("cells", 2, |args, env| {
+        let n = as_int(&args[0], "cells")?.max(0).min(u16::MAX as i64);
+        Ok((
+            widget_constrained("cells", n, 1, args[1].clone()),
+            env.clone(),
+        ))
+    });
+    b!("min-cells", 2, |args, env| {
+        let n = as_int(&args[0], "min-cells")?.max(0).min(u16::MAX as i64);
+        Ok((
+            widget_constrained("min", n, 1, args[1].clone()),
+            env.clone(),
+        ))
+    });
+    b!("fill", 2, |args, env| {
+        let n = as_int(&args[0], "fill")?.max(0).min(u16::MAX as i64);
+        Ok((
+            widget_constrained("fill", n, 1, args[1].clone()),
+            env.clone(),
+        ))
+    });
+    b!("frac", 3, |args, env| {
+        let n = as_int(&args[0], "frac")?.max(0).min(u16::MAX as i64);
+        let m = as_int(&args[1], "frac")?.max(1).min(u16::MAX as i64);
+        Ok((
+            widget_constrained("frac", n, m, args[2].clone()),
+            env.clone(),
+        ))
+    });
+
+    // (block child {"border": 'rounded "title": " hi " "face": 'popup
+    //               "border-face": 'popup.border "title-face": 'popup.title})
+    //
+    // Wraps `child` in a ratatui Block with optional border/title chrome.
+    b!("block", 2, |args, env| {
+        let child = args[0].clone();
+        let props = match &*args[1] {
+            Value::Map(m) => m.clone(),
+            Value::Unit => ImHashMap::new(),
+            _ => {
+                return Err(RuntimeError::type_mismatch(
+                    "block.props",
+                    "map | ()",
+                    &args[1],
+                ));
+            }
+        };
+        let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+        m.insert(strkey("type"), Rc::new(Value::Str("block".into())));
+        m.insert(strkey("child"), child);
+        for k in ["border", "title", "face", "border-face", "title-face"] {
+            if let Some(v) = props.get(&strkey(k)) {
+                m.insert(strkey(k), v.clone());
+            }
+        }
+        Ok((Rc::new(Value::Map(m)), env.clone()))
+    });
+
+    // (editor-tree) — the editor window tree leaf. Optional gutter:
+    //   (editor-tree {"gutter": (fn (lnum) ...) "gutter-width": 5})
+    b!("editor-tree", 1, |args, env| {
+        let props = match &*args[0] {
+            Value::Map(m) => m.clone(),
+            Value::Unit => ImHashMap::new(),
+            _ => {
+                return Err(RuntimeError::type_mismatch(
+                    "editor-tree.props",
+                    "map | ()",
+                    &args[0],
+                ));
+            }
+        };
+        let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+        m.insert(strkey("type"), Rc::new(Value::Str("editor-tree".into())));
+        if let Some(g) = props.get(&strkey("gutter")) {
+            m.insert(strkey("gutter"), g.clone());
+        }
+        if let Some(w) = props.get(&strkey("gutter-width")) {
+            m.insert(strkey("gutter-width"), w.clone());
+        }
+        Ok((Rc::new(Value::Map(m)), env.clone()))
+    });
+
+    // (minibuffer) — minibuffer leaf.
+    b!("minibuffer", 0, |_, env| {
+        let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+        m.insert(strkey("type"), Rc::new(Value::Str("minibuffer".into())));
+        Ok((Rc::new(Value::Map(m)), env.clone()))
+    });
+
+    // (empty) — explicit empty widget. Useful for stack slots you want to
+    // leave blank.
+    b!("empty", 0, |_, env| {
+        let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+        m.insert(strkey("type"), Rc::new(Value::Str("empty".into())));
+        Ok((Rc::new(Value::Map(m)), env.clone()))
     });
 
     // text properties + overlays. Both attach a style range to the focused
@@ -815,6 +943,17 @@ fn builtins() -> Env {
         let s = with_editor_mut(|st| st.focused_buf().mode().as_str());
         // Return Str (not Ident) — rizz re-evaluates a native fn's return
         // and a raw ident would try to resolve as a variable.
+        Ok((Rc::new(Value::Str(s.into())), env.clone()))
+    });
+
+    // Most recent key event as a string, or "None" if no keys have been
+    // pressed yet. Used by status-line widgets to display the last key.
+    b!("last-key", 0, |_, env| {
+        let s = with_editor_mut(|st| {
+            st.last_key()
+                .map(|k| k.code.to_string())
+                .unwrap_or_else(|| "None".to_string())
+        });
         Ok((Rc::new(Value::Str(s.into())), env.clone()))
     });
 
@@ -1073,61 +1212,59 @@ fn display_from_value(v: &Rc<Value>) -> Result<Option<crate::render::Display>, R
     }
 }
 
-/// Parse an anchor value. Accepted shapes:
-///
-/// * `'status-left` / `'status-right` / `'decorator` / `'top` / `'bottom`
-/// * `{"gutter": N}` — left-side gutter N columns wide
-fn parse_anchor(v: &Rc<Value>) -> Result<RegionAnchor, RuntimeError> {
+// ---- widget helpers -------------------------------------------------------
+
+fn strkey(s: &str) -> Rc<Value> {
+    Rc::new(Value::Str(s.into()))
+}
+
+/// Iterate entries of either an `Array` or a `Cons` list. Rizz's `Value::iter`
+/// only walks cons chains; arrays would otherwise be returned as a single
+/// opaque entry.
+fn value_iter(v: &Rc<Value>) -> Box<dyn Iterator<Item = Rc<Value>> + '_> {
     match &**v {
-        Value::Ident(s) | Value::Str(s) => Ok(match s.as_ref() {
-            "status-left" => RegionAnchor::StatusLeft,
-            "status-right" => RegionAnchor::StatusRight,
-            "decorator" => RegionAnchor::Decorator,
-            "top" => RegionAnchor::Top,
-            "bottom" => RegionAnchor::Bottom,
-            other => return Err(unknown_variant("anchor", other)),
-        }),
-        Value::Map(m) => {
-            let key = |k: &str| Rc::new(Value::Str(k.into()));
-            if let Some(w) = m.get(&key("gutter")) {
-                let width = as_int(w, "anchor.gutter")?.max(0);
-                let width = u16::try_from(width).unwrap_or(0);
-                return Ok(RegionAnchor::Gutter { width });
-            }
-            Err(RuntimeError::type_mismatch("anchor", "{gutter: N}", v))
-        }
-        _ => Err(RuntimeError::type_mismatch("anchor", "ident|str|map", v)),
+        Value::Array(xs) => Box::new(xs.iter().cloned().collect::<Vec<_>>().into_iter()),
+        Value::Unit => Box::new(std::iter::empty()),
+        _ => Box::new(Value::iter(v)),
     }
 }
 
-/// Interpret a user-supplied handler:
-///
-/// * `Value::Ident(s)` — try `BuiltinId::parse(s)`; if it matches and is
-///   compatible with the anchor, use the builtin. Mismatches error out.
-/// * Callable — `Producer::Callable(...)`.
-/// * Anything else — `Producer::Static(...)`.
-fn parse_handler(
-    v: &Rc<Value>,
-    name: &str,
-    anchor: &RegionAnchor,
-) -> Result<Producer, RuntimeError> {
-    if let Value::Ident(s) = &**v
-        && let Some(b) = BuiltinId::parse(s)
-    {
-        if !b.matches_anchor(anchor) {
-            return Err(RuntimeError::TypeMismatch {
-                name: name.into(),
-                expected: format!("builtin compatible with {:?}", anchor).into(),
-                got: format!("{:?}", b).into(),
-            });
-        }
-        return Ok(Producer::Builtin(b));
-    }
-    if v.is_callable() {
-        Ok(Producer::Callable(v.clone()))
+fn widget_line(spans: Vec<Rc<Value>>) -> Rc<Value> {
+    let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+    m.insert(strkey("type"), Rc::new(Value::Str("line".into())));
+    m.insert(strkey("spans"), Rc::new(Value::Array(spans.into())));
+    Rc::new(Value::Map(m))
+}
+
+/// Wrap a line widget value with an `"align"` key. If `v` is not a `line`
+/// map, returns it unchanged.
+fn widget_set_align(v: Rc<Value>, align: &str) -> Rc<Value> {
+    if let Value::Map(m) = &*v {
+        let mut m = m.clone();
+        m.insert(strkey("align"), Rc::new(Value::Str(align.into())));
+        Rc::new(Value::Map(m))
     } else {
-        Ok(Producer::Static(v.clone()))
+        v
     }
+}
+
+fn widget_stack(dir: &str, children: &Rc<Value>) -> Rc<Value> {
+    let kids: Vector<Rc<Value>> = value_iter(children).collect();
+    let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+    m.insert(strkey("type"), Rc::new(Value::Str("stack".into())));
+    m.insert(strkey("dir"), Rc::new(Value::Str(dir.into())));
+    m.insert(strkey("children"), Rc::new(Value::Array(kids)));
+    Rc::new(Value::Map(m))
+}
+
+fn widget_constrained(kind: &str, n: i64, m_: i64, child: Rc<Value>) -> Rc<Value> {
+    let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+    m.insert(strkey("type"), Rc::new(Value::Str("constrained".into())));
+    m.insert(strkey("kind"), Rc::new(Value::Str(kind.into())));
+    m.insert(strkey("n"), Rc::new(Value::Int(n)));
+    m.insert(strkey("m"), Rc::new(Value::Int(m_)));
+    m.insert(strkey("child"), child);
+    Rc::new(Value::Map(m))
 }
 
 fn parse_mode_ident(v: &Rc<Value>) -> Result<EditingMode, RuntimeError> {
@@ -1508,83 +1645,35 @@ mod tests {
     }
 
     #[test]
-    fn status_segment_add_via_lisp_changes_frame() {
+    fn set_frame_installs_user_layout() {
+        // `(set-frame fn)` replaces the layout with a single-line widget;
+        // precompute parses it without errors.
         let mut s = test_state();
-        s.eval_lisp(r#"(region-add 'star 'status-right "★")"#)
-            .unwrap();
-        let (frame, err) = s.precompute_frame();
-        assert!(err.is_none(), "no slot errors: {err:?}");
-        let texts: Vec<&str> = frame
-            .status_right
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert!(texts.contains(&"★"), "star segment missing: {texts:?}");
+        s.eval_lisp(r#"(fn _star () (text "★" ()))"#).unwrap();
+        s.eval_lisp(r#"(set-frame _star)"#).unwrap();
+        let (_, err) = s.precompute_frame();
+        assert!(err.is_none(), "no frame errors: {err:?}");
     }
 
     #[test]
-    fn status_segment_remove_via_lisp_drops_segment() {
+    fn default_style_lisp_loads_clean() {
+        // Force the default-style script to evaluate cleanly: bring up a
+        // fresh state, eval the script, surface any error as a test failure.
         let mut s = test_state();
-        // Clear every default left segment so we can check removal works.
-        s.eval_lisp("(region-remove 'mode)").unwrap();
-        s.eval_lisp("(region-remove 'buffer-path)").unwrap();
-        s.eval_lisp("(region-remove 'sel-hint)").unwrap();
-        let (frame, err) = s.precompute_frame();
-        assert!(err.is_none());
-        assert!(frame.status_left.is_empty());
-    }
-
-    #[test]
-    fn callable_status_segment_runs_each_frame() {
-        let mut s = test_state();
-        // Strip out the theme's left segments so our test segment is the
-        // sole content on the left.
-        s.eval_lisp("(region-remove 'mode)").unwrap();
-        s.eval_lisp("(region-remove 'buffer-path)").unwrap();
-        s.eval_lisp("(region-remove 'sel-hint)").unwrap();
-        s.eval_lisp(r#"(region-add 'probe 'status-left (fn _p () (focused-mode)))"#)
+        let src = include_str!("../default-style.lisp");
+        s.eval_lisp_script(src)
+            .map_err(|e| format!("default-style.lisp eval failed: {e}"))
             .unwrap();
-        let (frame, _err) = s.precompute_frame();
-        let s_left: Vec<&str> = frame
-            .status_left
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert_eq!(s_left, vec!["normal"]);
-    }
-
-    #[test]
-    fn status_segment_with_cjk_uses_display_width() {
-        // A wide-char segment must contribute its display width, not its
-        // char count. Strip the theme's right segments so the math is easy
-        // to follow.
-        use unicode_width::UnicodeWidthStr;
-        let mut s = test_state();
-        for name in ["cursor", "pip", "last-key", "spacer", "bufno"] {
-            s.eval_lisp(&format!("(region-remove '{name})")).unwrap();
-        }
-        s.eval_lisp(r#"(region-add 'cjk 'status-right "漢字")"#)
-            .unwrap();
-        let (frame, _) = s.precompute_frame();
-        let total: usize = frame
-            .status_right
-            .iter()
-            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-            .sum();
-        // "漢字" — two wide characters → 4 columns.
-        assert_eq!(total, 4);
     }
 
     #[test]
     fn render_phase_blocks_mutating_builtins() {
-        // A render callback that calls `(insert-char "x")` must error out and
+        // A widget callback that calls `(insert-char "x")` must error out and
         // leave the buffer alone.
         let mut s = test_state();
-        s.eval_lisp(
-            r#"(region-add 'naughty 'status-left
-                  (fn _naughty () (do (insert-char "x") "")))"#,
-        )
-        .unwrap();
+        s.eval_lisp(r#"(fn _bad () (do (insert-char "x") (text "")))"#)
+            .unwrap();
+        s.eval_lisp(r#"(set-frame _bad)"#).unwrap();
         let pre = s.focused_buf().text();
         let (_, err) = s.precompute_frame();
         assert!(err.is_some(), "expected a render-phase error");

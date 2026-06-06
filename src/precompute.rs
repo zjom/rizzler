@@ -1,24 +1,31 @@
-//! Build a [`RenderedFrame`] from the editor's current state. Runs every
-//! registered region (top/bottom strips, status segments, gutters,
-//! decorators) under an `EditorGuard` installed by the caller, then layers
-//! text-properties / overlays and the soft-wrap layout on top.
+//! Build a [`RenderedFrame`] from the editor's current state.
 //!
-//! The companion [`State::precompute_frame`] owns the guard/lisp dance and
-//! delegates the actual computation here so the bulk of frame assembly is a
-//! single, testable function over borrowed state.
+//! Pipeline:
+//!
+//! 1. Snapshot the theme (so a `face-define` from inside a render callback
+//!    only affects the next frame).
+//! 2. Evaluate the user's `set-frame` fn — its return value is parsed into a
+//!    [`Widget`] tree.
+//! 3. For each `EditorTree` node found in the tree, pre-render the gutter
+//!    rows for every editor buffer using the node's `gutter` callback.
+//! 4. Build per-buffer decorator ranges: built-in `base-fg`, selection
+//!    highlight, current-line highlight, plus the buffer's `prop_store`
+//!    (text properties + overlays).
+//! 5. Build soft-wrap layouts for buffers that opt in.
 
+use std::rc::Rc;
+
+use ratatui::text::{Line, Span};
 use rizz::Env;
+use rizz::runtime::{self, Value};
 
 use crate::buffer::{Buffer, BufferKind};
-use crate::keymap::KeyEvent;
-use crate::regions::{
-    RegionAnchor, RegionRegistry, produce_decorator, produce_gutter, produce_status_span,
-    produce_strip_rows,
-};
+use crate::mode::EditingMode;
 use crate::render::{
-    CursorStyle, RenderedBuffer, RenderedFrame, RenderedStrip, StateSnapshot,
+    DecoratorRanges, RenderedBuffer, RenderedFrame, RenderedGutter, StyledRange,
 };
-use crate::styling::ThemeCell;
+use crate::styling::{Color, Style, Theme, ThemeCell, spans_from_value};
+use crate::widget::{Widget, parse_widget};
 use crate::window::WindowTree;
 
 /// Inputs the precompute pass reads from `State`. All references are
@@ -26,115 +33,84 @@ use crate::window::WindowTree;
 pub struct PrecomputeInput<'a> {
     pub bufs: &'a [Buffer],
     pub windows: &'a WindowTree,
-    pub regions: &'a RegionRegistry,
+    pub frame_fn: Option<&'a Rc<Value>>,
     pub theme: &'a ThemeCell,
-    pub focus_minibuffer: bool,
     pub minibuffer: usize,
-    pub last_key: Option<KeyEvent>,
     pub lisp_env: &'a Env,
 }
 
 pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
     let PrecomputeInput {
         bufs,
-        windows,
-        regions,
+        windows: _,
+        frame_fn,
         theme,
-        focus_minibuffer,
         minibuffer,
-        last_key,
         lisp_env,
     } = input;
 
-    // Snapshot the theme so callbacks that mutate it (`face-define`) only
-    // affect the next frame.
     let theme_snap = theme.borrow().clone();
     let default_style = theme_snap.resolve("default").unwrap_or_default();
 
-    let mut error_chunks: Vec<String> = Vec::new();
-    let record = |chunks: &mut Vec<String>, region_name: &str, err: rizz::RizzError| {
-        if chunks.len() < 3 {
-            chunks.push(format!("[{region_name}] {err}"));
+    let mut errors: Vec<String> = Vec::new();
+    let record = |errs: &mut Vec<String>, ctx: &str, msg: String| {
+        if errs.len() < 3 {
+            errs.push(format!("[{ctx}] {msg}"));
         }
     };
 
-    // Read-only snapshot status/strip producers consume.
-    let snap = StateSnapshot {
-        bufs,
-        windows,
-        minibuffer: &bufs[minibuffer],
-        focus_minibuffer,
-        bufno: windows.focused_bufno(),
-        keyevent: last_key,
-        cursor_style: CursorStyle::Block,
-        popups: &[],
+    // 1. Build the widget tree by calling the user's frame fn (if any).
+    let mut root = match frame_fn {
+        Some(f) => match runtime::apply(f, &[], lisp_env) {
+            Ok(v) => match parse_widget(&v, &theme_snap) {
+                Ok(w) => w,
+                Err(e) => {
+                    record(&mut errors, "frame", e.to_string());
+                    default_layout()
+                }
+            },
+            Err(e) => {
+                record(&mut errors, "frame", e.to_string());
+                default_layout()
+            }
+        },
+        None => default_layout(),
     };
 
-    // One pass over the registry, routing each region's output to the
-    // matching `RenderedFrame` bucket.
-    let mut top_extra: Vec<RenderedStrip> = Vec::new();
-    let mut bottom_extra: Vec<RenderedStrip> = Vec::new();
-    let mut status_left: Vec<ratatui::text::Span<'static>> = Vec::new();
-    let mut status_right: Vec<ratatui::text::Span<'static>> = Vec::new();
-    for region in regions.iter() {
-        match region.anchor {
-            RegionAnchor::Top => match produce_strip_rows(region, &theme_snap, lisp_env) {
-                Ok(lines) => top_extra.push(RenderedStrip { lines }),
-                Err(e) => record(&mut error_chunks, &region.name, e),
-            },
-            RegionAnchor::Bottom => match produce_strip_rows(region, &theme_snap, lisp_env) {
-                Ok(lines) => bottom_extra.push(RenderedStrip { lines }),
-                Err(e) => record(&mut error_chunks, &region.name, e),
-            },
-            RegionAnchor::StatusLeft => {
-                match produce_status_span(region, &snap, &theme_snap, lisp_env) {
-                    Ok(spans) => status_left.extend(spans),
-                    Err(e) => record(&mut error_chunks, &region.name, e),
-                }
-            }
-            RegionAnchor::StatusRight => {
-                match produce_status_span(region, &snap, &theme_snap, lisp_env) {
-                    Ok(spans) => status_right.extend(spans),
-                    Err(e) => record(&mut error_chunks, &region.name, e),
-                }
-            }
-            // Per-buffer anchors are handled in the loop below.
-            RegionAnchor::Gutter { .. } | RegionAnchor::Decorator => {}
-        }
-    }
+    // 2. Discover EditorTree nodes and capture their gutter spec. We support
+    //    one effective spec per frame — the first EditorTree we encounter
+    //    wins. (Multiple editor-tree nodes in one layout is unusual.)
+    let (gutter_width, gutter_fn) = find_editor_tree_spec(&root);
 
-    // Per-buffer pass: gutters + decorators, in registration order
-    // (which is the renderer's left-to-right / layer order). Popup and
-    // minibuffer kinds skip the region phase — their visual shell is
-    // owned by their chrome / the minibuffer line — but they still get
-    // a `prop_ranges` pass so text-property / overlay APIs work on a
-    // popup buffer's content the same way they do on a file buffer.
+    // 3. Per-buffer precompute: gutter rows, decorator ranges, wrap layout.
     let mut per_buf = Vec::with_capacity(bufs.len());
     for (i, buf) in bufs.iter().enumerate() {
         let mut rb = RenderedBuffer::default();
-        let participates_in_regions = i != minibuffer && buf.kind() != BufferKind::Popup;
-        if participates_in_regions {
-            for region in regions.iter() {
-                match region.anchor {
-                    RegionAnchor::Gutter { .. } => {
-                        match produce_gutter(region, buf, &theme_snap, lisp_env) {
-                            Ok(g) => rb.gutters.push(g),
-                            Err(e) => record(&mut error_chunks, &region.name, e),
-                        }
-                    }
-                    RegionAnchor::Decorator => {
-                        match produce_decorator(region, buf, &theme_snap, lisp_env) {
-                            Ok(d) => rb.decorators.push(d),
-                            Err(e) => record(&mut error_chunks, &region.name, e),
-                        }
-                    }
-                    _ => {}
+
+        let is_visible_editor =
+            i != minibuffer && buf.kind() == BufferKind::File;
+
+        if is_visible_editor {
+            // Gutter rows. Built once, applied uniformly to every leaf that
+            // points at this buffer (the same buffer in two splits gets the
+            // same gutter — fine, since gutter content is buffer-local).
+            if gutter_width > 0 {
+                let g = build_gutter(buf, gutter_width, gutter_fn.as_ref(), &theme_snap, lisp_env);
+                match g {
+                    Ok(g) => rb.gutter = Some(g),
+                    Err(e) => record(&mut errors, "gutter", e),
                 }
             }
         }
-        // Text properties + overlays applied after user decorators so
-        // they layer on top — overlays themselves are priority-ordered
-        // inside `build_prop_ranges`. Run for popups too.
+
+        // Built-in decorator passes: base-fg, selection, current-line.
+        // Run for editor buffers and popup buffers (popups still want
+        // selection / cursor-line highlights inside their content).
+        if buf.kind() != BufferKind::Minibuffer {
+            push_builtin_decorators(buf, &theme_snap, &mut rb);
+        }
+
+        // Buffer-attached text properties + overlays.
         if i != minibuffer {
             let prop_ranges = crate::props::build_prop_ranges(buf, &theme_snap);
             if !prop_ranges.ranges.is_empty() {
@@ -142,12 +118,10 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
             }
         }
 
-        // Soft-wrap layout. Built after gutters so the wrap width is
-        // the actual content area (viewport - gutters). Bail early when
-        // wrap is off, the viewport hasn't been sized yet, or gutters
-        // ate the whole row.
+        // Soft-wrap layout. Built after gutters so the wrap width is the
+        // actual content area (viewport - gutters).
         if !matches!(buf.wrap_mode(), crate::wrap::WrapMode::None) && buf.viewport.row > 0 {
-            let gutter_w: u16 = rb.gutters.iter().map(|g| g.width).sum();
+            let gutter_w: u16 = rb.gutter.as_ref().map(|g| g.width).unwrap_or(0);
             let content_w = buf
                 .wrap_column()
                 .unwrap_or_else(|| buf.viewport.col.saturating_sub(gutter_w));
@@ -157,33 +131,243 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
                     width: content_w,
                     breakindent: buf.breakindent(),
                 };
-                // Build a generous cache (several screenfuls) so single-step
-                // movements like `j` near the viewport bottom can step
-                // onto the next visual row without falling off the map.
                 let budget = ((buf.viewport.row as usize) * 4).max(200);
                 let map = crate::wrap::WrapMap::build(buf, buf.file_pos().row, budget, cfg);
                 rb.wrap = Some(map);
             }
         }
+
         per_buf.push(rb);
     }
 
-    let error_msg = if error_chunks.is_empty() {
+    // 4. Mutate the tree so EditorTree widgets carry their effective width
+    //    (already set during parsing; we just preserve the structure).
+    // No-op: we already parsed gutter_width into Widget::EditorTree.
+    let _ = &mut root;
+
+    let error_msg = if errors.is_empty() {
         None
     } else {
-        Some(error_chunks.join("; "))
+        Some(errors.join("; "))
     };
 
     (
         RenderedFrame {
             default_style,
             theme: theme_snap,
-            top_extra,
-            status_left,
-            status_right,
-            bottom_extra,
+            root,
             per_buf,
         },
         error_msg,
     )
+}
+
+/// The fallback layout used when no `set-frame` fn has been installed
+/// (or when one errors out). Renders editor windows + minibuffer with no
+/// gutter, no status line.
+fn default_layout() -> Widget {
+    use crate::widget::{ConstraintKind, StackDir};
+    Widget::Stack {
+        dir: StackDir::Vertical,
+        children: vec![
+            Widget::Constrained {
+                kind: ConstraintKind::Min,
+                n: 1,
+                m: 1,
+                child: Box::new(Widget::EditorTree {
+                    gutter_width: 0,
+                    gutter: None,
+                }),
+            },
+            Widget::Constrained {
+                kind: ConstraintKind::Cells,
+                n: 1,
+                m: 1,
+                child: Box::new(Widget::Minibuffer),
+            },
+        ],
+    }
+}
+
+/// Walk the tree and return the first `EditorTree` node's gutter spec.
+fn find_editor_tree_spec(w: &Widget) -> (u16, Option<Rc<Value>>) {
+    match w {
+        Widget::EditorTree {
+            gutter_width,
+            gutter,
+        } => (*gutter_width, gutter.clone()),
+        Widget::Stack { children, .. } => {
+            for c in children {
+                let (w, f) = find_editor_tree_spec(c);
+                if w > 0 || f.is_some() {
+                    return (w, f);
+                }
+                // Even when both are zero/None, if we encountered an
+                // EditorTree at all, we should return — but we can't tell
+                // that here. The caller treats (0, None) as "no gutter".
+            }
+            (0, None)
+        }
+        Widget::Constrained { child, .. } => find_editor_tree_spec(child),
+        Widget::Block { child, .. } => find_editor_tree_spec(child),
+        _ => (0, None),
+    }
+}
+
+fn build_gutter(
+    buf: &Buffer,
+    width: u16,
+    gutter_fn: Option<&Rc<Value>>,
+    theme: &Theme,
+    env: &Env,
+) -> Result<RenderedGutter, String> {
+    let start = buf.file_pos().row.min(buf.len_lines());
+    let visible = buf.viewport.row as usize;
+    let last = buf.len_lines().saturating_sub(1);
+
+    let mut rows = Vec::with_capacity(visible);
+    for r in 0..visible {
+        let lnum = start + r;
+        let lnum_arg: Rc<Value> = if lnum <= last {
+            Rc::new(Value::Int(lnum as i64))
+        } else {
+            Rc::new(Value::Unit)
+        };
+        let v = match gutter_fn {
+            Some(f) => runtime::apply(f, &[lnum_arg], env).map_err(|e| e.to_string())?,
+            None => Rc::new(Value::Unit),
+        };
+        let spans = spans_from_value(&v, theme).map_err(|e| e.to_string())?;
+        rows.push(pad_line_to_width(spans, width));
+    }
+    Ok(RenderedGutter { width, rows })
+}
+
+fn pad_line_to_width(spans: Vec<Span<'static>>, width: u16) -> Line<'static> {
+    use unicode_width::UnicodeWidthStr;
+    let used: usize = spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    let mut spans = spans;
+    if (width as usize) > used {
+        spans.push(Span::raw(" ".repeat(width as usize - used)));
+    }
+    Line::from(spans)
+}
+
+/// Always-on decorator passes that used to live as `BuiltinId` regions:
+/// base-fg, selection highlight, current-line highlight. Pushed in that
+/// order so cursor-line layers under selection layers under text content
+/// (selection takes precedence on selected rows).
+fn push_builtin_decorators(buf: &Buffer, theme: &Theme, rb: &mut RenderedBuffer) {
+    rb.decorators.push(base_fg_ranges(buf, theme));
+    rb.decorators.push(current_line_ranges(buf, theme));
+    rb.decorators.push(selection_ranges(buf, theme));
+}
+
+fn base_fg_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
+    let mut ranges = Vec::new();
+    let Some(style) = theme.resolve("default") else {
+        return DecoratorRanges { ranges };
+    };
+    let start = buf.file_pos().row.min(buf.len_lines());
+    let visible = buf.viewport.row as usize;
+    for (i, line) in buf.lines_at(start).take(visible).enumerate() {
+        let text = line.to_string();
+        let len = text.trim_end_matches(['\n', '\r']).chars().count();
+        ranges.push(StyledRange {
+            row: start + i,
+            col: 0,
+            len,
+            style: style.clone(),
+            pad_to_width: false,
+            display: None,
+        });
+    }
+    DecoratorRanges { ranges }
+}
+
+fn current_line_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
+    let style = theme.resolve("cursor-line").unwrap_or_else(|| Style {
+        bg: Some(Color::DarkGray),
+        ..Default::default()
+    });
+    let cur_row = buf.abs_row();
+    DecoratorRanges {
+        ranges: vec![StyledRange {
+            row: cur_row,
+            col: 0,
+            len: 0,
+            style,
+            pad_to_width: true,
+            display: None,
+        }],
+    }
+}
+
+fn selection_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
+    let mut ranges = Vec::new();
+    let style = theme.resolve("selection").unwrap_or_else(|| Style {
+        bg: Some(Color::Rgb(60, 90, 130)),
+        ..Default::default()
+    });
+    let Some(anchor) = buf.selection_anchor() else {
+        return DecoratorRanges { ranges };
+    };
+    let cur = buf.abs_pos();
+    let mode = buf.mode();
+    if !mode.is_visual() {
+        return DecoratorRanges { ranges };
+    }
+    let start = buf.file_pos().row.min(buf.len_lines());
+    let visible = buf.viewport.row as usize;
+    let (min_row, max_row) = order(anchor.row, cur.row);
+    for (i, line) in buf.lines_at(start).take(visible).enumerate() {
+        let lnum = start + i;
+        if lnum < min_row || lnum > max_row {
+            continue;
+        }
+        let text = line.to_string();
+        let line_len = text.trim_end_matches(['\n', '\r']).chars().count();
+        let (col, len, pad) = match mode {
+            EditingMode::VisualLine => (0usize, line_len.max(1), true),
+            EditingMode::VisualBlock => {
+                let (lo, hi) = order(anchor.col, cur.col);
+                (lo, hi.saturating_sub(lo) + 1, false)
+            }
+            EditingMode::Visual => {
+                let (lo_row, lo_col, hi_row, hi_col) =
+                    if (anchor.row, anchor.col) <= (cur.row, cur.col) {
+                        (anchor.row, anchor.col, cur.row, cur.col)
+                    } else {
+                        (cur.row, cur.col, anchor.row, anchor.col)
+                    };
+                let s = if lnum == lo_row { lo_col } else { 0 };
+                let e = if lnum == hi_row {
+                    hi_col + 1
+                } else {
+                    line_len.max(1)
+                };
+                (s, e.saturating_sub(s), false)
+            }
+            _ => continue,
+        };
+        if len == 0 {
+            continue;
+        }
+        ranges.push(StyledRange {
+            row: lnum,
+            col,
+            len,
+            style: style.clone(),
+            pad_to_width: pad,
+            display: None,
+        });
+    }
+    DecoratorRanges { ranges }
+}
+
+fn order(a: usize, b: usize) -> (usize, usize) {
+    if a <= b { (a, b) } else { (b, a) }
 }

@@ -21,7 +21,6 @@ use crate::{
     mode::EditingMode,
     popup::{Chrome, Placement, Popup, PopupStack},
     position::Position,
-    regions::RegionRegistry,
     render::{CursorStyle, Renderer, StateSnapshot},
     render_ratatui::RatatuiRenderer,
     styling::ThemeCell,
@@ -125,10 +124,10 @@ pub struct State {
     /// Named styles registered by lisp (`face-define`). `RefCell` so render
     /// callbacks can introspect without holding `&mut State`.
     theme: ThemeCell,
-    /// Ordered registry of customization regions (top/bottom strips, status
-    /// segments, gutters, decorators). Owned, not RefCell — only the lisp
-    /// builtins that hold `&mut State` mutate it.
-    regions: RegionRegistry,
+    /// Lisp callable that builds the frame's widget tree each render. Set
+    /// via the `(set-frame ...)` builtin. `None` means "use the Rust-side
+    /// default layout" (an editor tree + minibuffer, no chrome).
+    frame_fn: Option<Rc<Value>>,
     workdir: Rc<Path>,
 }
 
@@ -155,7 +154,7 @@ impl State {
             renderer: config.renderer,
             lisp: Some(LispRuntime::new()),
             theme: ThemeCell::default(),
-            regions: RegionRegistry::new(),
+            frame_fn: None,
             workdir: workdir.into(),
         };
         state.refresh_viewport();
@@ -163,9 +162,15 @@ impl State {
         // Bundled defaults: keybindings, then visual configuration, then
         // (optional) user `init.lisp`. Each layer can override the previous.
         if let Err(e) = state.eval_lisp_script(include_str!("../default.lisp")) {
+            #[cfg(test)]
+            panic!("default.lisp eval failed: {e}");
+            #[cfg(not(test))]
             eprintln!("default.lisp eval failed: {e}");
         }
         if let Err(e) = state.eval_lisp_script(include_str!("../default-style.lisp")) {
+            #[cfg(test)]
+            panic!("default-style.lisp eval failed: {e}");
+            #[cfg(not(test))]
             eprintln!("default-style.lisp eval failed: {e}");
         }
         if let Some(path) = init_script_path()
@@ -228,10 +233,16 @@ impl State {
         &self.theme
     }
 
-    /// Mutable accessor for the region registry. Used by the `region-add` /
-    /// `region-remove` builtins.
-    pub(crate) fn regions_mut(&mut self) -> &mut RegionRegistry {
-        &mut self.regions
+    /// Install the user's frame-builder fn. Called by the `set-frame` lisp
+    /// builtin. `None` reverts to the Rust-side default layout.
+    pub(crate) fn set_frame_fn(&mut self, f: Option<Rc<Value>>) {
+        self.frame_fn = f;
+    }
+
+    /// Most recent key event seen by the editor, if any. Exposed for the
+    /// `last-key` lisp builtin.
+    pub(crate) fn last_key(&self) -> Option<KeyEvent> {
+        self.keyevents.peek_back().map(|(e, _)| e.to_owned())
     }
 
     /// Append `msg` to the message history. The user-visible popup is the
@@ -688,11 +699,9 @@ impl State {
         let result = crate::precompute::compute(crate::precompute::PrecomputeInput {
             bufs: self.bufs.as_slice(),
             windows: &self.windows,
-            regions: &self.regions,
+            frame_fn: self.frame_fn.as_ref(),
             theme: &self.theme,
-            focus_minibuffer: self.focus_minibuffer,
             minibuffer: self.bufs.minibuffer_index(),
-            last_key: self.keyevents.peek_back().map(|(ke, _)| ke.to_owned()),
             lisp_env: lisp.env(),
         });
 
@@ -920,21 +929,17 @@ mod tests {
     }
 
     #[test]
-    fn default_precompute_produces_expected_slots() {
-        // Confirms the bundled `default-style.lisp` loads cleanly and
-        // produces a populated frame. We assert structural invariants only
-        // (no slot errors, at least one gutter, the standard decorators,
-        // both status sides have content). The exact shape is theme-defined.
+    fn default_precompute_produces_expected_frame() {
+        // Confirms the bundled `default-style.lisp` loads cleanly and produces
+        // a populated frame. Asserts structural invariants only: a frame is
+        // built without errors, the focused buffer has a gutter and the
+        // built-in decorator passes (base-fg + selection + current-line).
         let mut s = test_state();
         let (frame, err) = s.precompute_frame();
-        assert!(err.is_none(), "no slot errors expected: {err:?}");
-        assert!(!frame.status_left.is_empty(), "expected left segments");
-        assert!(!frame.status_right.is_empty(), "expected right segments");
+        assert!(err.is_none(), "no frame errors expected: {err:?}");
         let bufno = s.windows.focused_bufno();
         let bf = &frame.per_buf[bufno];
-        assert!(!bf.gutters.is_empty());
-        assert!(bf.decorators.len() >= 3);
-        // The bundled theme adds one bottom hint bar.
-        assert!(!frame.bottom_extra.is_empty());
+        assert!(bf.gutter.is_some(), "expected a gutter");
+        assert!(bf.decorators.len() >= 3, "expected the 3 built-in passes");
     }
 }

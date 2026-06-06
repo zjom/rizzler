@@ -1,12 +1,13 @@
 use std::io;
 
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 
 use crate::{
     buffer::Buffer,
     keymap::KeyEvent,
     popup::Popup,
     styling::{Style, Theme},
+    widget::Widget,
     window::WindowTree,
     wrap::WrapMap,
 };
@@ -60,47 +61,29 @@ pub enum CursorStyle {
 
 /// Everything the renderer needs that came out of the precompute pass.
 ///
-/// The precompute pass (`State::render`) walks the slot registry under an
-/// `EditorGuard`, invokes any lisp callbacks, and converts their output into
-/// ratatui-ready data. The renderer is then a pure consumer — no lisp call
-/// happens from inside `Renderer::render`.
+/// The precompute pass calls the user's `set-frame` fn to build a widget
+/// tree, parses it into [`Widget`], pre-renders per-buffer gutters and
+/// decorator ranges, and snapshots the theme. The renderer is then a pure
+/// consumer — no lisp call happens from inside `Renderer::render`.
 pub struct RenderedFrame {
     /// Resolved style of the `default` face — the baseline fg/bg the renderer
-    /// fills the whole frame with before drawing anything else. Empty (no
-    /// fg/bg) if the theme doesn't define one, in which case the terminal's
-    /// own defaults show through.
+    /// fills the whole frame with before drawing anything else.
     pub default_style: Style,
-    /// Snapshot of the theme as of the precompute pass. The popup renderer
-    /// reads it to resolve `face` / `border_face` / `title_face` references
-    /// on each popup's `Chrome`. Snapshotting (rather than borrowing from
-    /// `State`) keeps the renderer pure and means a face redefined by a
-    /// region callback can't shift popup colors mid-frame.
+    /// Snapshot of the theme as of the precompute pass. The renderer reads it
+    /// to resolve face references on widgets and popup chrome.
     pub theme: Theme,
-    /// Full-width strips above the editor area, in declaration order. Empty
-    /// in the default configuration.
-    pub top_extra: Vec<RenderedStrip>,
-    /// Status line, split into the two horizontal alignment buckets. Styles
-    /// from the theme have already been baked into each `Span`.
-    pub status_left: Vec<Span<'static>>,
-    pub status_right: Vec<Span<'static>>,
-    /// Full-width strips between the status line and the minibuffer.
-    pub bottom_extra: Vec<RenderedStrip>,
-    /// Per-buffer gutters and decorator ranges, indexed by `bufno`. Buffers
-    /// not currently visible may still have entries (they're cheap to
-    /// produce), but the renderer only reads entries it actually shows.
+    /// The user-supplied frame layout. Already concrete — no callables remain
+    /// in the tree, gutters have been pre-rendered into `per_buf`.
+    pub root: Widget,
+    /// Per-buffer precomputed data: gutter rows (built from the EditorTree's
+    /// gutter fn), built-in + user decorator ranges, and the soft-wrap layout.
     pub per_buf: Vec<RenderedBuffer>,
 }
 
-/// A user-added full-width strip, fully pre-rendered. The renderer reserves
-/// `lines.len()` rows for it. Used for both top and bottom regions.
-pub struct RenderedStrip {
-    pub lines: Vec<Vec<Span<'static>>>,
-}
-
-/// Per-buffer precomputed data — gutters and decorator ranges.
+/// Per-buffer precomputed data — gutter rows and decorator ranges.
 #[derive(Default)]
 pub struct RenderedBuffer {
-    pub gutters: Vec<RenderedGutter>,
+    pub gutter: Option<RenderedGutter>,
     pub decorators: Vec<DecoratorRanges>,
     /// Visual-line layout for soft-wrapped buffers. `None` = no wrap;
     /// renderer falls back to one screen row per file row. When `Some`,
@@ -110,11 +93,10 @@ pub struct RenderedBuffer {
 }
 
 pub struct RenderedGutter {
-    /// Fixed column width registered with the gutter slot.
+    /// Fixed column width registered with the gutter.
     pub width: u16,
     /// One [`Line`] per visible row of the buffer's viewport. Already
-    /// padded to `width`. `len()` may be 0 if the gutter's producer
-    /// errored — the renderer leaves the column blank in that case.
+    /// padded to `width`.
     pub rows: Vec<Line<'static>>,
 }
 

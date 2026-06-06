@@ -2,7 +2,7 @@ use std::io::{self, Stdout};
 
 use crossterm::{cursor::SetCursorStyle, execute};
 use ratatui::{
-    Terminal,
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     text::{Line, Span},
@@ -10,20 +10,17 @@ use ratatui::{
 };
 
 use crate::{
-    components::{EditorView, MinibufferLine, StatusLine},
+    components::{EditorView, MinibufferLine},
     mode::EditingMode,
     popup::{BorderStyle, Popup},
     render::{CursorStyle, RenderedFrame, Renderer, StateSnapshot},
     styling::{Style, Theme, style_to_ratatui},
+    widget::{StackDir, Widget},
 };
 
-/// Concrete ratatui renderer. Stateless wrt customization — every gutter,
-/// segment, decorator, and bottom row is fed by `RenderedFrame`. The
-/// renderer just lays out rectangles and copies pre-styled spans onto the
-/// terminal.
-///
-/// Layout, top to bottom: editor area (window tree) → status line → any
-/// user-added bottom rows in order → minibuffer.
+/// Concrete ratatui renderer. Walks the widget tree produced by the
+/// precompute pass into ratatui draws. Stateless wrt customization — every
+/// widget tree was assembled in lisp; this renderer just translates it.
 pub struct RatatuiRenderer {
     term: Terminal<CrosstermBackend<Stdout>>,
 }
@@ -37,108 +34,44 @@ impl RatatuiRenderer {
     }
 }
 
+/// Cursor placement collected by the walker so it can be applied after the
+/// frame is fully drawn. Editor windows publish theirs to `editor`; popups
+/// take precedence if their `show_cursor` flag is set.
+#[derive(Default)]
+struct CursorPlacement {
+    editor: Option<(u16, u16)>,
+    popup: Option<(u16, u16, CursorStyle)>,
+}
+
 impl Renderer for RatatuiRenderer {
     fn render(&mut self, snap: StateSnapshot<'_>, frame_data: &RenderedFrame) -> io::Result<()> {
-        // Cursor style is a terminal escape, not a ratatui widget — emit it
-        // out-of-band before the frame draw.
         execute!(io::stdout(), set_cursor_style(snap.cursor_style))?;
 
         self.term.draw(|f| {
-            // Base layer: paint the whole frame with the `default` face's
-            // style so any cell not overridden by a more specific span
-            // inherits the editor background and foreground. ratatui's
-            // `Paragraph` patches cell styles, so spans with `bg: None` (the
-            // common case) preserve this fill.
+            // Base fill: paint the whole frame with the `default` face so any
+            // cell not overridden by a more specific widget inherits the
+            // editor's background and foreground.
             let base_style = style_to_ratatui(&frame_data.default_style);
             f.render_widget(Block::default().style(base_style), f.area());
 
-            // Vertical layout: each top strip → editor → status (1) → each
-            // bottom strip → minibuffer (1).
-            let mut constraints = Vec::new();
-            for t in &frame_data.top_extra {
-                constraints.push(Constraint::Length(t.lines.len() as u16));
-            }
-            let editor_idx = constraints.len();
-            constraints.push(Constraint::Min(1));
-            let status_idx = constraints.len();
-            constraints.push(Constraint::Length(1));
-            let bottom_start = constraints.len();
-            for b in &frame_data.bottom_extra {
-                constraints.push(Constraint::Length(b.lines.len() as u16));
-            }
-            constraints.push(Constraint::Length(1));
-            let rects = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints(constraints)
-                .split(f.area());
-
-            for (t, area) in frame_data
-                .top_extra
-                .iter()
-                .zip(rects.iter().take(editor_idx))
-            {
-                draw_strip(t, *area, f);
-            }
-            let editor_area = rects[editor_idx];
-            let status_area = rects[status_idx];
-            let minibuffer_area = *rects.last().unwrap();
-
-            let mut cursor: Option<(u16, u16)> = None;
-            let focused_path = snap.windows.focused_path();
-            for leaf in snap.windows.layout(editor_area) {
-                let Some(buf) = snap.bufs.get(leaf.bufno) else {
-                    continue;
-                };
-                let buf_frame = frame_data.per_buf.get(leaf.bufno);
-                EditorView::render(buf, leaf.area, buf_frame, f);
-                if !snap.focus_minibuffer && &leaf.path == focused_path {
-                    cursor = Some(match buf_frame.and_then(|bf| bf.wrap.as_ref()) {
-                        Some(wrap) => EditorView::cursor_wrapped(buf, leaf.area, buf_frame, wrap),
-                        None => EditorView::cursor(buf, leaf.area, buf_frame),
-                    });
-                }
-            }
-
-            StatusLine::render(
-                status_area,
-                &frame_data.status_left,
-                &frame_data.status_right,
-                f,
-            );
-
-            // Extra user-added bottom rows occupy rects[2..rects.len()-1].
-            for (b, area) in frame_data
-                .bottom_extra
-                .iter()
-                .zip(rects.iter().skip(bottom_start))
-            {
-                draw_strip(b, *area, f);
-            }
-
-            MinibufferLine::render(minibuffer_area, &snap, f);
-            if let Some(pos) = MinibufferLine::cursor(minibuffer_area, &snap) {
-                cursor = Some(pos);
-            }
+            let mut cur = CursorPlacement::default();
+            walk(&frame_data.root, f.area(), &snap, frame_data, f, &mut cur);
 
             // Popups draw last, bottom-up so the last entry ends up on top.
-            // While a popup is open the editor cursor is hidden — only the
-            // topmost popup may opt into showing its own cursor.
-            let mut popup_cursor: Option<(u16, u16, CursorStyle)> = None;
             for (i, popup) in snap.popups.iter().enumerate() {
                 let is_top = i + 1 == snap.popups.len();
-                let pc = draw_popup(popup, editor_area, &snap, frame_data, is_top, f);
+                let popup_cursor =
+                    draw_popup(popup, f.area(), &snap, frame_data, is_top, f);
                 if is_top {
-                    popup_cursor = pc;
+                    cur.popup = popup_cursor;
                 }
             }
 
-            if let Some((x, y, cs)) = popup_cursor {
-                // A popup with `show_cursor` overrides the editor cursor and
-                // optionally its style — terminal-style popups want a bar.
+            if let Some((x, y, cs)) = cur.popup {
                 let _ = execute!(io::stdout(), set_cursor_style(cs));
                 f.set_cursor_position((x, y));
             } else if snap.popups.is_empty()
-                && let Some((x, y)) = cursor
+                && let Some((x, y)) = cur.editor
             {
                 f.set_cursor_position((x, y));
             }
@@ -147,23 +80,160 @@ impl Renderer for RatatuiRenderer {
     }
 }
 
+/// Recursive widget walker. Lays each widget out in `area` and renders to
+/// the ratatui frame. Editor windows update `cur.editor` so the renderer
+/// can place the cursor after the frame is drawn.
+fn walk(
+    w: &Widget,
+    area: Rect,
+    snap: &StateSnapshot<'_>,
+    fd: &RenderedFrame,
+    f: &mut Frame,
+    cur: &mut CursorPlacement,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    match w {
+        Widget::Empty => {}
+        Widget::Line { spans, align } => {
+            f.render_widget(
+                Paragraph::new(Line::from(spans.clone())).alignment(*align),
+                area,
+            );
+        }
+        Widget::Stack { dir, children } => walk_stack(*dir, children, area, snap, fd, f, cur),
+        Widget::Constrained { child, .. } => walk(child, area, snap, fd, f, cur),
+        Widget::Block {
+            border,
+            title,
+            face,
+            border_face,
+            title_face,
+            child,
+        } => walk_block(
+            *border,
+            title.as_deref(),
+            face.as_deref(),
+            border_face.as_deref(),
+            title_face.as_deref(),
+            child,
+            area,
+            snap,
+            fd,
+            f,
+            cur,
+        ),
+        Widget::EditorTree { .. } => walk_editor_tree(area, snap, fd, f, cur),
+        Widget::Minibuffer => {
+            MinibufferLine::render(area, snap, f);
+            if let Some(pos) = MinibufferLine::cursor(area, snap) {
+                cur.editor = Some(pos);
+            }
+        }
+    }
+}
+
+fn walk_stack(
+    dir: StackDir,
+    children: &[Widget],
+    area: Rect,
+    snap: &StateSnapshot<'_>,
+    fd: &RenderedFrame,
+    f: &mut Frame,
+    cur: &mut CursorPlacement,
+) {
+    if children.is_empty() {
+        return;
+    }
+    let constraints: Vec<Constraint> = children.iter().map(|c| c.outer_constraint()).collect();
+    let direction = match dir {
+        StackDir::Vertical => Direction::Vertical,
+        StackDir::Horizontal => Direction::Horizontal,
+    };
+    let rects = Layout::default()
+        .direction(direction)
+        .constraints(constraints)
+        .split(area);
+    for (child, rect) in children.iter().zip(rects.iter()) {
+        walk(child.unwrap_constraint(), *rect, snap, fd, f, cur);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_block(
+    border: BorderStyle,
+    title: Option<&str>,
+    face: Option<&str>,
+    border_face: Option<&str>,
+    title_face: Option<&str>,
+    child: &Widget,
+    area: Rect,
+    snap: &StateSnapshot<'_>,
+    fd: &RenderedFrame,
+    f: &mut Frame,
+    cur: &mut CursorPlacement,
+) {
+    let bg = resolve_face(&fd.theme, face).unwrap_or_else(|| fd.default_style.clone());
+    let border_style = resolve_face(&fd.theme, border_face).unwrap_or_else(|| bg.clone());
+    let title_style = resolve_face(&fd.theme, title_face).unwrap_or_else(|| border_style.clone());
+
+    let mut block = Block::default().style(style_to_ratatui(&bg));
+    if border != BorderStyle::None {
+        block = block
+            .borders(Borders::ALL)
+            .border_type(border_type(border))
+            .border_style(style_to_ratatui(&border_style));
+    }
+    if let Some(t) = title {
+        block = block.title(Span::styled(
+            format!(" {t} "),
+            style_to_ratatui(&title_style),
+        ));
+    }
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    walk(child, inner, snap, fd, f, cur);
+}
+
+fn walk_editor_tree(
+    area: Rect,
+    snap: &StateSnapshot<'_>,
+    fd: &RenderedFrame,
+    f: &mut Frame,
+    cur: &mut CursorPlacement,
+) {
+    let focused_path = snap.windows.focused_path();
+    for leaf in snap.windows.layout(area) {
+        let Some(buf) = snap.bufs.get(leaf.bufno) else {
+            continue;
+        };
+        let buf_frame = fd.per_buf.get(leaf.bufno);
+        EditorView::render(buf, leaf.area, buf_frame, f);
+        if !snap.focus_minibuffer && &leaf.path == focused_path {
+            cur.editor = Some(match buf_frame.and_then(|bf| bf.wrap.as_ref()) {
+                Some(wrap) => EditorView::cursor_wrapped(buf, leaf.area, buf_frame, wrap),
+                None => EditorView::cursor(buf, leaf.area, buf_frame),
+            });
+        }
+    }
+}
+
 /// Draw a single popup. Pipeline:
 ///
 ///   1. `Placement::resolve` → outer rect.
 ///   2. Clear + fill with the popup's background face (or `default`).
 ///   3. Optional border + title, styled via `border_face` / `title_face`.
-///   4. Render the popup's backing buffer via [`EditorView`], reusing the
-///      precomputed prop_ranges in `frame_data.per_buf[bufno]`. No gutter
-///      because popup buffers skip the region phase.
+///   4. Render the popup's backing buffer via [`EditorView`].
 ///
 /// Returns the cursor position (if `is_top && popup.show_cursor`).
 fn draw_popup(
     popup: &Popup,
     area: Rect,
     snap: &StateSnapshot<'_>,
-    frame_data: &RenderedFrame,
+    fd: &RenderedFrame,
     is_top: bool,
-    f: &mut ratatui::Frame,
+    f: &mut Frame,
 ) -> Option<(u16, u16, CursorStyle)> {
     let outer = popup.placement.resolve(area);
     if outer.width == 0 || outer.height == 0 {
@@ -171,11 +241,11 @@ fn draw_popup(
     }
     f.render_widget(Clear, outer);
 
-    let bg_style = resolve_face(&frame_data.theme, popup.chrome.face.as_deref())
-        .unwrap_or_else(|| frame_data.default_style.clone());
-    let border_style = resolve_face(&frame_data.theme, popup.chrome.border_face.as_deref())
+    let bg_style = resolve_face(&fd.theme, popup.chrome.face.as_deref())
+        .unwrap_or_else(|| fd.default_style.clone());
+    let border_style = resolve_face(&fd.theme, popup.chrome.border_face.as_deref())
         .unwrap_or_else(|| bg_style.clone());
-    let title_style = resolve_face(&frame_data.theme, popup.chrome.title_face.as_deref())
+    let title_style = resolve_face(&fd.theme, popup.chrome.title_face.as_deref())
         .unwrap_or_else(|| border_style.clone());
 
     let mut block = Block::default().style(style_to_ratatui(&bg_style));
@@ -195,7 +265,7 @@ fn draw_popup(
     f.render_widget(block, outer);
 
     let buf = snap.bufs.get(popup.bufno)?;
-    let buf_frame = frame_data.per_buf.get(popup.bufno);
+    let buf_frame = fd.per_buf.get(popup.bufno);
     EditorView::render(buf, inner, buf_frame, f);
 
     if is_top && popup.show_cursor {
@@ -231,14 +301,4 @@ fn border_type(b: BorderStyle) -> BorderType {
 
 fn resolve_face(theme: &Theme, name: Option<&str>) -> Option<Style> {
     name.and_then(|n| theme.resolve(n))
-}
-
-fn draw_strip(b: &crate::render::RenderedStrip, area: Rect, f: &mut ratatui::Frame) {
-    let rows: Vec<Line<'static>> = b
-        .lines
-        .iter()
-        .take(area.height as usize)
-        .map(|spans| Line::from(spans.clone()))
-        .collect();
-    f.render_widget(Paragraph::new(rows), area);
 }

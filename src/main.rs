@@ -13,7 +13,6 @@ mod popup;
 mod position;
 mod precompute;
 mod props;
-mod regions;
 mod render;
 mod render_ratatui;
 mod scroll;
@@ -21,6 +20,7 @@ mod selection;
 mod state;
 mod styling;
 mod terminal;
+mod widget;
 mod window;
 mod wrap;
 

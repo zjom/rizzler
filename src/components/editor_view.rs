@@ -16,25 +16,27 @@ use crate::wrap::WrapMap;
 pub struct EditorView;
 
 impl EditorView {
-    /// Total gutter width for the buffer, summed across this frame's
-    /// rendered gutters. Used to translate buffer-relative cursor cols
-    /// into screen cols.
+    /// Gutter width reserved for this buffer's view. Used to translate
+    /// buffer-relative cursor cols into screen cols.
     pub fn gutter_width(buf_frame: Option<&RenderedBuffer>) -> u16 {
         buf_frame
-            .map(|f| f.gutters.iter().map(|g| g.width).sum())
+            .and_then(|f| f.gutter.as_ref())
+            .map(|g| g.width)
             .unwrap_or(0)
     }
 
     pub fn render(buf: &Buffer, area: Rect, buf_frame: Option<&RenderedBuffer>, frame: &mut Frame) {
-        let gutters = buf_frame.map(|f| f.gutters.as_slice()).unwrap_or(&[]);
+        let gutter = buf_frame.and_then(|f| f.gutter.as_ref());
         let decorators = buf_frame.map(|f| f.decorators.as_slice()).unwrap_or(&[]);
         let wrap = buf_frame.and_then(|f| f.wrap.as_ref());
 
-        // Horizontal split: each gutter takes its registered width, content gets the rest.
-        let mut constraints: Vec<Constraint> = gutters
-            .iter()
-            .map(|g| Constraint::Length(g.width))
-            .collect();
+        // Horizontal split: gutter (if any) takes its registered width,
+        // content gets the rest.
+        let gutter_w = gutter.map(|g| g.width).unwrap_or(0);
+        let mut constraints: Vec<Constraint> = Vec::new();
+        if gutter_w > 0 {
+            constraints.push(Constraint::Length(gutter_w));
+        }
         constraints.push(Constraint::Min(1));
         let cols = Layout::default()
             .direction(Direction::Horizontal)
@@ -42,9 +44,8 @@ impl EditorView {
             .split(area);
         let content_area = cols[cols.len() - 1];
 
-        // --- gutter columns ---
-        for (i, gutter) in gutters.iter().enumerate() {
-            frame.render_widget(Paragraph::new(gutter.rows.clone()), cols[i]);
+        if let Some(g) = gutter {
+            frame.render_widget(Paragraph::new(g.rows.clone()), cols[0]);
         }
 
         // --- content lines, with decorator ranges applied ---

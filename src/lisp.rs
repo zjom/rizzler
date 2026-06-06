@@ -597,12 +597,17 @@ fn builtins() -> Env {
 
     // Soft-wrap, per buffer. Pass an argument to set; call with no arg to read.
     // `mode` is one of `'none` / `'char` / `'word` (or the strings of same).
-    b!("buffer-wrap", 1, |args, env| {
-        let sym = as_ident_or_str(&args[0], "buffer-wrap")?;
-        let m = crate::wrap::WrapMode::from_str(&sym)
-            .ok_or_else(|| unknown_variant("buffer-wrap", &sym))?;
-        with_editor_mut(|st| st.focused_buf_mut().set_wrap_mode(m));
-        ok_unit(env)
+    b!("buffer-wrap", 0, |args, env| {
+        if let Some(arg) = args.first() {
+            let sym = as_ident_or_str(arg, "buffer-wrap")?;
+            let m = crate::wrap::WrapMode::from_str(&sym)
+                .ok_or_else(|| unknown_variant("buffer-wrap", &sym))?;
+            with_editor_mut(|st| st.focused_buf_mut().set_wrap_mode(m));
+            ok_unit(env)
+        } else {
+            let s: Rc<str> = with_editor_mut(|st| st.focused_buf().wrap_mode().as_str().into());
+            Ok((Rc::new(Value::Str(s)), env.clone()))
+        }
     });
     b!("buffer-wrap?", 0, |_, env| {
         let s: Rc<str> = with_editor_mut(|st| st.focused_buf().wrap_mode().as_str().into());

@@ -393,6 +393,10 @@ impl State {
         self.bufs.len()
     }
 
+    pub(crate) fn minibuffer_bufno(&self) -> usize {
+        self.bufs.minibuffer_index()
+    }
+
     /// Update viewports of all buffers currently displayed in a window,
     /// the minibuffer, and every popup. Per-leaf rect comes from the
     /// window tree layout; popups derive theirs from `Placement::resolve`

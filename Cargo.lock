@@ -496,9 +496,9 @@ dependencies = [
 
 [[package]]
 name = "rizz"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af4deab618fb7424dbbfc5ecf948f10cfebc2d698488dddff96b22007de864d0"
+checksum = "d93c3f641ed6957b0500d6c169a86c93c1b0a92640ab124623e7b50a2885aa88"
 dependencies = [
  "anyhow",
  "bon",

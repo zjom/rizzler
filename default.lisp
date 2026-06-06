@@ -136,25 +136,34 @@
 ;;   * `popup-mode` reports the keymap mode of the topmost popup so we can
 ;;     refill an existing notify popup instead of stacking a new one.
 
-;; Both fns end with `()` (unit) so `command-submit` / `evaluate` don't
-;; surface their return value (the popup bufno from `popup-open`) — that
-;; would recursively call `notify` on the bufno and clobber the popup we
-;; just opened with the integer "2".
-(fn notify (msg)
+;; Short messages render as virtual text in the minibuffer strip; anything
+;; over `_notify-popup-threshold` chars opens the centered popup instead.
+;; The minibuffer auto-clears when the user enters command mode (`:`), so
+;; virtual text is wiped automatically the moment they start typing.
+;;
+;; Both branches end with `()` (unit) so `command-submit` / `evaluate` don't
+;; surface their return value (the popup bufno from `popup-open`, or the
+;; unit from `buf-text-set`) — that would recursively call `notify` on the
+;; return value and clobber what we just rendered.
+(let _notify-popup-threshold 80)
+
+(fn notify (msg . args)
   (do
     (notify-record msg)
-    (if (= (popup-mode) "popup")
-        (buf-text-set (popup-bufno) msg)
-        (popup-open
-          {"text":        msg
-           "modes":       ['popup]
-           "placement":   {"kind": "center" "w": 0.6 "h": 0.6}
-           "border":      "plain"
-           "title":       " message — q/<esc>/<enter> to dismiss "
-           "face":        "popup.default"
-           "border-face": "popup.border"
-           "title-face":  "popup.title"
-           "wrap-mode":   'word}))
+    (if (> (len msg) _notify-popup-threshold)
+        (if (= (popup-mode) "popup")
+            (buf-text-set (popup-bufno) msg)
+            (popup-open
+              {"text":        msg
+               "modes":       ['popup]
+               "placement":   {"kind": "center" "w": 0.6 "h": 0.6}
+               "border":      "plain"
+               "title":       " message — q/<esc>/<enter> to dismiss "
+               "face":        "popup.default"
+               "border-face": "popup.border"
+               "title-face":  "popup.title"
+               "wrap-mode":   'word}))
+        (buf-text-set (minibuffer-bufno) msg))
     ()))
 
 ;; `:messages` — open the popup with the full notification history. Same

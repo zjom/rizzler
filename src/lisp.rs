@@ -508,6 +508,14 @@ fn builtins() -> Env {
         });
         Ok((Rc::new(v), env.clone()))
     });
+    // Bufno of the minibuffer. Lets lisp write status / virtual text into the
+    // minibuffer strip via `buf-text-set` — the editor clears the minibuffer
+    // automatically when the user enters command mode, so anything written
+    // here is wiped the moment they press `:`.
+    b!("minibuffer-bufno", 0, |_, env| {
+        let n = with_editor_mut(|st| st.minibuffer_bufno());
+        Ok((Rc::new(Value::Int(n as i64)), env.clone()))
+    });
     // Keymap mode of the topmost popup as a string, or `()` if no popup is
     // open. Lets lisp-side popup managers (like `notify` in default.lisp)
     // dedup against their own popup instead of stacking new ones.

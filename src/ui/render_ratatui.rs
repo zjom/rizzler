@@ -128,9 +128,7 @@ fn walk(
                 area,
             );
         }
-        Widget::Stack { dir, children } => {
-            walk_stack(*dir, children, area, snap, fd, f, cur, ctx)
-        }
+        Widget::Stack { dir, children } => walk_stack(*dir, children, area, snap, fd, f, cur, ctx),
         Widget::Constrained { child, .. } => walk(child, area, snap, fd, f, cur, ctx),
         Widget::Block {
             border,

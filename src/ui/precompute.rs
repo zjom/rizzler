@@ -87,8 +87,7 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
     for (i, buf) in bufs.iter().enumerate() {
         let mut rb = RenderedBuffer::default();
 
-        let is_visible_editor =
-            i != minibuffer && buf.kind() == BufferKind::File;
+        let is_visible_editor = i != minibuffer && buf.kind() == BufferKind::File;
 
         if is_visible_editor {
             // Gutter rows. Built once, applied uniformly to every leaf that

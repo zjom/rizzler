@@ -26,7 +26,10 @@ pub enum Action {
     /// Move the cursor by `kind`, repeated `count` times (0/1 == once).
     /// Count is the numeric prefix consumed by [`crate::state::State`]
     /// before resolving the keymap.
-    MoveCursor { kind: MoveKind, count: u32 },
+    MoveCursor {
+        kind: MoveKind,
+        count: u32,
+    },
 
     CommandCancel,
 

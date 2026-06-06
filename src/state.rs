@@ -140,10 +140,6 @@ pub struct State {
 }
 
 impl State {
-    pub fn new() -> io::Result<Self> {
-        Self::with_config(Config::new()?)
-    }
-
     pub fn with_config(config: Config) -> io::Result<Self> {
         let workdir = std::env::current_dir()?;
         // Layout: [minibuffer, first file buffer]. The window tree starts as
@@ -713,7 +709,9 @@ impl State {
     ///
     /// Owns the lisp take/restore + guard installation; the actual frame
     /// assembly is delegated to [`crate::ui::precompute::compute`].
-    pub(crate) fn precompute_frame(&mut self) -> (crate::ui::render::RenderedFrame, Option<String>) {
+    pub(crate) fn precompute_frame(
+        &mut self,
+    ) -> (crate::ui::render::RenderedFrame, Option<String>) {
         let lisp = self.lisp.take().expect("recursive render is not supported");
         let _editor_guard = crate::lisp::EditorGuard::new(self);
         let _phase_guard = crate::lisp::RenderPhaseGuard::enter();

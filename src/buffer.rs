@@ -378,8 +378,12 @@ impl Buffer {
         let n = count.max(1);
         if let MoveKind::Relative(Position { col, row }) = m {
             let scaled = MoveKind::Relative(Position::new(
-                (col as i32).saturating_mul(n as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-                (row as i32).saturating_mul(n as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                (col as i32)
+                    .saturating_mul(n as i32)
+                    .clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                (row as i32)
+                    .saturating_mul(n as i32)
+                    .clamp(i16::MIN as i32, i16::MAX as i32) as i16,
             ));
             self.move_cursor(scaled);
             return;

@@ -279,7 +279,7 @@
     (_ov 1 27 1 38 "twilight.reverse" {"display": {"space": 7}})
     (notify "overlays-demo: applied. try :(overlays-clear)")))
 
-(keymap-set 'normal "od" '(overlays-demo))
+(keymap-set 'normal "<space>od" '(overlays-demo))
 
 (fn overlays-clear ()
   (do

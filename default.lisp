@@ -151,15 +151,23 @@
   (do
     (notify-record msg)
     (let args (car args))
-    (if (or (and (= 'map (typeof args))
-                 (get args "force"))
-            (> (len msg) _notify-popup-threshold))
+    (let! force ())
+    (let! title " message — q/<esc>/<enter> to dismiss ")
+    (if (= 'map (typeof args))
+      (do (set! force (get args "force"))
+
+          (if (get args "title")
+              (set! title (get args "title"))
+              ())
+        )
+      ())
+    (if (or (deref force) (> (len msg) _notify-popup-threshold))
             (if (= (popup-mode) "popup")
                 (buf-text-set (popup-bufno) msg)
                 (popup-open
                   (block (buffer-view)
                     {"border":      "plain"
-                     "title":       " message — q/<esc>/<enter> to dismiss "
+                     "title":       (deref title)
                      "face":        "popup.default"
                      "border-face": "popup.border"
                      "title-face":  "popup.title"})
@@ -168,9 +176,7 @@
                    "placement": {"kind": "center" "w": 0.6 "h": 0.6}
                    "wrap-mode": 'word}))
         (buf-text-set (minibuffer-bufno) msg))
-      ()
-      )
-    )
+      ()))
 
 ;; `:messages` — open the popup with the full notification history. Same
 ;; chrome as `notify`, but seeded with every recorded message instead of

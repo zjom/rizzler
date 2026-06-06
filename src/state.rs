@@ -1,6 +1,7 @@
 use crate::keymap::KeyEvent;
 use crate::wrap::WrapMode;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
 use std::{io, time::Duration};
@@ -39,6 +40,7 @@ const KEYCOMBO_TIMEOUT: Duration = Duration::from_millis(1000);
 pub struct Config {
     pub renderer: Box<dyn Renderer>,
     pub keycombo_timeout: Duration,
+    pub path: Option<PathBuf>,
 }
 
 impl Config {
@@ -46,6 +48,14 @@ impl Config {
         Ok(Self {
             renderer: Box::new(RatatuiRenderer::new()?),
             keycombo_timeout: KEYCOMBO_TIMEOUT,
+            path: None,
+        })
+    }
+
+    pub fn with_path(path: Option<PathBuf>) -> io::Result<Self> {
+        Ok(Self {
+            path,
+            ..Self::new()?
         })
     }
 }
@@ -153,6 +163,15 @@ impl State {
             frame_fn: None,
             workdir: workdir.into(),
         };
+        if let Some(path) = config.path {
+            let path = Rc::<Path>::from(path);
+            state.bufs[1] = crate::buffer_io::with_path(path.clone());
+            if path.is_dir() {
+                state.workdir = path.clone();
+            } else if let Some(parent) = path.parent() {
+                state.workdir = Rc::<Path>::from(parent);
+            }
+        }
         state.refresh_viewport();
 
         // Bundled defaults: keybindings, then visual configuration, then
@@ -736,6 +755,7 @@ pub(crate) mod test_support {
         State::with_config(Config {
             renderer: Box::new(NullRenderer),
             keycombo_timeout: Duration::from_hours(24),
+            path: None,
         })
         .unwrap()
     }

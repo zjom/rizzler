@@ -24,16 +24,21 @@ mod widget;
 mod window;
 mod wrap;
 
-use std::{io, time::Duration};
+use std::{io, path::PathBuf, time::Duration};
 
 use crossterm::event::{self, Event};
 
-use crate::{state::State, terminal::TerminalGuard};
+use crate::{
+    state::{Config, State},
+    terminal::TerminalGuard,
+};
 
 fn main() -> io::Result<()> {
     terminal::install_panic_hook();
     let _guard = TerminalGuard::new()?;
-    let mut state = State::new()?;
+    let path = std::env::args_os().nth(1).map(PathBuf::from);
+
+    let mut state = State::with_config(Config::with_path(path)?)?;
     state.render()?; // initial render
     loop {
         if state.quit_requested() {

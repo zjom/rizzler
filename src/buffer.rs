@@ -26,6 +26,26 @@ pub enum BufferKind {
     Popup,
 }
 
+/// Vim-style character class for word motions. `Word` matches `\w`
+/// (alphanumeric + underscore), `Punct` is any other non-whitespace char.
+/// In "big-word" mode (`W`/`B`/`E`/`gE`), `Word` and `Punct` are collapsed.
+#[derive(PartialEq, Eq, Copy, Clone)]
+enum CharClass {
+    Ws,
+    Word,
+    Punct,
+}
+
+fn char_class(c: char, big: bool) -> CharClass {
+    if c.is_whitespace() {
+        CharClass::Ws
+    } else if big || c.is_alphanumeric() || c == '_' {
+        CharClass::Word
+    } else {
+        CharClass::Punct
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum MoveKind {
     LineStart,
@@ -34,14 +54,30 @@ pub enum MoveKind {
     LineEnd,
     FileStart,
     FileEnd,
-    /// Vim `b` — start of the word at/before the cursor.
+    /// Vim `b` — start of the word at/before the cursor. Word chars and
+    /// punctuation form separate words; traverses newlines as whitespace.
     WordStart,
-    /// Vim `w` — start of the next word on the current line.
+    /// Vim `w` — start of the next word. Word chars and punctuation form
+    /// separate words; traverses newlines as whitespace.
     WordForward,
-    /// Vim `e` — end of the word at/after the cursor.
+    /// Vim `e` — end of the word at/after the cursor. Word chars and
+    /// punctuation form separate words; traverses newlines as whitespace.
     WordEnd,
-    /// Vim `ge` — end of the previous word on the current line.
+    /// Vim `ge` — end of the previous word. Word chars and punctuation form
+    /// separate words; traverses newlines as whitespace.
     WordBackEnd,
+    /// Vim `B` — start of the WORD at/before the cursor. Whitespace is the
+    /// only separator; traverses newlines.
+    BigWordStart,
+    /// Vim `W` — start of the next WORD. Whitespace is the only separator;
+    /// traverses newlines.
+    BigWordForward,
+    /// Vim `E` — end of the WORD at/after the cursor. Whitespace is the only
+    /// separator; traverses newlines.
+    BigWordEnd,
+    /// Vim `gE` — end of the previous WORD. Whitespace is the only
+    /// separator; traverses newlines.
+    BigWordBackEnd,
     Relative(Position<i16>),   // up, down, left, right of cursor
     Absolute(Position<usize>), // position in file
     LineNum(usize),
@@ -69,6 +105,10 @@ impl FromStr for MoveKind {
             "word-forward" => M::WordForward,
             "word-end" => M::WordEnd,
             "word-back-end" => M::WordBackEnd,
+            "big-word-start" => M::BigWordStart,
+            "big-word-forward" => M::BigWordForward,
+            "big-word-end" => M::BigWordEnd,
+            "big-word-back-end" => M::BigWordBackEnd,
             "half-page-down" => M::HalfPageDown,
             "half-page-up" => M::HalfPageUp,
             "center" => M::Center,
@@ -555,96 +595,14 @@ impl Buffer {
                 self.file_pos.row = 0;
                 self.cursor_pos.row = last_line as u16;
             }
-            MK::WordStart => {
-                let line = self.cur_line();
-                let mut i = self.cursor_pos.col as usize;
-                if i > 0 {
-                    i -= 1;
-                    while i > 0 && line.char(i).is_ascii_whitespace() {
-                        i -= 1;
-                    }
-                    while i > 0 && !line.char(i - 1).is_ascii_whitespace() {
-                        i -= 1;
-                    }
-                }
-                self.cursor_pos.col = i as u16;
-            }
-            MK::WordEnd => {
-                let line = self.cur_line();
-                let len = line.len_chars();
-                let effective_len = if len > 0 && line.char(len - 1) == '\n' {
-                    len - 1
-                } else {
-                    len
-                };
-                let mut i = self.cursor_pos.col as usize + 1;
-                while i < effective_len && line.char(i).is_ascii_whitespace() {
-                    i += 1;
-                }
-                if i < effective_len {
-                    while i + 1 < effective_len && !line.char(i + 1).is_ascii_whitespace() {
-                        i += 1;
-                    }
-                    self.cursor_pos.col = i as u16;
-                }
-            }
-            MK::WordForward => {
-                let line = self.cur_line();
-                let len = line.len_chars();
-                let effective_len = if len > 0 && line.char(len - 1) == '\n' {
-                    len - 1
-                } else {
-                    len
-                };
-                let mut i = self.cursor_pos.col as usize;
-                // Step past the current word (non-whitespace), then past any
-                // whitespace, landing on the first char of the next word.
-                while i < effective_len && !line.char(i).is_ascii_whitespace() {
-                    i += 1;
-                }
-                while i < effective_len && line.char(i).is_ascii_whitespace() {
-                    i += 1;
-                }
-                self.cursor_pos.col = i as u16;
-            }
-            MK::WordBackEnd => {
-                // End of the previous word: walk the line up to the cursor and
-                // remember the position of the last non-whitespace char that
-                // closes a word. If the cursor itself sits inside that word,
-                // skip it and report the prior word's end instead.
-                let line = self.cur_line();
-                let len = line.len_chars();
-                let effective_len = if len > 0 && line.char(len - 1) == '\n' {
-                    len - 1
-                } else {
-                    len
-                };
-                let cur = self.cursor_pos.col as usize;
-                let mut last_word_end: Option<usize> = None;
-                let mut prev_word_end: Option<usize> = None;
-                let mut run_end: Option<usize> = None;
-                for i in 0..effective_len.min(cur + 1) {
-                    if !line.char(i).is_ascii_whitespace() {
-                        run_end = Some(i);
-                    } else if let Some(end) = run_end.take() {
-                        prev_word_end = last_word_end;
-                        last_word_end = Some(end);
-                    }
-                }
-                // Trailing word with no whitespace after it: close it out.
-                if let Some(end) = run_end {
-                    prev_word_end = last_word_end;
-                    last_word_end = Some(end);
-                }
-                let cur_in_word =
-                    cur < effective_len && !line.char(cur).is_ascii_whitespace();
-                let target = if cur_in_word {
-                    prev_word_end
-                } else {
-                    last_word_end
-                };
-                self.cursor_pos.col = target.unwrap_or(0) as u16;
-            }
+            MK::WordStart => self.word_back_start(false),
+            MK::WordForward => self.word_forward(false),
+            MK::WordEnd => self.word_end(false),
+            MK::WordBackEnd => self.word_back_end(false),
+            MK::BigWordStart => self.word_back_start(true),
+            MK::BigWordForward => self.word_forward(true),
+            MK::BigWordEnd => self.word_end(true),
+            MK::BigWordBackEnd => self.word_back_end(true),
             MK::Absolute(Position { row, col }) => {
                 self.file_pos = Position::new(col, row);
                 self.cursor_pos = Position::default();
@@ -799,6 +757,129 @@ impl Buffer {
         };
         let abs_col = (self.cursor_pos.col as usize + self.file_pos.col).min(max_col);
         self.cursor_pos.col = abs_col.saturating_sub(self.file_pos.col) as u16;
+    }
+
+    /// Move to the start of the next vim word. `big = false` treats word
+    /// chars (`\w`) and punctuation as distinct word classes (vim `w`);
+    /// `big = true` treats every non-whitespace char the same (vim `W`).
+    /// Newlines act as whitespace in either flavor.
+    fn word_forward(&mut self, big: bool) {
+        let len = self.buf.len_chars();
+        if len == 0 {
+            return;
+        }
+        let abs = self.abs_pos();
+        let mut i = self.buf.line_to_char(abs.row) + abs.col;
+        if i >= len {
+            return;
+        }
+        let start_class = char_class(self.buf.char(i), big);
+        if start_class != CharClass::Ws {
+            while i < len && char_class(self.buf.char(i), big) == start_class {
+                i += 1;
+            }
+        }
+        while i < len && char_class(self.buf.char(i), big) == CharClass::Ws {
+            i += 1;
+        }
+        // No further word: park on the last char so clamp_cursor keeps it in-buffer.
+        if i >= len {
+            i = len - 1;
+        }
+        self.set_abs_char(i);
+    }
+
+    /// Move to the start of the word at or before the cursor (vim `b` / `B`).
+    fn word_back_start(&mut self, big: bool) {
+        let abs = self.abs_pos();
+        let cidx = self.buf.line_to_char(abs.row) + abs.col;
+        if cidx == 0 {
+            return;
+        }
+        let mut i = cidx - 1;
+        while i > 0 && char_class(self.buf.char(i), big) == CharClass::Ws {
+            i -= 1;
+        }
+        // Either i == 0 or i sits on a non-ws char. Walk back to the start of its class.
+        let cls = char_class(self.buf.char(i), big);
+        if cls != CharClass::Ws {
+            while i > 0 && char_class(self.buf.char(i - 1), big) == cls {
+                i -= 1;
+            }
+        }
+        self.set_abs_char(i);
+    }
+
+    /// Move to the end of the word at or after the cursor (vim `e` / `E`).
+    fn word_end(&mut self, big: bool) {
+        let len = self.buf.len_chars();
+        if len == 0 {
+            return;
+        }
+        let abs = self.abs_pos();
+        let cidx = self.buf.line_to_char(abs.row) + abs.col;
+        if cidx + 1 >= len {
+            return;
+        }
+        let mut i = cidx + 1;
+        while i < len && char_class(self.buf.char(i), big) == CharClass::Ws {
+            i += 1;
+        }
+        if i >= len {
+            self.set_abs_char(len - 1);
+            return;
+        }
+        let cls = char_class(self.buf.char(i), big);
+        while i + 1 < len && char_class(self.buf.char(i + 1), big) == cls {
+            i += 1;
+        }
+        self.set_abs_char(i);
+    }
+
+    /// Move to the end of the previous word (vim `ge` / `gE`).
+    fn word_back_end(&mut self, big: bool) {
+        let abs = self.abs_pos();
+        let cidx = self.buf.line_to_char(abs.row) + abs.col;
+        if cidx == 0 {
+            return;
+        }
+        let mut i = cidx;
+        let len = self.buf.len_chars();
+        // Step out of the current word if we're on one — `ge` from inside a
+        // word lands at the end of the *previous* word, not this one's start.
+        if i < len {
+            let cls = char_class(self.buf.char(i), big);
+            if cls != CharClass::Ws {
+                while i > 0 && char_class(self.buf.char(i - 1), big) == cls {
+                    i -= 1;
+                }
+            }
+        }
+        if i == 0 {
+            self.set_abs_char(0);
+            return;
+        }
+        i -= 1;
+        while i > 0 && char_class(self.buf.char(i), big) == CharClass::Ws {
+            i -= 1;
+        }
+        self.set_abs_char(i);
+    }
+
+    /// Place the cursor at absolute char index `cidx` in the rope. Adjusts
+    /// `file_pos` upward when needed; `clamp_cursor` (run by the caller)
+    /// handles down/right scrolling.
+    fn set_abs_char(&mut self, cidx: usize) {
+        let row = self.buf.char_to_line(cidx);
+        let col = cidx - self.buf.line_to_char(row);
+        if row < self.file_pos.row {
+            self.file_pos.row = row;
+        }
+        self.cursor_pos.row = (row - self.file_pos.row) as u16;
+        if col < self.file_pos.col {
+            self.file_pos.col = col;
+        }
+        self.cursor_pos.col = (col - self.file_pos.col) as u16;
     }
 
     fn cur_line(&self) -> RopeSlice<'_> {
@@ -1094,6 +1175,88 @@ mod tests {
         s.cursor_pos = Position::<u16>::new(0, 0);
         s.move_cursor(MoveKind::WordBackEnd);
         assert_eq!(s.cursor_pos.col, 0);
+    }
+
+    // ---- vim-style w/b/e: punctuation as a separate word ---------------
+
+    #[test]
+    fn word_forward_splits_on_punctuation() {
+        let mut s = mk("foo.bar");
+        s.cursor_pos = Position::<u16>::new(0, 0);
+        s.move_cursor(MoveKind::WordForward);
+        assert_eq!(s.cursor_pos.col, 3); // '.'
+        s.move_cursor(MoveKind::WordForward);
+        assert_eq!(s.cursor_pos.col, 4); // 'b'
+    }
+
+    #[test]
+    fn big_word_forward_treats_punctuation_as_word_char() {
+        let mut s = mk("foo.bar baz");
+        s.cursor_pos = Position::<u16>::new(0, 0);
+        s.move_cursor(MoveKind::BigWordForward);
+        assert_eq!(s.cursor_pos.col, 8); // 'b' of "baz"
+    }
+
+    #[test]
+    fn word_end_splits_on_punctuation() {
+        let mut s = mk("foo.bar");
+        s.cursor_pos = Position::<u16>::new(0, 0);
+        s.move_cursor(MoveKind::WordEnd);
+        assert_eq!(s.cursor_pos.col, 2); // last 'o' of "foo"
+        s.move_cursor(MoveKind::WordEnd);
+        assert_eq!(s.cursor_pos.col, 3); // '.'
+        s.move_cursor(MoveKind::WordEnd);
+        assert_eq!(s.cursor_pos.col, 6); // 'r' of "bar"
+    }
+
+    #[test]
+    fn word_start_splits_on_punctuation() {
+        let mut s = mk("foo.bar");
+        s.cursor_pos = Position::<u16>::new(6, 0); // 'r'
+        s.move_cursor(MoveKind::WordStart);
+        assert_eq!(s.cursor_pos.col, 4); // 'b'
+        s.move_cursor(MoveKind::WordStart);
+        assert_eq!(s.cursor_pos.col, 3); // '.'
+        s.move_cursor(MoveKind::WordStart);
+        assert_eq!(s.cursor_pos.col, 0); // 'f'
+    }
+
+    // ---- vim-style w/b/e: cross-line traversal -------------------------
+
+    #[test]
+    fn word_forward_crosses_newline_to_next_line() {
+        let mut s = mk("foo\nbar");
+        s.cursor_pos = Position::<u16>::new(0, 0);
+        s.move_cursor(MoveKind::WordForward);
+        assert_eq!(s.cursor_pos.row, 1);
+        assert_eq!(s.cursor_pos.col, 0); // 'b' of "bar"
+    }
+
+    #[test]
+    fn word_end_crosses_newline_to_next_line() {
+        let mut s = mk("foo\nbar");
+        s.cursor_pos = Position::<u16>::new(2, 0); // 'o', end of "foo"
+        s.move_cursor(MoveKind::WordEnd);
+        assert_eq!(s.cursor_pos.row, 1);
+        assert_eq!(s.cursor_pos.col, 2); // 'r' of "bar"
+    }
+
+    #[test]
+    fn word_back_start_crosses_newline_to_prev_line() {
+        let mut s = mk("foo\nbar");
+        s.cursor_pos = Position::<u16>::new(0, 1); // 'b' of "bar"
+        s.move_cursor(MoveKind::WordStart);
+        assert_eq!(s.cursor_pos.row, 0);
+        assert_eq!(s.cursor_pos.col, 0); // 'f' of "foo"
+    }
+
+    #[test]
+    fn word_back_end_crosses_newline_to_prev_line() {
+        let mut s = mk("foo\nbar");
+        s.cursor_pos = Position::<u16>::new(0, 1); // 'b' of "bar"
+        s.move_cursor(MoveKind::WordBackEnd);
+        assert_eq!(s.cursor_pos.row, 0);
+        assert_eq!(s.cursor_pos.col, 2); // 'o', end of "foo"
     }
 
     // ---- move_cursor: LineFirstNonBlank (^) ---------------------------

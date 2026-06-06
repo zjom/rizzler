@@ -1,0 +1,19 @@
+[package]
+name = "rizz_editor"
+version = "0.1.0"
+edition = "2024"
+description = "Top-level editor orchestration: `State` (the editor process), buffer list, journal/history, and the embedded lisp runtime that bridges user scripts to the editor surface."
+
+[dependencies]
+rizz_core = { path = "../rizz_core" }
+rizz_text = { path = "../rizz_text" }
+rizz_input = { path = "../rizz_input" }
+rizz_actions = { path = "../rizz_actions" }
+rizz_ui = { path = "../rizz_ui" }
+rizz_ringbuffer = { path = "../rizz_ringbuffer" }
+rizz = "0.3.7"
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+crossterm = "0.29.0"
+im = "15.1.0"
+anyhow = "1.0.102"
+thiserror = "2.0.18"

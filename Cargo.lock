@@ -508,28 +508,87 @@ dependencies = [
 ]
 
 [[package]]
+name = "rizz_actions"
+version = "0.1.0"
+dependencies = [
+ "rizz",
+ "rizz_core",
+ "rizz_input",
+ "rizz_text",
+]
+
+[[package]]
 name = "rizz_changetree"
 version = "0.1.0"
+
+[[package]]
+name = "rizz_core"
+version = "0.1.0"
+dependencies = [
+ "ropey",
+]
+
+[[package]]
+name = "rizz_editor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm 0.29.0",
+ "im",
+ "ratatui",
+ "rizz",
+ "rizz_actions",
+ "rizz_core",
+ "rizz_input",
+ "rizz_ringbuffer",
+ "rizz_text",
+ "rizz_ui",
+ "thiserror",
+]
+
+[[package]]
+name = "rizz_input"
+version = "0.1.0"
+dependencies = [
+ "crossterm 0.29.0",
+ "rizz_core",
+]
 
 [[package]]
 name = "rizz_ringbuffer"
 version = "0.1.0"
 
 [[package]]
-name = "rizzler"
+name = "rizz_text"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "bitflags",
+ "rizz",
+ "rizz_changetree",
+ "rizz_core",
+ "ropey",
+]
+
+[[package]]
+name = "rizz_ui"
+version = "0.1.0"
+dependencies = [
  "crossterm 0.29.0",
  "im",
  "ratatui",
  "rizz",
- "rizz_changetree",
- "rizz_ringbuffer",
- "ropey",
- "thiserror",
+ "rizz_core",
+ "rizz_input",
+ "rizz_text",
  "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "rizzler"
+version = "0.1.0"
+dependencies = [
+ "crossterm 0.29.0",
+ "rizz_editor",
+ "rizz_ui",
 ]
 
 [[package]]

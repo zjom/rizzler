@@ -1,0 +1,11 @@
+[package]
+name = "rizz_text"
+version = "0.1.0"
+edition = "2024"
+description = "Text storage and manipulation for the rizz editor: Buffer (rope-backed), motions, soft-wrap layout, scroll math, text properties, and filesystem load/save."
+
+[dependencies]
+rizz_core = { path = "../rizz_core" }
+rizz_changetree = { path = "../rizz_changetree" }
+ropey = "1.6.1"
+rizz = "0.3.7"

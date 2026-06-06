@@ -1,0 +1,8 @@
+[package]
+name = "rizz_core"
+version = "0.1.0"
+edition = "2024"
+description = "Foundational pure types for the rizz editor: positions, editing modes, selection helpers, display substitutions, window-direction enums."
+
+[dependencies]
+ropey = "1.6.1"

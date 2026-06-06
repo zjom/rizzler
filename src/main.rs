@@ -1,29 +1,12 @@
-mod action;
-mod buffer;
-mod buffer_io;
-mod buffer_list;
-mod count_prefix;
-mod journal;
-mod keymap;
-mod lisp;
-mod mode;
-mod motions;
-mod position;
-mod selection;
-mod state;
-mod ui;
-
 use std::{io, path::PathBuf, time::Duration};
 
 use crossterm::event::{self, Event};
 
-use crate::{
-    state::{Config, State},
-    ui::terminal::TerminalGuard,
-};
+use rizz_editor::{Config, State};
+use rizz_ui::{TerminalGuard, install_panic_hook};
 
 fn main() -> io::Result<()> {
-    ui::terminal::install_panic_hook();
+    install_panic_hook();
     let _guard = TerminalGuard::new()?;
     let path = std::env::args_os().nth(1).map(PathBuf::from);
 

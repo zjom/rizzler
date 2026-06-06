@@ -1,0 +1,9 @@
+[package]
+name = "rizz_input"
+version = "0.1.0"
+edition = "2024"
+description = "Key-event modelling and numeric-prefix accumulator for the rizz editor. Translates crossterm events into a stable internal `KeyEvent`/`KeyCode` and parses key-sequence strings like \"<c-w>q\"."
+
+[dependencies]
+rizz_core = { path = "../rizz_core" }
+crossterm = "0.29.0"

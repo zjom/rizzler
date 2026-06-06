@@ -1,0 +1,11 @@
+[package]
+name = "rizz_actions"
+version = "0.1.0"
+edition = "2024"
+description = "The `Action` enum (single point of behaviour change) plus the keymap trie/registry that resolves layered modes + key sequences into actions."
+
+[dependencies]
+rizz_core = { path = "../rizz_core" }
+rizz_text = { path = "../rizz_text" }
+rizz_input = { path = "../rizz_input" }
+rizz = "0.3.7"

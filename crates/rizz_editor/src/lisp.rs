@@ -960,6 +960,30 @@ fn builtins() -> Env {
         Ok((Rc::new(Value::Map(m)), env.clone()))
     });
 
+    // Runtime-loaded tree-sitter grammars. `(grammar-register-wasm name
+    // wasm-path scm-path ext)` reads both files from disk and registers the
+    // grammar; `ext` is either a single string like `".py"` or an array of
+    // strings. Available only when the `wasm` feature is on (default).
+    #[cfg(feature = "wasm")]
+    b!(
+        "grammar-register-wasm",
+        4,
+        |args, env| {
+            let name = as_str(&args[0], "grammar-register-wasm")?;
+            let wasm_path = as_str(&args[1], "grammar-register-wasm")?;
+            let scm_path = as_str(&args[2], "grammar-register-wasm")?;
+            let exts = parse_extensions(&args[3])?;
+            let wasm_bytes = std::fs::read(wasm_path.as_ref())?;
+            let highlights = std::fs::read_to_string(scm_path.as_ref())?;
+            with_editor_mut(|st| {
+                st.register_wasm_grammar(name.to_string(), exts, wasm_bytes, highlights)
+            })
+            .map_err(|e| RuntimeError::Other(anyhow!("{e}")))?;
+            ok_unit(env)
+        },
+        "(grammar-register-wasm/4)\nregister a tree-sitter grammar loaded from a .wasm file.\nargs: <name str> <wasm-path str> <highlights.scm path str> <ext: str | [str ...]>"
+    );
+
     let mut env = Env::of_builtins(entries);
     for (a, t) in aliases {
         let v = env.get(&Rc::<str>::from(t)).expect("alias target").clone();
@@ -1181,6 +1205,19 @@ fn parse_mode_layers(v: &Rc<Value>) -> Result<Vec<Rc<str>>, RuntimeError> {
     match &**v {
         Value::Array(items) => items.iter().map(parse_mode_name).collect(),
         _ => Ok(vec![parse_mode_name(v)?]),
+    }
+}
+
+/// Accept either a single extension string (`".py"`, `"py"`) or an array of
+/// such strings. The leading dot is optional in both cases.
+#[cfg(feature = "wasm")]
+fn parse_extensions(v: &Rc<Value>) -> Result<Vec<String>, RuntimeError> {
+    match &**v {
+        Value::Array(items) => items
+            .iter()
+            .map(|x| as_str(x, "grammar-register-wasm.ext").map(|s| s.to_string()))
+            .collect(),
+        _ => Ok(vec![as_str(v, "grammar-register-wasm.ext")?.to_string()]),
     }
 }
 

@@ -177,14 +177,22 @@ impl Buffer {
         }
     }
 
-    /// Attach a tree-sitter highlighter for `lang`. Replaces any existing
-    /// highlighter; clears it when called with `None`.
+    /// Attach a tree-sitter highlighter for a built-in [`Language`].
+    /// Convenience around [`Self::set_highlighter`]. Clears the highlighter
+    /// when called with `None`.
     pub fn set_language(&mut self, lang: Option<Language>) {
         self.highlight = lang.map(Highlighter::new);
     }
 
+    /// Install (or remove) a fully-constructed highlighter. Used by callers
+    /// that built one from a non-native source — most commonly a runtime
+    /// WASM grammar registered via `(grammar-register-wasm ...)`.
+    pub fn set_highlighter(&mut self, h: Option<Highlighter>) {
+        self.highlight = h;
+    }
+
     pub fn language(&self) -> Option<Language> {
-        self.highlight.as_ref().map(|h| h.lang)
+        self.highlight.as_ref().and_then(|h| h.language())
     }
 
     pub fn highlight_mut(&mut self) -> Option<&mut Highlighter> {

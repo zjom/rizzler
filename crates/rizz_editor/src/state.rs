@@ -17,8 +17,13 @@ use rizz_ringbuffer::RingBuffer;
 
 use rizz_actions::{Action, KeymapRegistry};
 use rizz_core::{EditingMode, Position};
+#[cfg(feature = "wasm")]
+use rizz_highlight::{Highlighter, WasmEngine, WasmGrammar};
 use rizz_input::{CountPrefix, KeyEvent};
 use rizz_text::{Buffer, BufferKind, WrapMode, io as buffer_io};
+
+#[cfg(feature = "wasm")]
+use std::collections::HashMap;
 use rizz_ui::{
     RatatuiRenderer, Renderer, StateSnapshot, ThemeCell, Widget, WindowTree,
     popup::{Placement, Popup, PopupStack},
@@ -117,6 +122,36 @@ pub struct State {
     /// Lisp callable that builds the frame's widget tree each render.
     frame_fn: Option<Rc<Value>>,
     workdir: Rc<Path>,
+    /// Runtime-registered WASM tree-sitter grammars, indexed by file
+    /// extension (lowercase, no leading dot). Populated by the
+    /// `grammar-register-wasm` lisp builtin.
+    #[cfg(feature = "wasm")]
+    wasm_grammars: WasmGrammars,
+}
+
+/// Runtime registry of `.wasm`-loaded tree-sitter grammars. Shares a single
+/// `wasmtime::Engine` across every highlighter it produces.
+#[cfg(feature = "wasm")]
+#[derive(Default)]
+pub struct WasmGrammars {
+    engine: Option<WasmEngine>,
+    by_ext: HashMap<Rc<str>, Rc<WasmGrammar>>,
+}
+
+#[cfg(feature = "wasm")]
+impl WasmGrammars {
+    /// Lazily build (and cache) the shared `wasmtime::Engine`. Lazy so a build
+    /// that never registers a WASM grammar pays nothing.
+    fn engine(&mut self) -> &WasmEngine {
+        self.engine.get_or_insert_with(WasmEngine::new)
+    }
+
+    /// Build a fresh highlighter for `ext` if a grammar matches.
+    fn highlighter_for_ext(&mut self, ext: &str) -> Option<Highlighter> {
+        let grammar = self.by_ext.get(ext)?.clone();
+        let engine = self.engine().clone();
+        Highlighter::from_wasm(&engine, grammar).ok()
+    }
 }
 
 fn resolve_workdir(path: Option<&Path>, cwd: &Path) -> PathBuf {
@@ -182,11 +217,14 @@ impl State {
             theme: ThemeCell::default(),
             frame_fn: None,
             workdir: workdir.into(),
+            #[cfg(feature = "wasm")]
+            wasm_grammars: WasmGrammars::default(),
         };
         if let Some(path) = config.path
             && !path.is_dir()
         {
             state.bufs[1] = buffer_io::with_path(Rc::<Path>::from(path));
+            state.install_wasm_highlighter(1);
         }
         state.refresh_viewport();
 
@@ -354,6 +392,68 @@ impl State {
     pub fn workdir(&self) -> Rc<Path> {
         self.workdir.clone()
     }
+
+    /// Register a runtime-loaded tree-sitter grammar. Pre-flights the
+    /// grammar+query by building a throwaway highlighter — if that errors,
+    /// the registry isn't touched, so a bad call doesn't silently break
+    /// future buffer loads. After registration, any already-open buffer
+    /// whose extension matches gets the highlighter installed in place.
+    #[cfg(feature = "wasm")]
+    pub fn register_wasm_grammar(
+        &mut self,
+        name: String,
+        extensions: Vec<String>,
+        wasm_bytes: Vec<u8>,
+        highlights_query: String,
+    ) -> Result<(), rizz_highlight::HighlightError> {
+        let grammar = Rc::new(WasmGrammar {
+            name: name.into(),
+            wasm_bytes: Rc::from(wasm_bytes.into_boxed_slice()),
+            highlights_query: highlights_query.into(),
+        });
+        let engine = self.wasm_grammars.engine().clone();
+        // Bail before mutating the registry if the grammar/query is invalid.
+        let _ = Highlighter::from_wasm(&engine, grammar.clone())?;
+        for ext in extensions {
+            let normalized = ext.trim_start_matches('.').to_ascii_lowercase();
+            self.wasm_grammars
+                .by_ext
+                .insert(Rc::from(normalized), grammar.clone());
+        }
+        for i in 0..self.bufs.len() {
+            self.install_wasm_highlighter(i);
+        }
+        Ok(())
+    }
+
+    /// If `bufno` is a file buffer whose extension matches a registered
+    /// WASM grammar and no highlighter is currently attached, install one.
+    /// A buffer that already has a (native) highlighter is left alone.
+    #[cfg(feature = "wasm")]
+    fn install_wasm_highlighter(&mut self, bufno: usize) {
+        if bufno >= self.bufs.len() {
+            return;
+        }
+        if self.bufs[bufno].highlight().is_some() {
+            return;
+        }
+        let Some(path) = self.bufs[bufno].fs_path() else {
+            return;
+        };
+        let ext = match path.extension().and_then(|e| e.to_str()) {
+            Some(e) => e.to_ascii_lowercase(),
+            None => return,
+        };
+        let h = self.wasm_grammars.highlighter_for_ext(&ext);
+        if let Some(h) = h {
+            self.bufs[bufno].set_highlighter(Some(h));
+        }
+    }
+
+    /// No-op when the `wasm` feature is disabled, so callers can use the
+    /// same hook regardless of build configuration.
+    #[cfg(not(feature = "wasm"))]
+    fn install_wasm_highlighter(&mut self, _bufno: usize) {}
 
     pub fn pending_count_or_one(&self) -> u32 {
         self.count_prefix.or_one()
@@ -568,6 +668,7 @@ impl State {
             None => Buffer::new(),
         };
         let bufno = self.bufs.push(buf);
+        self.install_wasm_highlighter(bufno);
         if set_active {
             self.windows.set_focused_bufno(bufno);
         }
@@ -577,7 +678,11 @@ impl State {
     fn edit_buf(&mut self, path: Rc<Path>) -> io::Result<usize> {
         let idx = match self.bufs.find_by_path(&path) {
             Some(idx) => idx,
-            None => self.bufs.push(buffer_io::with_path(path)),
+            None => {
+                let pushed = self.bufs.push(buffer_io::with_path(path));
+                self.install_wasm_highlighter(pushed);
+                pushed
+            }
         };
         self.windows.set_focused_bufno(idx);
         Ok(idx)
@@ -818,5 +923,21 @@ mod tests {
             any_syntax,
             "expected at least one styled range covering the `fn` keyword"
         );
+    }
+
+    #[cfg(feature = "wasm")]
+    #[test]
+    fn register_wasm_grammar_rejects_invalid_bytes() {
+        let mut s = test_state();
+        // Garbage bytes should fail the pre-flight in `register_wasm_grammar`
+        // and leave the registry untouched.
+        let err = s.register_wasm_grammar(
+            "fake".into(),
+            vec![".fake".into()],
+            vec![0xde, 0xad, 0xbe, 0xef],
+            "; empty query".into(),
+        );
+        assert!(err.is_err(), "expected wasm load failure, got Ok");
+        assert!(s.wasm_grammars.by_ext.is_empty(), "registry must stay empty");
     }
 }

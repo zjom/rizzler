@@ -483,6 +483,70 @@ mod tests {
         assert_eq!(s.cursor_pos.col, 0);
     }
 
+    // ---- match-bracket (vim `%`) ------------------------------------
+
+    #[test]
+    fn match_bracket_jumps_forward_to_close_paren() {
+        let mut s = mk("(abc)");
+        s.move_cursor(MoveKind::MatchBracket);
+        assert_eq!(s.cursor_pos.col, 4);
+    }
+
+    #[test]
+    fn match_bracket_jumps_back_to_open_paren_from_close() {
+        let mut s = mk("(abc)");
+        s.cursor_pos = Position::<u16>::new(4, 0);
+        s.move_cursor(MoveKind::MatchBracket);
+        assert_eq!(s.cursor_pos.col, 0);
+    }
+
+    #[test]
+    fn match_bracket_scans_line_when_cursor_off_bracket() {
+        let mut s = mk("foo (bar) baz");
+        s.move_cursor(MoveKind::MatchBracket);
+        assert_eq!(s.cursor_pos.col, 8);
+    }
+
+    #[test]
+    fn match_bracket_handles_nesting() {
+        let mut s = mk("(a(b)c)");
+        s.move_cursor(MoveKind::MatchBracket);
+        assert_eq!(s.cursor_pos.col, 6);
+    }
+
+    #[test]
+    fn match_bracket_matches_braces_and_brackets() {
+        let mut s = mk("{[x]}");
+        s.move_cursor(MoveKind::MatchBracket);
+        assert_eq!(s.cursor_pos.col, 4);
+        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.move_cursor(MoveKind::MatchBracket);
+        assert_eq!(s.cursor_pos.col, 3);
+    }
+
+    #[test]
+    fn match_bracket_crosses_lines() {
+        let mut s = mk("(\n  a\n)");
+        s.move_cursor(MoveKind::MatchBracket);
+        assert_eq!(s.cursor_pos.row, 2);
+        assert_eq!(s.cursor_pos.col, 0);
+    }
+
+    #[test]
+    fn match_bracket_no_bracket_on_line_is_noop() {
+        let mut s = mk("hello world");
+        s.cursor_pos = Position::<u16>::new(3, 0);
+        s.move_cursor(MoveKind::MatchBracket);
+        assert_eq!(s.cursor_pos.col, 3);
+    }
+
+    #[test]
+    fn match_bracket_unmatched_open_stays_put() {
+        let mut s = mk("(abc");
+        s.move_cursor(MoveKind::MatchBracket);
+        assert_eq!(s.cursor_pos.col, 0);
+    }
+
     #[test]
     fn line_first_non_blank_skips_leading_whitespace() {
         let mut s = mk("    hello");

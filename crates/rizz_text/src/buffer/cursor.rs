@@ -37,6 +37,9 @@ pub enum MoveKind {
     BigWordEnd,
     /// Vim `gE` — end of the previous WORD.
     BigWordBackEnd,
+    /// Vim `%` — jump to the matching bracket of `()[]{}`. If the cursor is
+    /// not on a bracket, the first bracket on the current line is used.
+    MatchBracket,
     Relative(Position<i16>),
     Absolute(Position<usize>),
     LineNum(usize),
@@ -68,6 +71,7 @@ impl FromStr for MoveKind {
             "big-word-forward" => M::BigWordForward,
             "big-word-end" => M::BigWordEnd,
             "big-word-back-end" => M::BigWordBackEnd,
+            "match-bracket" => M::MatchBracket,
             "half-page-down" => M::HalfPageDown,
             "half-page-up" => M::HalfPageUp,
             "center" => M::Center,
@@ -175,6 +179,7 @@ impl Buffer {
             MK::BigWordForward => self.apply_motion(motions::word_forward, true),
             MK::BigWordEnd => self.apply_motion(motions::word_end, true),
             MK::BigWordBackEnd => self.apply_motion(motions::word_back_end, true),
+            MK::MatchBracket => self.apply_motion(motions::match_bracket, false),
             MK::Absolute(Position { row, col }) => {
                 self.file_pos = Position::new(col, row);
                 self.cursor_pos = Position::default();

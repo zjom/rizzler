@@ -82,6 +82,84 @@ pub fn word_end(rope: &Rope, cidx: usize, big: bool) -> usize {
     i
 }
 
+/// Vim `%` — jump to the matching bracket. If the cursor is not already on
+/// one of `()[]{}`, scan forward on the current line for the first bracket
+/// and use that as the starting point. Returns the original `cidx` if no
+/// bracket is found on the line or no match exists.
+pub fn match_bracket(rope: &Rope, cidx: usize, _big: bool) -> usize {
+    let len = rope.len_chars();
+    if len == 0 {
+        return cidx;
+    }
+
+    let bracket_pair = |c: char| -> Option<(char, bool)> {
+        match c {
+            '(' => Some((')', true)),
+            '[' => Some((']', true)),
+            '{' => Some(('}', true)),
+            ')' => Some(('(', false)),
+            ']' => Some(('[', false)),
+            '}' => Some(('{', false)),
+            _ => None,
+        }
+    };
+
+    let mut start = cidx;
+    if start >= len || bracket_pair(rope.char(start)).is_none() {
+        let mut i = start;
+        while i < len && rope.char(i) != '\n' {
+            if bracket_pair(rope.char(i)).is_some() {
+                start = i;
+                break;
+            }
+            i += 1;
+        }
+        if start == cidx && (start >= len || bracket_pair(rope.char(start)).is_none()) {
+            return cidx;
+        }
+    }
+
+    let open = rope.char(start);
+    let (mate, forward) = bracket_pair(open).expect("checked above");
+    let mut depth: usize = 1;
+    if forward {
+        let mut i = start + 1;
+        while i < len {
+            let c = rope.char(i);
+            if c == open {
+                depth += 1;
+            } else if c == mate {
+                depth -= 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            i += 1;
+        }
+    } else {
+        if start == 0 {
+            return cidx;
+        }
+        let mut i = start - 1;
+        loop {
+            let c = rope.char(i);
+            if c == open {
+                depth += 1;
+            } else if c == mate {
+                depth -= 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            if i == 0 {
+                break;
+            }
+            i -= 1;
+        }
+    }
+    cidx
+}
+
 /// Vim `ge`/`gE` — end of the previous word.
 pub fn word_back_end(rope: &Rope, cidx: usize, big: bool) -> usize {
     if cidx == 0 {

@@ -4,13 +4,6 @@ version = "0.1.0"
 edition = "2024"
 description = "Top-level editor orchestration: `State` (the editor process), buffer list, journal/history, and the embedded lisp runtime that bridges user scripts to the editor surface."
 
-[features]
-default = ["wasm"]
-# Runtime-loaded tree-sitter grammars via wasmtime. Pulls in wasmtime-c-api
-# transitively through `rizz_highlight/wasm`; expect a noticeable bump in
-# clean-build time.
-wasm = ["rizz_highlight/wasm"]
-
 [dependencies]
 anyhow = { workspace = true }
 crossterm = "0.29.0"
@@ -19,7 +12,7 @@ ratatui = { version = "0.29", default-features = false, features = ["crossterm"]
 rizz = { workspace = true }
 rizz_actions = { path = "../rizz_actions" }
 rizz_core = { path = "../rizz_core" }
-rizz_highlight = { path = "../rizz_highlight" }
+rizz_ts = { path = "../rizz_ts" }
 rizz_input = { path = "../rizz_input" }
 rizz_ringbuffer = { path = "../rizz_ringbuffer" }
 rizz_text = { path = "../rizz_text" }

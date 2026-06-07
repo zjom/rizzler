@@ -22,7 +22,7 @@ mod marks;
 use std::{path::Path, rc::Rc, str::FromStr};
 
 use rizz_changetree::ChangeTree;
-use rizz_highlight::{Highlighter, Language};
+use rizz_ts::Highlighter;
 use ropey::{Rope, RopeSlice, iter::Lines};
 
 use rizz_core::{EditingMode, Position};
@@ -87,10 +87,10 @@ pub struct Buffer {
     /// Cleared by anything that breaks the run — a non-insert edit, a
     /// cursor move, a mode change, undo/redo.
     pub(crate) insert_batch_end: Option<usize>,
-    /// Optional syntax-highlighter. Set when the buffer is associated with
-    /// a file whose extension maps to a known [`Language`]. Edits flip its
-    /// dirty flag via [`Buffer::invalidate_highlight`]; the precompute pass
-    /// refreshes the source snapshot and reparses on demand.
+    /// Optional syntax-highlighter. Installed by `State` after consulting
+    /// the `TsRegistry` for a grammar matching the file extension. Edits
+    /// flip its dirty flag via [`Buffer::invalidate_highlight`]; the
+    /// precompute pass refreshes the source snapshot and reparses on demand.
     pub(crate) highlight: Option<Highlighter>,
 }
 
@@ -177,22 +177,11 @@ impl Buffer {
         }
     }
 
-    /// Attach a tree-sitter highlighter for a built-in [`Language`].
-    /// Convenience around [`Self::set_highlighter`]. Clears the highlighter
-    /// when called with `None`.
-    pub fn set_language(&mut self, lang: Option<Language>) {
-        self.highlight = lang.map(Highlighter::new);
-    }
-
-    /// Install (or remove) a fully-constructed highlighter. Used by callers
-    /// that built one from a non-native source — most commonly a runtime
-    /// WASM grammar registered via `(grammar-register-wasm ...)`.
+    /// Install (or remove) a fully-constructed highlighter. The editor's
+    /// `State::install_dynamic_highlighter` calls this after consulting the
+    /// `TsRegistry` populated by the `(grammar-register ...)` lisp builtin.
     pub fn set_highlighter(&mut self, h: Option<Highlighter>) {
         self.highlight = h;
-    }
-
-    pub fn language(&self) -> Option<Language> {
-        self.highlight.as_ref().and_then(|h| h.language())
     }
 
     pub fn highlight_mut(&mut self) -> Option<&mut Highlighter> {
@@ -208,11 +197,7 @@ impl Buffer {
     /// allocation. Called from `State::precompute_frame` before the precompute
     /// pass walks buffers immutably.
     pub fn refresh_highlight(&mut self) {
-        if !self
-            .highlight
-            .as_ref()
-            .is_some_and(|h| h.is_dirty())
-        {
+        if !self.highlight.as_ref().is_some_and(|h| h.is_dirty()) {
             return;
         }
         let src = self.buf.to_string();

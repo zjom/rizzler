@@ -7,6 +7,6 @@ description = "Text storage and manipulation for the rizz editor: Buffer (rope-b
 [dependencies]
 rizz_core = { path = "../rizz_core" }
 rizz_changetree = { path = "../rizz_changetree" }
-rizz_highlight = { path = "../rizz_highlight" }
+rizz_ts = { path = "../rizz_ts" }
 ropey = "1.6.1"
 rizz = { workspace = true }

@@ -12,6 +12,7 @@ ratatui = { version = "0.29", default-features = false, features = ["crossterm"]
 rizz = { workspace = true }
 rizz_actions = { path = "../rizz_actions" }
 rizz_core = { path = "../rizz_core" }
+rizz_highlight = { path = "../rizz_highlight" }
 rizz_input = { path = "../rizz_input" }
 rizz_ringbuffer = { path = "../rizz_ringbuffer" }
 rizz_text = { path = "../rizz_text" }

@@ -427,6 +427,28 @@
    "reverse":   0})
 
 
+;; Tree-sitter syntax faces. The precompute pass looks up
+;; `syntax.<capture>` for each highlight capture emitted by the bundled
+;; grammars. Dotted captures (`function.method`) fall back to the parent
+;; (`function`) when the more specific face is undefined, so only override
+;; what you want different — everything else still gets styled.
+(face-define "syntax.keyword"      {"fg": (rgb 200 150 230) "bold": 1})
+(face-define "syntax.string"       {"fg": (rgb 165 215 150)})
+(face-define "syntax.escape"       {"fg": (rgb 220 180 130) "bold": 1})
+(face-define "syntax.number"       {"fg": (rgb 220 180 130)})
+(face-define "syntax.comment"      {"fg": pal-fg-dim "italic": 1})
+(face-define "syntax.function"     {"fg": (rgb 130 200 230)})
+(face-define "syntax.constructor"  {"fg": (rgb 225 220 130) "bold": 1})
+(face-define "syntax.type"         {"fg": (rgb 225 220 130)})
+(face-define "syntax.constant"     {"fg": (rgb 235 165 130)})
+(face-define "syntax.variable"     {"fg": pal-fg-base})
+(face-define "syntax.property"     {"fg": (rgb 200 200 230)})
+(face-define "syntax.attribute"    {"fg": (rgb 200 180 130) "italic": 1})
+(face-define "syntax.label"        {"fg": (rgb 235 165 130) "italic": 1})
+(face-define "syntax.operator"     {"fg": pal-fg-dim})
+(face-define "syntax.punctuation"  {"fg": pal-fg-dim})
+
+
 ;; ---------------------------------------------------------------------------
 ;; 2. Helpers shared by the layout fn
 ;; ---------------------------------------------------------------------------

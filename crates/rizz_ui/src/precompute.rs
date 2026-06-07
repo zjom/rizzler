@@ -235,12 +235,93 @@ fn pad_line_to_width(spans: Vec<Span<'static>>, width: u16) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Always-on decorator passes: base-fg, selection highlight, current-line
-/// highlight.
+/// Always-on decorator passes: base-fg, optional tree-sitter syntax,
+/// current-line highlight, selection highlight. Order is layered: later
+/// passes paint over earlier ones, so syntax colours the text after base-fg
+/// then cursor-line + selection backgrounds take precedence.
 fn push_builtin_decorators(buf: &Buffer, theme: &Theme, rb: &mut RenderedBuffer) {
     rb.decorators.push(base_fg_ranges(buf, theme));
+    let syntax = syntax_ranges(buf, theme);
+    if !syntax.ranges.is_empty() {
+        rb.decorators.push(syntax);
+    }
     rb.decorators.push(current_line_ranges(buf, theme));
     rb.decorators.push(selection_ranges(buf, theme));
+}
+
+/// Walk the buffer's tree-sitter highlighter (if attached) and emit a styled
+/// range per highlight capture whose row falls inside the viewport.
+/// Pre-condition: the highlighter's tree must already be in sync with the
+/// rope. `State::precompute_frame` calls [`Buffer::refresh_highlight`] before
+/// this runs, so the tree is current.
+fn syntax_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
+    let mut ranges = Vec::new();
+    let Some(h) = buf.highlight() else {
+        return DecoratorRanges { ranges };
+    };
+    let start_row = buf.file_pos().row.min(buf.len_lines());
+    let visible = buf.viewport.row as usize;
+    if visible == 0 {
+        return DecoratorRanges { ranges };
+    }
+    let end_row_excl = (start_row + visible).min(buf.len_lines() + 1);
+
+    let rope = buf.rope();
+    let len_bytes = rope.len_bytes();
+    let start_byte = if start_row < rope.len_lines() {
+        rope.line_to_byte(start_row)
+    } else {
+        len_bytes
+    };
+    let end_byte = if end_row_excl < rope.len_lines() {
+        rope.line_to_byte(end_row_excl)
+    } else {
+        len_bytes
+    };
+    if start_byte >= end_byte {
+        return DecoratorRanges { ranges };
+    }
+
+    for span in h.query(start_byte, end_byte) {
+        let Some(style) = resolve_syntax_face(theme, &span.capture) else {
+            continue;
+        };
+        // tree-sitter gives us byte offsets; rope coords are char-based.
+        let s_char = rope.byte_to_char(span.start_byte);
+        let e_char = rope.byte_to_char(span.end_byte);
+        let s_row = rope.char_to_line(s_char);
+        let e_row = rope.char_to_line(e_char);
+        let s_line_start = rope.line_to_char(s_row);
+        let s_col = s_char - s_line_start;
+        let last_row = e_row.min(end_row_excl.saturating_sub(1));
+        let first_row = s_row.max(start_row);
+        if first_row > last_row {
+            continue;
+        }
+        for row in first_row..=last_row {
+            let line_start = rope.line_to_char(row);
+            let col = if row == s_row { s_col } else { 0 };
+            let row_line_len = line_char_count(buf, row);
+            let end_col = if row == e_row {
+                e_char - line_start
+            } else {
+                row_line_len
+            };
+            let len = end_col.saturating_sub(col);
+            if len == 0 {
+                continue;
+            }
+            ranges.push(StyledRange {
+                row,
+                col,
+                len,
+                style: style.clone(),
+                pad_to_width: false,
+                display: None,
+            });
+        }
+    }
+    DecoratorRanges { ranges }
 }
 
 fn base_fg_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
@@ -417,6 +498,24 @@ fn emit_clipped(
             pad_to_width: e.pad_to_width,
             display,
         });
+    }
+}
+
+/// Look up a tree-sitter capture's face. Tries the fully-qualified name
+/// first (`syntax.function.method`), then peels off dotted suffixes
+/// (`syntax.function`) so a theme that only defines the base category still
+/// styles every refinement of it.
+fn resolve_syntax_face(theme: &Theme, capture: &str) -> Option<Style> {
+    let mut name: &str = capture;
+    loop {
+        let face = format!("syntax.{name}");
+        if let Some(style) = theme.resolve(&face) {
+            return Some(style);
+        }
+        match name.rfind('.') {
+            Some(i) => name = &name[..i],
+            None => return None,
+        }
     }
 }
 

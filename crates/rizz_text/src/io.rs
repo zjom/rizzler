@@ -7,6 +7,8 @@ use std::io;
 use std::path::Path;
 use std::rc::Rc;
 
+use rizz_highlight::Language;
+
 use crate::buffer::Buffer;
 
 /// Read a buffer's contents from `r`. Other fields default.
@@ -19,11 +21,14 @@ pub fn from_reader(r: impl io::Read) -> io::Result<Buffer> {
 
 /// Construct a buffer associated with `path`. Attempts to read from disk; on
 /// any read failure produces an empty buffer with `fs_path` still set so a
-/// subsequent [`write()`] will create the file.
+/// subsequent [`write()`] will create the file. When `path`'s extension maps
+/// to a known [`Language`], attaches a tree-sitter highlighter — the buffer
+/// is marked dirty so the next render reparses against the loaded text.
 pub fn with_path(path: Rc<Path>) -> Buffer {
     let mut buf = std::fs::File::open(&path)
         .and_then(from_reader)
         .unwrap_or_default();
+    buf.set_language(Language::from_path(&path));
     buf.fs_path = Some(path);
     buf
 }

@@ -35,6 +35,10 @@ impl BufferList {
         &self.bufs
     }
 
+    pub fn as_mut_slice(&mut self) -> &mut [Buffer] {
+        &mut self.bufs
+    }
+
     pub fn get_mut(&mut self, i: usize) -> Option<&mut Buffer> {
         self.bufs.get_mut(i)
     }

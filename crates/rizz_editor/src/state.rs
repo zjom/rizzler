@@ -658,6 +658,13 @@ impl State {
     /// Run every region under an `EditorGuard`, packing the results into a
     /// `RenderedFrame` the renderer can consume without ever touching lisp.
     pub fn precompute_frame(&mut self) -> (RenderedFrame, Option<String>) {
+        // Bring every buffer's syntax tree up to date before precompute walks
+        // them immutably. `refresh_highlight` short-circuits when no language
+        // is attached or the tree is already clean.
+        for b in self.bufs.as_mut_slice() {
+            b.refresh_highlight();
+        }
+
         let lisp = self.lisp.take().expect("recursive render is not supported");
         let _editor_guard = EditorGuard::new(self);
         let _phase_guard = RenderPhaseGuard::enter();
@@ -790,5 +797,26 @@ mod tests {
         let bf = &frame.per_buf[bufno];
         assert!(bf.gutter.is_some(), "expected a gutter");
         assert!(bf.decorators.len() >= 3, "expected the 3 built-in passes");
+    }
+
+    #[test]
+    fn rust_buffer_gets_syntax_highlight_ranges() {
+        use rizz_highlight::Language;
+        let mut s = test_state();
+        let focused = s.windows.focused_bufno();
+        s.bufs[focused].set_language(Some(Language::Rust));
+        s.bufs[focused].clear_with("fn main() {}\n");
+        s.bufs[focused].viewport = Position::new(80, 5);
+        let (frame, err) = s.precompute_frame();
+        assert!(err.is_none(), "no frame errors expected: {err:?}");
+        let any_syntax = frame.per_buf[focused]
+            .decorators
+            .iter()
+            .flat_map(|d| d.ranges.iter())
+            .any(|r| r.style.fg.is_some() && r.col == 0 && r.len == 2);
+        assert!(
+            any_syntax,
+            "expected at least one styled range covering the `fn` keyword"
+        );
     }
 }

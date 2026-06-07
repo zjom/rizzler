@@ -22,6 +22,7 @@ mod marks;
 use std::{path::Path, rc::Rc, str::FromStr};
 
 use rizz_changetree::ChangeTree;
+use rizz_highlight::{Highlighter, Language};
 use ropey::{Rope, RopeSlice, iter::Lines};
 
 use rizz_core::{EditingMode, Position};
@@ -86,6 +87,11 @@ pub struct Buffer {
     /// Cleared by anything that breaks the run — a non-insert edit, a
     /// cursor move, a mode change, undo/redo.
     pub(crate) insert_batch_end: Option<usize>,
+    /// Optional syntax-highlighter. Set when the buffer is associated with
+    /// a file whose extension maps to a known [`Language`]. Edits flip its
+    /// dirty flag via [`Buffer::invalidate_highlight`]; the precompute pass
+    /// refreshes the source snapshot and reparses on demand.
+    pub(crate) highlight: Option<Highlighter>,
 }
 
 impl Buffer {
@@ -160,6 +166,52 @@ impl Buffer {
     /// render builds a fresh map.
     pub(crate) fn invalidate_wrap_cache(&mut self) {
         self.wrap_cache = None;
+        self.invalidate_highlight();
+    }
+
+    /// Mark the tree-sitter tree dirty so the next render reparses against the
+    /// updated rope. No-op when no language is set.
+    pub(crate) fn invalidate_highlight(&mut self) {
+        if let Some(h) = &mut self.highlight {
+            h.invalidate();
+        }
+    }
+
+    /// Attach a tree-sitter highlighter for `lang`. Replaces any existing
+    /// highlighter; clears it when called with `None`.
+    pub fn set_language(&mut self, lang: Option<Language>) {
+        self.highlight = lang.map(Highlighter::new);
+    }
+
+    pub fn language(&self) -> Option<Language> {
+        self.highlight.as_ref().map(|h| h.lang)
+    }
+
+    pub fn highlight_mut(&mut self) -> Option<&mut Highlighter> {
+        self.highlight.as_mut()
+    }
+
+    pub fn highlight(&self) -> Option<&Highlighter> {
+        self.highlight.as_ref()
+    }
+
+    /// If a highlighter is attached and dirty, snapshot the rope into it and
+    /// reparse. Cheap when clean: the dirty flag short-circuits before any
+    /// allocation. Called from `State::precompute_frame` before the precompute
+    /// pass walks buffers immutably.
+    pub fn refresh_highlight(&mut self) {
+        if !self
+            .highlight
+            .as_ref()
+            .is_some_and(|h| h.is_dirty())
+        {
+            return;
+        }
+        let src = self.buf.to_string();
+        if let Some(h) = self.highlight.as_mut() {
+            h.set_source(src);
+            h.ensure_parsed();
+        }
     }
 
     /// End the current insert-coalescing run so the next typed character
@@ -231,6 +283,12 @@ impl Buffer {
 
     pub fn lines_at(&self, idx: usize) -> Lines<'_> {
         self.buf.lines_at(idx)
+    }
+
+    /// Read-only handle to the underlying rope. Used by callers that need
+    /// byte/char conversions (e.g. the tree-sitter highlight pass).
+    pub fn rope(&self) -> &Rope {
+        &self.buf
     }
 
     pub(crate) fn cur_line(&self) -> RopeSlice<'_> {

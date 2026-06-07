@@ -1,0 +1,9 @@
+[package]
+name = "rizz_highlight"
+version = "0.1.0"
+edition = "2024"
+description = "Tree-sitter-backed syntax highlighting for the rizz editor: language detection, parser/query cache, viewport-clipped capture iteration."
+
+[dependencies]
+tree-sitter = "0.25"
+tree-sitter-rust = "0.24"

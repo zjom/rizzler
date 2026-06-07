@@ -8,4 +8,4 @@ description = "The `Action` enum (single point of behaviour change) plus the key
 rizz_core = { path = "../rizz_core" }
 rizz_text = { path = "../rizz_text" }
 rizz_input = { path = "../rizz_input" }
-rizz = "0.3.7"
+rizz = { workspace = true }

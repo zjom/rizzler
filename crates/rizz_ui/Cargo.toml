@@ -11,5 +11,5 @@ rizz_input = { path = "../rizz_input" }
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = "0.29.0"
 unicode-width = "0.2"
-rizz = "0.3.7"
+rizz = { workspace = true }
 im = "15.1.0"

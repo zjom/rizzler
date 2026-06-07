@@ -8,4 +8,4 @@ description = "Text storage and manipulation for the rizz editor: Buffer (rope-b
 rizz_core = { path = "../rizz_core" }
 rizz_changetree = { path = "../rizz_changetree" }
 ropey = "1.6.1"
-rizz = "0.3.7"
+rizz = { workspace = true }

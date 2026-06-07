@@ -152,6 +152,12 @@ fn builtins() -> Env {
         ($name:expr, $nargs:expr, $f:expr) => {
             entries.push(($name, NativeFn::impure($name.into(), $nargs, $f)));
         };
+        ($name:expr, $nargs:expr, $f:expr, $doc:expr) => {
+            entries.push((
+                $name,
+                NativeFn::impure($name.into(), $nargs, $f).with_doc(Rc::from($doc)),
+            ));
+        };
     }
     macro_rules! alias {
         ($a:expr => $t:expr) => {
@@ -160,17 +166,27 @@ fn builtins() -> Env {
     }
 
     // mode + lifecycle
-    b!("quit", 0, |_, env| {
-        apply(Action::Quit)?;
-        ok_unit(env)
-    });
+    b!(
+        "quit",
+        0,
+        |_, env| {
+            apply(Action::Quit)?;
+            ok_unit(env)
+        },
+        "(quit/0)\nexit the application"
+    );
     alias!("q" => "quit");
 
-    b!("set-mode", 1, |args, env| {
-        let mode = parse_mode_ident(&args[0])?;
-        apply(Action::SetMode(mode))?;
-        ok_unit(env)
-    });
+    b!(
+        "set-mode",
+        1,
+        |args, env| {
+            let mode = parse_mode_ident(&args[0])?;
+            apply(Action::SetMode(mode))?;
+            ok_unit(env)
+        },
+        "(set-mode/1)\nchange the editing mode.\naccepts one of: 'normal | 'insert | 'visual | 'visual-line | 'visual-block | 'command"
+    );
 
     // text editing
     b!("insert-char", 1, |args, env| {

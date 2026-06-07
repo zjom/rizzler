@@ -105,7 +105,14 @@ pub struct LispRuntime(Runtime);
 impl LispRuntime {
     pub fn new() -> Self {
         let env = builtins().union(rizz::prelude::env());
+        Self::with_env(env)
+    }
+    pub fn with_env(env: Env) -> Self {
         Self(Runtime::with_env(env))
+    }
+
+    pub fn set_basedir(&mut self, p: impl Into<PathBuf>) {
+        self.0 = Runtime::with_env(self.0.env().clone().with_base_dir(Some(p.into())))
     }
 
     pub fn eval_str(&mut self, src: &str) -> Result<Rc<Value>, RizzError> {

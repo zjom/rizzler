@@ -145,8 +145,10 @@ impl State {
             state.bufs[1] = buffer_io::with_path(path.clone());
             if path.is_dir() {
                 state.workdir = path.clone();
+                state.lisp.as_mut().unwrap().set_basedir(path.as_ref());
             } else if let Some(parent) = path.parent() {
                 state.workdir = Rc::<Path>::from(parent);
+                state.lisp.as_mut().unwrap().set_basedir(path.as_ref());
             }
         }
         state.refresh_viewport();

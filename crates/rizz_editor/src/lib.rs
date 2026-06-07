@@ -24,5 +24,5 @@ pub mod state;
 
 pub use buffer_list::{BufferList, CycleDir};
 pub use journal::Journal;
-pub use lisp::{EditorGuard, LispRuntime, init_script_path};
+pub use lisp::{EditorGuard, LispRuntime};
 pub use state::{Config, PopupSpec, State};

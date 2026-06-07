@@ -140,14 +140,6 @@ impl Default for LispRuntime {
     }
 }
 
-/// Resolve `~/.config/rizz/init.rz` (or `$XDG_CONFIG_HOME/editor/init.rz`).
-pub fn init_script_path() -> Option<PathBuf> {
-    let dir = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(dir.join("rizz").join("init.rz"))
-}
-
 // ---------------------------------------------------------------------------
 // Builtin registration
 // ---------------------------------------------------------------------------
@@ -892,6 +884,34 @@ fn builtins() -> Env {
         let d: Value = with_editor_mut(|st| st.workdir()).as_ref().into();
         Ok((Rc::new(d), env.clone()))
     });
+
+    b!(
+        "config-dir",
+        0,
+        |_, env| {
+            let d: Value = with_editor_mut(|st| st.config_dir()).as_ref().into();
+            Ok((Rc::new(d), env.clone()))
+        },
+        "(config-dir/0)\nreturn the directory holding init.rz"
+    );
+
+    b!(
+        "reload-config",
+        0,
+        |_, env| {
+            // Read source + capture config dir under the editor borrow, then
+            // drop it before eval so the parser can re-enter editor builtins.
+            let (src, dir) =
+                with_editor_mut(|st| st.load_init_script().map(|src| (src, st.config_dir())))
+                    .map_err(|e| RuntimeError::Other(anyhow!("{e}")))?;
+            let prev_basedir = env.base_dir().map(PathBuf::from);
+            let eval_env = env.clone().with_base_dir(Some(dir.as_ref().to_path_buf()));
+            let (_, new_env) = rizz::parse_and_run_with_env(src.as_bytes(), &eval_env)
+                .map_err(|e| RuntimeError::Other(anyhow!("{e}")))?;
+            Ok((unit(), new_env.with_base_dir(prev_basedir)))
+        },
+        "(reload-config/0)\nre-read init.rz from the config dir and evaluate it"
+    );
 
     b!("fs-canonicalize", 1, |args, env| {
         let s = as_str(&args[0], "fs-canonicalize")?;

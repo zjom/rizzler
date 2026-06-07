@@ -46,7 +46,10 @@ const KEYCOMBO_TIMEOUT: Duration = Duration::from_millis(1000);
 pub struct Config {
     pub renderer: Box<dyn Renderer>,
     pub keycombo_timeout: Duration,
-    pub path: Option<PathBuf>,
+    pub edit_path: Option<PathBuf>,
+    /// Directory holding `init.rz`. `None` selects the default for the build
+    /// (the workspace root in debug/test, `$XDG_CONFIG_HOME/rizz` in release).
+    pub config_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -54,13 +57,14 @@ impl Config {
         Ok(Self {
             renderer: Box::new(RatatuiRenderer::new()?),
             keycombo_timeout: KEYCOMBO_TIMEOUT,
-            path: None,
+            edit_path: None,
+            config_dir: None,
         })
     }
 
     pub fn with_path(path: Option<PathBuf>) -> io::Result<Self> {
         Ok(Self {
-            path,
+            edit_path: path,
             ..Self::new()?
         })
     }
@@ -119,6 +123,9 @@ pub struct State {
     /// Lisp callable that builds the frame's widget tree each render.
     frame_fn: Option<Rc<Value>>,
     workdir: Rc<Path>,
+    /// Directory holding `init.rz`. Stored so `reload-config` (and any
+    /// future config-path query from lisp) can locate the script after init.
+    config_dir: Rc<Path>,
     /// Runtime-registered tree-sitter grammars loaded from shared libraries,
     /// indexed by file extension. Populated by the `grammar-register` lisp
     /// builtin; consulted by [`Self::install_dynamic_highlighter`] when a
@@ -137,39 +144,51 @@ fn resolve_workdir(path: Option<&Path>, cwd: &Path) -> PathBuf {
     }
 }
 
-/// Returns `(source, basedir)` for the init script, or `None` if there is
-/// no script to run. In tests and debug builds the embedded `init.rz` is
-/// used and the basedir is the cwd; in release builds the user-config init
-/// script is used, creating it from the embedded copy on first run.
+/// The directory holding `init.rz` when the caller doesn't override it.
+/// In debug/test builds this is the workspace root — where `init.rz` lives
+/// in the source tree — so editing the checked-in file is the loop you get.
+/// In release builds it's `$XDG_CONFIG_HOME/rizz` (or `~/.config/rizz`).
 #[cfg(any(test, debug_assertions))]
-fn load_init_script() -> anyhow::Result<Option<(String, PathBuf)>> {
-    let basedir = std::env::current_dir()?;
-    Ok(Some((
-        include_str!("../../../init.rz").to_string(),
-        basedir,
-    )))
+fn default_config_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
 
 #[cfg(all(not(test), not(debug_assertions)))]
-fn load_init_script() -> anyhow::Result<Option<(String, PathBuf)>> {
-    use std::fs;
-    let Some(path) = crate::lisp::init_script_path() else {
-        return Ok(None);
-    };
-    if !path.exists() {
-        fs::create_dir_all(path.parent().unwrap())?;
-        fs::write(&path, include_str!("../../../init.rz"))?;
-    }
-    let src = fs::read_to_string(&path)?;
-    Ok(Some((src, path)))
+fn default_config_dir() -> PathBuf {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("rizz")
 }
 
-#[cfg(test)]
+const INIT_SCRIPT_NAME: &str = "init.rz";
+const EMBEDDED_INIT_SCRIPT: &str = include_str!("../../../init.rz");
+
+/// Read `<config_dir>/init.rz`, seeding it from the embedded template if it
+/// doesn't exist yet so first-run users land on a working config.
+fn load_init_script(config_dir: &Path) -> anyhow::Result<String> {
+    use std::fs;
+    let path = config_dir.join(INIT_SCRIPT_NAME);
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, EMBEDDED_INIT_SCRIPT)?;
+    }
+    Ok(fs::read_to_string(&path)?)
+}
+
+#[cfg(any(test, debug_assertions))]
 fn init_eval_err(e: RizzError) -> anyhow::Error {
     panic!("init.rz eval failed: {e}");
 }
 
-#[cfg(not(test))]
+#[cfg(all(not(test), not(debug_assertions)))]
 fn init_eval_err(e: RizzError) -> anyhow::Error {
     anyhow::anyhow!(e.to_string())
 }
@@ -177,7 +196,8 @@ fn init_eval_err(e: RizzError) -> anyhow::Error {
 impl State {
     pub fn with_config(config: Config) -> anyhow::Result<Self> {
         let cwd = std::env::current_dir()?;
-        let workdir = resolve_workdir(config.path.as_deref(), &cwd);
+        let workdir = resolve_workdir(config.edit_path.as_deref(), &cwd);
+        let config_dir = config.config_dir.unwrap_or_else(default_config_dir);
 
         let mut state = Self {
             bufs: BufferList::new(),
@@ -195,9 +215,10 @@ impl State {
             theme: ThemeCell::default(),
             frame_fn: None,
             workdir: workdir.into(),
+            config_dir: config_dir.into(),
             ts_registry: TsRegistry::new(),
         };
-        if let Some(path) = config.path
+        if let Some(path) = config.edit_path
             && !path.is_dir()
         {
             state.bufs[1] = buffer_io::with_path(Rc::<Path>::from(path));
@@ -205,19 +226,42 @@ impl State {
         }
         state.refresh_viewport();
 
-        // Point the lisp basedir at the init script while it runs (so `open`
-        // resolves relative to it), then restore it to the editor workdir.
-        if let Some((src, basedir)) = load_init_script()? {
-            state.lisp.as_mut().unwrap().set_basedir(&basedir);
-            state.eval_lisp_script(&src).map_err(init_eval_err)?;
-        }
-        state
-            .lisp
-            .as_mut()
-            .unwrap()
-            .set_basedir(state.workdir.as_ref());
+        state.run_init_script()?;
 
         Ok(state)
+    }
+
+    /// Locate `init.rz` under the config dir, seed it from the embedded
+    /// template if missing, and eval it with the lisp basedir pointed at the
+    /// config dir (so `(open "foo.rz")` inside `init.rz` resolves relative to
+    /// it). Restores the basedir to the editor workdir on the way out.
+    fn run_init_script(&mut self) -> anyhow::Result<()> {
+        let src = load_init_script(&self.config_dir)?;
+        let config_dir = self.config_dir.clone();
+        self.lisp.as_mut().unwrap().set_basedir(config_dir.as_ref());
+        let eval_result = self.eval_lisp_script(&src);
+        self.lisp
+            .as_mut()
+            .unwrap()
+            .set_basedir(self.workdir.as_ref());
+        eval_result.map_err(init_eval_err)
+    }
+
+    /// Read `<config_dir>/init.rz` from disk (seeding it from the embedded
+    /// template if missing) and return its contents. Used by the lisp
+    /// `reload-config` builtin, which evals the result against the live env —
+    /// the builtin can't call back into `eval_lisp_script` because the runtime
+    /// is already on the stack when a builtin runs.
+    pub fn load_init_script(&self) -> anyhow::Result<String> {
+        load_init_script(&self.config_dir)
+    }
+
+    pub fn config_dir(&self) -> Rc<Path> {
+        self.config_dir.clone()
+    }
+
+    pub fn init_script_path(&self) -> PathBuf {
+        self.config_dir.join(INIT_SCRIPT_NAME)
     }
 
     /// Install an [`EditorGuard`] and run `f` against the editor's lisp
@@ -762,7 +806,8 @@ pub mod test_support {
         State::with_config(Config {
             renderer: Box::new(NullRenderer),
             keycombo_timeout: Duration::from_hours(24),
-            path: None,
+            edit_path: None,
+            config_dir: None,
         })
         .unwrap()
     }

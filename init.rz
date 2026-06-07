@@ -1,14 +1,197 @@
-;; Default keybindings, bundled into the editor binary and evaluated by
-;; `State::with_config` before any user `init.lisp`. Mirrors the layout that
-;; used to live in `src/keymap/default.rs`.
+;; =============================================================================
+;;
+;;     ██████╗ ██╗███████╗███████╗██╗     ███████╗██████╗
+;;     ██╔══██╗██║╚══███╔╝╚══███╔╝██║     ██╔════╝██╔══██╗
+;;     ██████╔╝██║  ███╔╝   ███╔╝ ██║     █████╗  ██████╔╝
+;;     ██╔══██╗██║ ███╔╝   ███╔╝  ██║     ██╔══╝  ██╔══██╗
+;;     ██║  ██║██║███████╗███████╗███████╗███████╗██║  ██║
+;;     ╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚══════╝╚══════╝╚═╝  ╚═╝
+;;
+;; =============================================================================
+;;
+;; What is this file?
+;; ──────────────────
+;;
+;; `init.rz` is two things at once:
+;;
+;;   1. The bundled default config. The first time you launched the editor it
+;;      copied this file from the binary into `$XDG_CONFIG_HOME/rizz/init.rz`
+;;      (or `~/.config/rizz/init.rz` if `XDG_CONFIG_HOME` is unset).
+;;      Everything you read here is what you get out of the box.
+;;
+;;   2. Your config. Once seeded, the file on disk is yours. Add keymaps,
+;;      redefine faces, replace the status line, rip out a popup — anything
+;;      below can be changed, removed, or rewritten.
+;;
+;; You're encouraged to read it top to bottom. The order is deliberate:
+;;
+;;   keymaps  → the smallest building block, what you'll touch most often
+;;   theme    → introduces the color palette and named faces
+;;   widgets  → builds the gutter, status line, and frame layout
+;;   popups   → ties it all together: buffers + widgets + their own keymaps
+;;
+;; Lines marked  NOTE  explain a rizz or editor concept.
+;; Lines marked  TIP   are workflow suggestions.
+;; Lines marked  TODO  are good places to drop in your own customizations.
+;;
+;; If anything in this file breaks the editor, delete it and run
+;; `:reload-config` — the binary will reseed a fresh copy.
+;;
+;; =============================================================================
+;; What is rizz?
+;; =============================================================================
+;;
+;; rizz is a small lisp embedded in the editor. The reference for the language
+;; lives at https://github.com/zjom/rizz; what follows is enough to read this
+;; file from top to bottom.
+;;
+;; ── Lisps in 30 seconds ──
+;;
+;; A lisp program is made of "s-expressions": data and code share the same
+;; shape. A list written with parens like `(f a b)` is a call to `f` with two
+;; arguments. Numbers and strings stand for themselves. That's the whole
+;; surface syntax — no statements, no precedence rules, no semicolons (well,
+;; almost; see below).
+;;
+;;     (+ 1 2)             ;; => 3
+;;     (str-upper "hi")    ;; => "HI"
+;;
+;; Comments start with two semicolons and run to the end of the line.
+;; A single `;` is a syntax error — always use `;;`.
+;;
+;; ── Bindings ──
+;;
+;; `let` binds a name to a value. `fn` defines a function. Both return the
+;; value they just bound, so you can use them as expressions:
+;;
+;;     (let answer 42)
+;;     (fn double (x) (* x 2))
+;;     (double answer)     ;; => 84
+;;
+;; ── Sequencing ──
+;;
+;; `do` chains multiple forms when you need more than one step. Bindings
+;; introduced earlier are visible to later forms in the same `do`:
+;;
+;;     (do (move-cursor 'right)
+;;         (insert-char "!"))
+;;
+;; ── Branching ──
+;;
+;; `if` is an expression — it returns a value, not a statement. Both branches
+;; are required. For multi-way branching, see `cond` in the rizz prelude.
+;;
+;;     (if (= mode 'insert) "I" "N")
+;;
+;; ── Quoting (the magic behind keymaps) ──
+;;
+;; A leading `'` quotes the next form, turning *code* into *data*. The list
+;; isn't called — it's just a value sitting around waiting to be evaluated
+;; later (or never).
+;;
+;;     (set-mode 'insert)    ;; calls set-mode with the symbol 'insert
+;;     '(set-mode 'insert)   ;; the list (set-mode 'insert) — a value
+;;
+;; That distinction is the whole reason keymaps look the way they do. When
+;; you press a key the editor evaluates the *quoted* action you bound:
+;;
+;;     (keymap-set 'normal "i" '(set-mode 'insert))
+;;      │           │       │   └── action: a quoted form, evaluated on press
+;;      │           │       └────── key sequence (a string)
+;;      │           └────────────── mode (a quoted symbol)
+;;      └────────────────────────── the builtin
+;;
+;; ── Collections ──
+;;
+;; Arrays use `[...]`; maps use `{key: value ...}`. Both look close to JSON
+;; but use whitespace between entries instead of commas. Map keys can be
+;; strings, numbers, or quoted symbols.
+;;
+;;     ["red" "green" "blue"]
+;;     {"fg": pal-fg "bg": pal-bg "bold": 1}
+;;
+;; ── Mutation ──
+;;
+;; Almost everything is immutable. The one exception is the *ref* — a heap
+;; cell whose contents can be replaced with `set!`. The popup-files explorer
+;; at the bottom of this file uses one to remember the current directory
+;; between keypresses.
+;;
+;;     (let counter (ref 0))
+;;     (set! counter (+ (deref counter) 1))
+;;     (deref counter)     ;; => 1
+;;
+;; ── Forms you'll see often in this file ──
+;;
+;;     (fn name (args) body)     define a function
+;;     (let name value)          bind a value
+;;     (if cond then else)       branch
+;;     (do form1 form2 ...)      sequence
+;;     (map mode "key" '(...))   alias for keymap-set (see below)
+;;
+;; =============================================================================
+;; Finding your way around the running editor
+;; =============================================================================
+;;
+;;   ?            in normal mode — opens the popup cheat-sheet
+;;   <c-e>        in normal mode — opens the file explorer
+;;   :            enters command mode — type any rizz form, <enter> evaluates
+;;                  → try `(show keymap-set)` to read a builtin's docs
+;;                  → try `(typeof "hi")` to inspect a value's type
+;;                  → try `reload-config` to re-eval this file in place
+;;   :messages    shows the notification log when a popup auto-dismisses
+;;   :quit        exits
+;;
+;; In command mode you can type a bare word `quit` or a full form
+;; `(quit)` — the shell-style wrapper adds the parens for you. A bare
+;; integer `42` jumps to that line.
+;;
+;; =============================================================================
 
-;; ----- normal mode -----------------------------------------------------
+
+
+;; =============================================================================
+;; Normal mode — the home base of modal editing
+;; =============================================================================
+;;
+;; In modal editing your keyboard is a remote control, not a typewriter.
+;; Normal mode is the default; from here you navigate, edit by motion, and
+;; switch to other modes for the actual typing.
+;;
+;; Modes that ship with the editor:
+;;
+;;   'normal        commands and motions (this section)
+;;   'insert        type characters into the buffer
+;;   'visual        characterwise selection
+;;   'visual-line   linewise selection
+;;   'visual-block  blockwise selection
+;;   'command       minibuffer; evaluates a rizz form on <enter>
+;;   'popup         keymap a popup buffer uses (see the bottom of this file)
+;;
+;; NOTE: every binding wires a key (or chord) to an action. The builtin
+;; behind every binding is `keymap-set`; we alias it to `map` to cut visual
+;; noise. The action is a *quoted* form (see the rizz primer above) — that
+;; way the editor stores the list and only evaluates it when the key fires.
+;;
+;; TIP: chord bindings ("dd", "<c-w>q") are routed through a trie; add a new
+;; prefix just by binding `"<prefix><suffix>"` — no setup required.
+;;
+;; TIP: unbound keys still show up briefly in the `last-key` segment of the
+;; status line — useful when a chord doesn't fire the way you expected.
+
 (let map keymap-set)
+
+;; NOTE: `<c-v>` is rizz's notation for Ctrl+v. Other modifiers: `<s-x>`
+;; (shift), `<m-x>` (meta/alt). Whitespace / function keys: `<esc>`,
+;; `<enter>`, `<backspace>`, `<up>`, `<pageup>`, etc.
 (map 'normal ":"      '(set-mode 'command))
 (map 'normal "v"      '(set-mode 'visual))
 (map 'normal "V"      '(set-mode 'visual-line))
 (map 'normal "<c-v>"  '(set-mode 'visual-block))
 
+;; The `i`, `I`, `a`, `A`, `o`, `O` family enters insert mode at different
+;; positions. Each is a tiny program in `do` form: position the cursor,
+;; possibly open a line, then flip the mode.
 (map 'normal "i"      '(set-mode 'insert))
 (map 'normal "I"      '(do (move-cursor 'line-start)
                            (set-mode 'insert)))
@@ -25,11 +208,11 @@
                            (newline)
                            (move-cursor 'up)))
 
+;; Deletion is operator + motion: `d` followed by any motion deletes the
+;; range covered by that motion. The motion vocabulary mirrors the cursor
+;; vocabulary further down — anywhere `move-cursor` takes a symbol,
+;; `delete-motion` takes the same one.
 (map 'normal "x"      '(delete-char-at (cursor-col) (cursor-line)))
-
-;; vim `dd` deletes the current line; `d<motion>` deletes from the cursor to
-;; the motion's destination. Each combo is its own keymap entry — the trie
-;; resolves them as multi-key sequences.
 (map 'normal "dd"     '(delete-line))
 (map 'normal "dh"     '(delete-motion 'left))
 (map 'normal "dl"     '(delete-motion 'right))
@@ -51,6 +234,10 @@
 (map 'normal "d%"     '(delete-motion 'match-bracket))
 (map 'normal "u"      '(undo))
 (map 'normal "<c-r>"  '(redo))
+
+;; Cardinal motions: hjkl are the classic vi keys; arrows are bound to the
+;; same actions for users who prefer them. Everything is just a `move-cursor`
+;; with a different symbol.
 (map 'normal "j"      '(move-cursor 'down))
 (map 'normal "<down>" '(move-cursor 'down))
 (map 'normal "k"      '(move-cursor 'up))
@@ -60,6 +247,11 @@
 (map 'normal "l"      '(move-cursor 'right))
 (map 'normal "<right>" '(move-cursor 'right))
 
+;; Longer-range motions: line edges, file edges, word boundaries, bracket
+;; matches, half-page scrolls, and a centering jump.
+;;
+;; TODO: add your own motion bindings here — anything `move-cursor` accepts
+;; can be a chord.
 (map 'normal "0"      '(move-cursor 'line-start))
 (map 'normal "^"      '(move-cursor 'line-first-non-blank))
 (map 'normal "$"      '(move-cursor 'line-end))
@@ -79,6 +271,8 @@
 (map 'normal "zz"     '(move-cursor 'center))
 
 ;; ----- window management (<c-w> prefix) --------------------------------
+;; Windows are the editor's panes. `<c-w>` is the conventional prefix; the
+;; trie handles the chord wait for you.
 (map 'normal "<c-w>q" '(window-close))
 (map 'normal "<c-w>\"" '(window-split 'vertical))
 (map 'normal "<c-w>|" '(window-split 'horizontal))
@@ -88,12 +282,21 @@
 (map 'normal "<c-w>j" '(window-focus 'down))
 (map 'normal "<c-w>w" '(window-focus-next))
 
-;; ----- visual modes ----------------------------------------------------
+;; ============================================================================
+;; Visual modes
+;; ============================================================================
+;;
 ;; All three visual modes share the same motion set as normal mode. The
 ;; selection anchor is captured by `set-mode` when entering a visual mode
 ;; and preserved when switching between visual submodes — so `v`/`V`/`<c-v>`
 ;; inside a visual mode just changes the selection geometry. The motion set
-;; is duplicated per mode because rizz has no implicit sequencing form.
+;; is duplicated per mode because rizz has no implicit sequencing form: the
+;; same set of bindings has to be installed under each mode name.
+;;
+;; NOTE: this is where you see your first real `fn` definition. Functions
+;; defined at the top level become available everywhere below, including
+;; from the minibuffer. Try typing `(bind-visual-motions 'visual)` again
+;; in command mode after editing the body — it's that easy to iterate.
 
 ;; visual (characterwise)
 (fn bind-visual-motions (mode)
@@ -135,7 +338,14 @@
 (bind-visual-motions 'visual-block)
 (bind-visual-motions 'visual-line)
 
-;; ----- insert mode -----------------------------------------------------
+;; ============================================================================
+;; Insert mode
+;; ============================================================================
+;;
+;; Insert mode treats unbound printable keys as text to insert — only the
+;; control keys below need explicit bindings. `<esc>` is the conventional
+;; way out; `jk` is a popular convenience chord. Drop it if you actually
+;; type "jk" often.
 (map 'insert "<enter>"     '(newline))
 (map 'insert "<backspace>" '(delete-char))
 (map 'insert "<esc>"       '(set-mode 'normal))
@@ -145,18 +355,295 @@
 (map 'insert "<left>"      '(move-cursor 'left))
 (map 'insert "<right>"     '(move-cursor 'right))
 
-;; ----- command mode (minibuffer) ---------------------------------------
+;; ============================================================================
+;; Command mode (minibuffer)
+;; ============================================================================
+;;
+;; Command mode is your interactive lisp REPL into the running editor. On
+;; <enter> the minibuffer text is wrapped as needed and evaluated; any
+;; returned value is shown via `notify`. Unbound printable keys are typed
+;; into the minibuffer, same as insert mode.
+;;
+;; TIP: anything you can call from a keymap action you can also type here.
+;; The minibuffer is the fastest way to try a new fn before you bind it.
 (map 'command "<enter>"     '(command-submit))
 (map 'command "<backspace>" '(delete-char))
 (map 'command "<esc>"       '(command-cancel))
 (map 'command "<left>"      '(move-cursor 'left))
 (map 'command "<right>"     '(move-cursor 'right))
 
-;; ----- notification popup ----------------------------------------------
+;; ============================================================================
+;;  Vague — bundled default theme (ported from vague.nvim)
+;; ============================================================================
+;;
+;;  The theme is just rizz code: a palette (let-bindings of named colors), a
+;;  pile of `face-define` calls that name visual styles, and a few helper
+;;  functions that build widgets for the gutter and status line. Nothing
+;;  here is privileged — replace any of it and the editor will pick up your
+;;  version on the next render.
+;;
+;;  The frame layout is described as a single widget tree returned by the fn
+;;  passed to `(set-frame ...)`. The tree primitives are:
+;;
+;;    (w-vstack [...]) / (w-hstack [...])      — stack children with constraints
+;;    (w-cells N child) / (w-min-cells N child) — child constraint inside a stack
+;;    (w-fill N child) / (w-frac N M child)
+;;    (w-line [span ...])                — single screen row
+;;    (w-text "..." 'face)               — shorthand for one span
+;;    (w-block child {...})              — bordered/titled box
+;;    (w-editor-tree {...})              — the editor window tree leaf
+;;    (w-minibuffer)                     — the minibuffer leaf
+;;
+;;  Faces, text properties, and overlays are unchanged from before.
+;; ============================================================================
+
+
+;; Port of the Vague palette.
+;;
+;; NOTE: `rgb` is just a builtin returning a packed color value. `let`
+;; bindings here are plain names — shadow any of them from your own config
+;; (or just edit the numbers in place) to retheme the editor.
+(let pal-bg          (rgb  20  20  21))    ;; #141415
+(let pal-inactive-bg (rgb  28  28  36))    ;; #1c1c24
+(let pal-fg          (rgb 205 205 205))    ;; #cdcdcd
+(let pal-border      (rgb 135 135 135))    ;; #878787
+(let pal-line        (rgb  37  37  48))    ;; #252530
+(let pal-comment     (rgb  96  96 121))    ;; #606079
+(let pal-builtin     (rgb 180 212 207))    ;; #b4d4cf
+(let pal-func        (rgb 196 130 130))    ;; #c48282
+(let pal-string      (rgb 232 181 137))    ;; #e8b589
+(let pal-number      (rgb 224 163  99))    ;; #e0a363
+(let pal-property    (rgb 195 195 213))    ;; #c3c3d5
+(let pal-constant    (rgb 174 174 209))    ;; #aeaed1
+(let pal-parameter   (rgb 187 157 189))    ;; #bb9dbd
+(let pal-visual      (rgb  51  55  56))    ;; #333738
+(let pal-error       (rgb 216 100 126))    ;; #d8647e
+(let pal-warning     (rgb 243 190 124))    ;; #f3be7c
+(let pal-hint        (rgb 126 152 232))    ;; #7e98e8
+(let pal-operator    (rgb 144 160 181))    ;; #90a0b5
+(let pal-keyword     (rgb 110 148 178))    ;; #6e94b2
+(let pal-type        (rgb 155 180 188))    ;; #9bb4bc
+(let pal-search      (rgb  64  80 101))    ;; #405065
+(let pal-plus        (rgb 127 165  99))    ;; #7fa563
+(let pal-delta       (rgb 243 190 124))    ;; #f3be7c
+
+;; A *face* is a named style packet — fg/bg colors plus attributes like
+;; bold/italic/underline. Widgets reference faces by name, so changing a
+;; face here updates everywhere the name appears.
+;;
+;; The renderer looks up `default`, `selection`, `cursor-line` directly —
+;; redefining these here drives the always-on built-in decorator passes.
+(face-define 'default                  {"fg": pal-fg "bg": pal-bg})
+(face-define 'selection                {"bg": pal-visual})
+(face-define 'cursor-line              {"bg": pal-line "fg": pal-fg})
+(face-define "vague.muted"             {"fg": pal-comment "italic": 1})
+(face-define "vague.accent"            {"fg": pal-constant "bold": 1})
+(face-define "vague.error"             {"fg": pal-error    "bold": 1 "underline": 1})
+(face-define "vague.warn"              {"fg": pal-warning  "bold": 1})
+(face-define "vague.mode.normal"       {"fg": pal-keyword   "bold": 1})
+(face-define "vague.mode.insert"       {"fg": pal-warning   "bold": 1})
+(face-define "vague.mode.visual"       {"fg": pal-parameter "bold": 1})
+(face-define "vague.mode.visual-line"  {"fg": pal-parameter "bold": 1 "italic": 1})
+(face-define "vague.mode.visual-block" {"fg": pal-parameter "bold": 1 "underline": 1})
+(face-define "vague.mode.command"      {"fg": pal-hint      "bold": 1})
+
+;; dim for the rest of the buffer, fg for the active row.
+(face-define "vague.gutter"          {"fg": pal-comment})
+(face-define "vague.gutter-current"  {"fg": pal-fg       "bold": 1})
+
+(face-define "vague.signature"  {"fg": pal-string "italic": 1})
+(face-define "vague.reverse"    {"reverse": 1 "bold": 1})
+
+
+;; Tree-sitter syntax faces. The precompute pass looks up
+;; `syntax.<capture>` for each highlight capture emitted by the bundled
+;; grammars. Dotted captures (`function.method`) fall back to the parent
+;; (`function`) when the more specific face is undefined, so only override
+;; what you want different — everything else still gets styled.
+;;
+;; TODO: register your own tree-sitter grammar with `(grammar-register …)`
+;; — see `(show grammar-register)` from command mode for the full signature.
+(face-define "syntax.keyword"      {"fg": pal-keyword   "bold": 1})
+(face-define "syntax.string"       {"fg": pal-string    "italic": 1})
+(face-define "syntax.escape"       {"fg": pal-keyword})
+(face-define "syntax.number"       {"fg": pal-number})
+(face-define "syntax.comment"      {"fg": pal-comment   "italic": 1})
+(face-define "syntax.function"     {"fg": pal-func})
+(face-define "syntax.constructor"  {"fg": pal-constant})
+(face-define "syntax.type"         {"fg": pal-type})
+(face-define "syntax.constant"     {"fg": pal-constant})
+(face-define "syntax.variable"     {"fg": pal-fg})
+(face-define "syntax.property"     {"fg": pal-property})
+(face-define "syntax.attribute"    {"fg": pal-parameter "italic": 1})
+(face-define "syntax.label"        {"fg": pal-keyword})
+(face-define "syntax.operator"     {"fg": pal-operator})
+(face-define "syntax.punctuation"  {"fg": pal-fg})
+
+
+;; Popup faces, reused by `notify` / `messages` / `popup-help` / `popup-files`
+(face-define "popup.default"     {"fg": pal-fg       "bg": pal-bg})
+(face-define "popup.border"      {"fg": pal-border   "bg": pal-bg})
+(face-define "popup.title"       {"fg": pal-warning  "bg": pal-bg "bold": 1})
+(face-define "popup.dir"         {"fg": pal-hint     "bold": 1})
+(face-define "popup.file"        {"fg": pal-fg})
+
+
+;; ----- status-line components -----------------------------------------
+;;
+;; Each helper below returns a *widget* — a value that the renderer turns
+;; into screen cells. Widgets are pure data: `_frame` is called once per
+;; render with no side effects, and the result is diffed against the
+;; previous frame to decide what to draw.
+;;
+;; NOTE: helper names starting with `_` are a rizz convention for "private
+;; to this file" — when this file is loaded via `open` from elsewhere, the
+;; `_`-prefixed bindings are filtered out and don't leak to the caller.
+
+;; Tiny lookup table expressed as nested `if`.
+(fn _mode-face (m)
+  (if (= m "normal")       "vague.mode.normal"
+  (if (= m "insert")       "vague.mode.insert"
+  (if (= m "visual")       "vague.mode.visual"
+  (if (= m "visual-line")  "vague.mode.visual-line"
+  (if (= m "visual-block") "vague.mode.visual-block"
+  (if (= m "command")      "vague.mode.command"
+                           "vague.muted")))))))
+
+;; Tiny lookup tables expressed as `cond`.
+(fn _mode-glyph (m)
+  (cond
+    ((= m "normal")           "N")
+    ((= m "insert")           "I")
+    ((= m "visual")           "V")
+    ((= m "visual-line")      "L")
+    ((= m "visual-block")     "B")
+    ((= m "command")          "C")
+    (else                     "?")))
+
+(fn _pad-right (s w)
+  (do
+    (let pad (- w (len s)))
+    (if (> pad 0)
+        (str-join [s (str-join (fmap (fn _spc (_) " ") (range 0 pad)) "")] "")
+        s)))
+
+
+;; The gutter fn is called per visible row with `lnum` set to the file row,
+;; or `()` for rows past EOF. Returns the styled content for one row of the
+;; gutter. The total column width is reserved by `gutter-width` on the
+;; editor-tree widget.
+
+(fn _gutter (n)
+  (if (= n ())
+      (w-text "     " "vague.gutter")
+      (if (= n (cursor-line))
+          (w-text (_pad-right (str-join ["▎ " (to-str n)] "") 5)
+                  "vague.gutter-current")
+          (w-text (_pad-right (str-join ["│ " (to-str n)] "") 5)
+                  "vague.gutter"))))
+
+;; Each segment is a fn returning a span. They get spliced into the status
+;; line by `_status-line` below.
+
+(fn _seg-mode ()
+  (do
+    (let m (focused-mode))
+    (w-text (str-join [" " (_mode-glyph m) " "] "")
+            (_mode-face m))))
+
+(fn _seg-buf-path ()
+  (do
+    (let path (buf-path))
+    (if (= path ())
+        (w-text "  rizz  " "vague.signature")
+        (w-text path "vague.signature"))))
+
+(fn _seg-selection-hint ()
+  (do
+    (let sel (selected-text))
+    (if (= sel ())
+        (w-text "" "vague.muted")
+        (w-text (str-join [" " (to-str (len sel)) " chars selected "] "")
+                "vague.accent"))))
+
+(fn _seg-cursor ()
+  (w-text (str-join [(to-str (cursor-line)) ":" (to-str (cursor-col))] "")
+          "vague.accent"))
+
+(fn _seg-bufno ()
+  (do
+    (let m (focused-mode))
+    (if (= m "command")
+        (w-text (to-str (buf-no)) "vague.reverse")
+        (w-text (to-str (buf-no)) "vague.warn"))))
+
+
+;; The "hint bar" sits below the status line and changes based on the
+;; current mode. It's a low-friction place to remind yourself of the
+;; bindings you just installed.
+;;
+;; TODO: extend the chain below as you add new modes or custom hints.
+(fn _hint-bar ()
+  (do
+    (let m (focused-mode))
+    (if (= m "normal")
+        (w-line [(w-text "  press : for commands · i to insert · v to select  "
+                         "vague.muted")])
+    (if (= m "insert")
+        (w-line [(w-text "  press <esc> to leave insert mode  " "vague.muted")])
+    (if (= m "command")
+        (w-line [(w-text "  command mode — type a form and press <enter>  "
+                         "vague.muted")])
+        (w-line [(w-text "  visual: y to yank · d to delete · <esc> to cancel  "
+                         "vague.muted")]))))))
+
+;; Vertical stack, top-to-bottom:
+;;
+;;    editor windows  (min-cells 1)   ← grows to fill
+;;    status line     (cells 1)
+;;    bottom hint     (cells 1)
+;;    minibuffer      (cells 1)
+;;
+;; The status line is an hstack with a `fill` spacer between the left and
+;; right groups so right-aligned segments hug the right margin.
+
+(fn _status-line ()
+  (w-hstack
+    [(w-min-cells 1
+      (w-line [(_seg-mode)
+               (_seg-buf-path)
+               (_seg-selection-hint)]))
+     (w-fill 1
+      (w-right-align
+        (w-line [(_seg-cursor)
+                 (w-text " • " "vague.muted")
+                 (w-text (last-key) "vague.muted")
+                 (w-text "  " "vague.muted")
+                 (_seg-bufno)])))]))
+
+;; `_frame` is the single function the renderer calls per frame to assemble
+;; the whole UI. `set-frame` installs it; calling `set-frame` again with a
+;; different fn hot-swaps the layout. There can be only one frame fn.
+(fn _frame ()
+  (w-vstack
+    [(w-min-cells 1
+      (w-editor-tree
+        {"gutter":       _gutter
+         "gutter-width": 5}))
+     (w-cells 1 (_status-line))
+     (w-cells 1 (_hint-bar))
+     (w-cells 1 (w-minibuffer))]))
+
+(set-frame _frame)
+
+;; ============================================================================
+;; Notifications and the message log
+;; ============================================================================
+;;
 ;; `notify` is the bridge between Rust-side notifications (eval errors,
 ;; render-callback failures, command-submit results) and the user-visible
 ;; popup. The popup itself is constructed here — placement, chrome, faces,
-;; and dedup all live in lisp — so swap any of this in `init.lisp` to
+;; and dedup all live in lisp — so swap any of this in your own config to
 ;; restyle messages without touching the editor binary.
 ;;
 ;; Two collaborators in Rust make this possible:
@@ -169,30 +656,27 @@
 ;; surface their return value (the popup bufno from `popup-open`, or the
 ;; unit from `buf-text-set`) — that would recursively call `notify` on the
 ;; return value and clobber what we just rendered.
-(let _notify-popup-threshold 80)
-
 (fn notify (msg)
   (do
     (notify-record msg)
     (if (= (popup-mode) "popup")
         (buf-text-set (popup-bufno) msg)
         (popup-open
-          (block (buffer-view) {"face": {"bg": (rgb   19   19   20)}})
+          (w-block (w-buffer-view) {"face": "popup.default"})
           {"modes":     ['popup]
            "placement": {"kind": "side" "side": "bottom"}
            "wrap-mode": 'word
            "text":      msg}))
     ()))
 
-;; `:messages` — open the popup with the full notification history. Same
-;; chrome as `notify`, but seeded with every recorded message instead of
-;; just the latest.
+;; `:messages` — open the popup with the full notification history.
+;; Seeded with every recorded message instead of just the latest.
 (fn messages ()
   (do
     (fn _row (i line) (str-join [(to-str i) line] ". "))
     (let rows (fmapi _row (message-history)))
     (popup-open
-      (block (buffer-view)
+      (w-block (w-buffer-view)
         {"border":      "plain"
          "title":       " messages — q/<esc>/<enter> to dismiss "
          "face":        "popup.default"
@@ -204,23 +688,30 @@
     ()))
 
 
+;; `:history` — every form you've evaluated from the minibuffer.
+;;
+;; TIP: pair this with `<c-p>`/`<c-n>` bindings (not installed by default)
+;; for a fully-fledged command recall flow.
 (fn history ()
   (do
     (fn _row (i line) (str-join [(to-str (+ 1 i)) line] ". "))
     (let rows (fmapi _row (command-history)))
     (popup-open
-      (block (buffer-view)
+      (w-block (w-buffer-view)
         {"border":      "rounded"
          "title":       " command history — q/<esc>/<enter> to dismiss "
          "face":        "popup.default"
-         "border-face": "popup.border"
          "title-face":  "popup.title"})
       {"text":      (str-join rows "\n")
-       "modes":     ['popup]
-       "placement": {"kind": "side" "side": "bottom" "size": (clamp (len rows) 5 50)}})
+       "modes":     ['popup 'popup-history]
+       "buffer-mode": 'normal
+       "placement": {"kind": "side" "side": "bottom" }})
     ()))
 
-;; ----- popup mode ------------------------------------------------------
+;; ============================================================================
+;; Popups — buffers with their own keymap and chrome
+;; ============================================================================
+;;
 ;; The default keymap a popup is interpreted under. While a popup is on top
 ;; of the stack `handle_key_event` resolves keys against the popup's
 ;; `keymap_mode` instead of the focused buffer's editing mode — so this
@@ -250,6 +741,28 @@
 (map 'popup "<esc>"      '(popup-close))
 (map 'popup "<enter>"    '(popup-close))
 
+(fn popup-help ()
+  (popup-open
+    {"text": (str-join
+              ["popup cheat-sheet"
+               "──────────────────────────"
+               "j / k         scroll one line"
+               "<c-d> / <c-u> half page"
+               "g / G         top / bottom"
+               "q / <esc>     dismiss"
+               ""
+               "tip: any popup defaulting to mode 'popup picks up these keys."]
+              "\n")
+     "placement":   {"kind": "side" "side": "bottom" "size": 12}
+     "border":      "rounded"
+     "title":       " help "
+     "face":        "popup.default"
+     "border-face": "popup.border"
+     "title-face":  "popup.title"}))
+
+(keymap-set 'normal "?" '(popup-help))
+
+
 ;; --- (popup-files)  centered file-explorer popup -----------------------
 ;; Reuses the buffer machinery (the popup buffer holds the directory
 ;; listing as plain text) and *layers* `popup.files` on top of `popup`
@@ -260,6 +773,11 @@
 ;; Snapshot of the directory we listed, indexed by line number. Updated on
 ;; each `(popup-files)` invocation so `<enter>` knows which path the cursor
 ;; is on without parsing the buffer text back.
+;;
+;; NOTE: this is a real-world `ref` — a mutable cell shared between the
+;; render function (which writes) and the `<enter>` handler (which reads).
+;; Without a ref, the entries list would be a local binding that vanished
+;; when `_popup-files-render` returned.
 (let _popup-files-entries (ref []))
 
 (fn _popup-files-render (dir)
@@ -281,7 +799,7 @@
                  (buf-path)
                  (workdir)))
     (popup-open
-      (block (buffer-view)
+      (w-block (w-buffer-view)
         {"border":      "rounded"
          "title":       (str-join [" files: " (to-str dir) " "] "")
          "face":        "popup.default"
@@ -293,7 +811,7 @@
        "placement":   'full
        "show-cursor": 1})))
 
-;; Bind the explorer to `<space>f`. Motion and dismiss keys are inherited
+;; Bind the explorer to `<c-e>`. Motion and dismiss keys are inherited
 ;; from the `popup` layer beneath `popup.files`, so only the explorer-
 ;; specific actions (open + parent-dir) need to be bound here.
 (keymap-set 'normal "<c-e>" '(popup-files))
@@ -311,7 +829,7 @@
          ()
      (if (fs-isdir target)
           (popup-open
-            (block (buffer-view)
+            (w-block (w-buffer-view)
               {"border":      "rounded"
                "title":       (str-join [" files: " target " "] "")
                "face":        "popup.default"
@@ -327,6 +845,8 @@
 ))
 
 
+;; `-` walks up to the parent directory — the same idea as `<enter>` but
+;; with the target derived from the parent of the first entry.
 (keymap-set 'popup.files "-"
    '(do (let entries (deref _popup-files-entries))
         (let target (fs-parent (fs-parent (first entries))))
@@ -335,7 +855,7 @@
           ()
         (if (fs-isdir target)
           (popup-open
-            (block (buffer-view)
+            (w-block (w-buffer-view)
               {"border":      "rounded"
                "title":       (str-join [" files: " target " "] "")
                "face":        "popup.default"
@@ -352,350 +872,17 @@
 
 (map 'popup.files "<c-e>" '(popup-close))
 
-
-
-;; ============================================================================
-;;  Velvety Twilight — bundled default theme
-;; ============================================================================
+;; =============================================================================
+;; That's the whole default config.
 ;;
-;;  Loaded after `default.lisp` (keybindings) and before the user's optional
-;;  `init.lisp`, so any line below is overridable from user config.
+;; Next steps:
 ;;
-;;  The frame layout is described as a single widget tree returned by the fn
-;;  passed to `(set-frame ...)`. The tree primitives are:
+;;   * Read `(show <name>)` from command mode to inspect any builtin.
+;;   * Drop your own customizations directly at the bottom of this file, or
+;;     split them into a sibling like `keys.rz` and `(open "keys")`.
+;;   * Break things on purpose — every binding has a `notify` hook, so
+;;     runtime errors land in the message popup instead of crashing the
+;;     editor. Use `:reload-config` to apply changes without restarting.
 ;;
-;;    (vstack [...]) / (hstack [...])      — stack children with constraints
-;;    (cells N child) / (min-cells N child) — child constraint inside a stack
-;;    (fill N child) / (frac N M child)
-;;    (line [span ...])                — single screen row
-;;    (text "..." 'face)               — shorthand for one span
-;;    (block child {...})              — bordered/titled box
-;;    (editor-tree {...})              — the editor window tree leaf
-;;    (minibuffer)                     — the minibuffer leaf
-;;
-;;  Faces, text properties, and overlays are unchanged from before.
-;; ============================================================================
-
-
-;; ---------------------------------------------------------------------------
-;; 1. Palette + faces
-;; ---------------------------------------------------------------------------
-
-(let pal-bg-deep   (rgb   19   19   20))
-(let pal-bg-line   (rgb   37   37   47))
-(let pal-bg-sel    (rgb   52   55   56))
-(let pal-bg-panel  (rgb   19   19   20))
-(let pal-fg-base   (rgb  205  205  205))
-(let pal-fg-dim    (rgb   96   96  119))
-(let pal-accent    (rgb  180  150  220))
-(let pal-warn      (rgb  235  192  133))
-(let pal-error     (rgb  202  107  127))
-(let pal-mode-i    (rgb  230  160   80))
-(let pal-mode-v    (rgb  210  110  200))
-(let pal-mode-c    (rgb  110  210  210))
-
-;; The renderer looks up `default`, `selection`, `cursor-line` directly —
-;; redefining these here drives the always-on built-in decorator passes.
-(face-define 'default              {'fg: pal-fg-base "bg": pal-bg-deep})
-(face-define "selection"           {"bg": pal-bg-sel})
-(face-define "cursor-line"         {"bg": pal-bg-line "fg": pal-fg-base})
-
-(face-define "twilight.muted"      {"fg": pal-fg-dim "italic": 1})
-(face-define "twilight.accent"     {"fg": pal-accent "bold": 1})
-(face-define "twilight.error"      {"fg": pal-error  "bold": 1 "underline": 1})
-(face-define "twilight.warn"       {"fg": pal-warn   "bold": 1})
-
-(face-define "twilight.mode.normal"       {"fg": 'green       "bold": 1})
-(face-define "twilight.mode.insert"       {"fg": pal-mode-i   "bold": 1})
-(face-define "twilight.mode.visual"       {"fg": pal-mode-v   "bold": 1})
-(face-define "twilight.mode.visual-line"  {"fg": pal-mode-v   "bold": 1 "italic": 1})
-(face-define "twilight.mode.visual-block" {"fg": pal-mode-v   "bold": 1 "underline": 1})
-(face-define "twilight.mode.command"      {"fg": pal-mode-c   "bold": 1})
-
-(face-define "twilight.gutter"          {"fg": pal-fg-dim})
-(face-define "twilight.gutter-current"  {"fg": pal-accent       "bold": 1})
-
-(face-define "twilight.signature"  {"fg": 215 "italic": 1})
-(face-define "twilight.reverse"    {"reverse": 1 "bold": 1})
-
-(face-define "twilight.everything"
-  {"fg": (rgb 255 240 200)
-   "bg": (rgb  60  20  60)
-   "bold":      1
-   "italic":    1
-   "underline": 1
-   "reverse":   0})
-
-
-;; Tree-sitter syntax faces. The precompute pass looks up
-;; `syntax.<capture>` for each highlight capture emitted by the bundled
-;; grammars. Dotted captures (`function.method`) fall back to the parent
-;; (`function`) when the more specific face is undefined, so only override
-;; what you want different — everything else still gets styled.
-(face-define "syntax.keyword"      {"fg": (rgb 200 150 230) "bold": 1})
-(face-define "syntax.string"       {"fg": (rgb 165 215 150)})
-(face-define "syntax.escape"       {"fg": (rgb 220 180 130) "bold": 1})
-(face-define "syntax.number"       {"fg": (rgb 220 180 130)})
-(face-define "syntax.comment"      {"fg": pal-fg-dim "italic": 1})
-(face-define "syntax.function"     {"fg": (rgb 130 200 230)})
-(face-define "syntax.constructor"  {"fg": (rgb 225 220 130) "bold": 1})
-(face-define "syntax.type"         {"fg": (rgb 225 220 130)})
-(face-define "syntax.constant"     {"fg": (rgb 235 165 130)})
-(face-define "syntax.variable"     {"fg": pal-fg-base})
-(face-define "syntax.property"     {"fg": (rgb 200 200 230)})
-(face-define "syntax.attribute"    {"fg": (rgb 200 180 130) "italic": 1})
-(face-define "syntax.label"        {"fg": (rgb 235 165 130) "italic": 1})
-(face-define "syntax.operator"     {"fg": pal-fg-dim})
-(face-define "syntax.punctuation"  {"fg": pal-fg-dim})
-
-
-;; ---------------------------------------------------------------------------
-;; 2. Helpers shared by the layout fn
-;; ---------------------------------------------------------------------------
-
-(fn _mode-face (m)
-  (if (= m "normal")       "twilight.mode.normal"
-  (if (= m "insert")       "twilight.mode.insert"
-  (if (= m "visual")       "twilight.mode.visual"
-  (if (= m "visual-line")  "twilight.mode.visual-line"
-  (if (= m "visual-block") "twilight.mode.visual-block"
-  (if (= m "command")      "twilight.mode.command"
-                           "twilight.muted")))))))
-
-(fn _mode-glyph (m)
-  (if (= m "normal")       "N"
-  (if (= m "insert")       "I"
-  (if (= m "visual")       "V"
-  (if (= m "visual-line")  "L"
-  (if (= m "visual-block") "B"
-  (if (= m "command")      "C"
-                           "?")))))))
-
-(fn _pad-right (s w)
-  (do
-    (let pad (- w (len s)))
-    (if (> pad 0)
-        (str-join [s (str-join (fmap (fn _spc (_) " ") (range 0 pad)) "")] "")
-        s)))
-
-
-;; ---------------------------------------------------------------------------
-;; 3. Gutter
-;; ---------------------------------------------------------------------------
-;;
-;; The gutter fn is called per visible row with `lnum` set to the file row,
-;; or `()` for rows past EOF. Returns the styled content for one row of the
-;; gutter. The total column width is reserved by `gutter-width` on the
-;; editor-tree widget.
-
-(fn _gutter (n)
-  (if (= n ())
-      (text "     " "twilight.gutter")
-      (if (= n (cursor-line))
-          (text (_pad-right (str-join ["▎ " (to-str n)] "") 5)
-                "twilight.gutter-current")
-          (text (_pad-right (str-join ["│ " (to-str n)] "") 5)
-                "twilight.gutter"))))
-
-
-;; ---------------------------------------------------------------------------
-;; 4. Status-line segments
-;; ---------------------------------------------------------------------------
-;;
-;; Each segment is a fn returning a span. They get spliced into the status
-;; line by `_status-line` below.
-
-(fn _seg-mode ()
-  (do
-    (let m (focused-mode))
-    (text (str-join [" " (_mode-glyph m) " "] "")
-          (_mode-face m))))
-
-(fn _seg-buf-path ()
-  (do
-    (let path (buf-path))
-    (if (= path ())
-        (text "  rizz  " "twilight.signature")
-        (text path "twilight.signature"))))
-
-(fn _seg-selection-hint ()
-  (do
-    (let sel (selected-text))
-    (if (= sel ())
-        (text "" "twilight.muted")
-        (text (str-join [" " (to-str (len sel)) " chars selected "] "")
-              "twilight.accent"))))
-
-(fn _seg-cursor ()
-  (text (str-join [(to-str (cursor-line)) ":" (to-str (cursor-col))] "")
-        "twilight.accent"))
-
-(fn _seg-bufno ()
-  (do
-    (let m (focused-mode))
-    (if (= m "command")
-        (text (to-str (buf-no)) "twilight.reverse")
-        (text (to-str (buf-no)) "twilight.warn"))))
-
-
-;; ---------------------------------------------------------------------------
-;; 5. Bottom hint bar
-;; ---------------------------------------------------------------------------
-
-(fn _hint-bar ()
-  (do
-    (let m (focused-mode))
-    (if (= m "normal")
-        (line [(text "  press : for commands · i to insert · v to select  "
-                     "twilight.muted")])
-    (if (= m "insert")
-        (line [(text "  press <esc> to leave insert mode  " "twilight.muted")])
-    (if (= m "command")
-        (line [(text "  command mode — type a form and press <enter>  "
-                     "twilight.muted")])
-        (line [(text "  visual: y to yank · d to delete · <esc> to cancel  "
-                     "twilight.muted")]))))))
-
-
-;; ---------------------------------------------------------------------------
-;; 6. Frame layout
-;; ---------------------------------------------------------------------------
-;;
-;; Vertical stack, top-to-bottom:
-;;
-;;    editor windows  (min-cells 1)   ← grows to fill
-;;    status line     (cells 1)
-;;    bottom hint     (cells 1)
-;;    minibuffer      (cells 1)
-;;
-;; The status line is an hstack with a `fill` spacer between the left and
-;; right groups so right-aligned segments hug the right margin.
-
-(fn _status-line ()
-  (hstack
-    [(min-cells 1
-      (line [(_seg-mode)
-             (_seg-buf-path)
-             (_seg-selection-hint)]))
-     (fill 1
-      (right-align
-        (line [(_seg-cursor)
-               (text " • " "twilight.muted")
-               (text (last-key) "twilight.muted")
-               (text "  " "twilight.muted")
-               (_seg-bufno)])))]))
-
-(fn _frame ()
-  (vstack
-    [(min-cells 1
-      (editor-tree
-        {"gutter":       _gutter
-         "gutter-width": 5}))
-     (cells 1 (_status-line))
-     (cells 1 (_hint-bar))
-     (cells 1 (minibuffer))]))
-
-(set-frame _frame)
-
-
-;; ---------------------------------------------------------------------------
-;; 7. Overlays + virtual text
-;; ---------------------------------------------------------------------------
-
-(face-define "demo.lint.error"   {"fg": pal-error  "underline": 1})
-(face-define "demo.lint.warn"    {"fg": pal-warn   "italic": 1})
-(face-define "demo.ghost"        {"fg": pal-fg-dim "italic": 1})
-(face-define "demo.fold"         {"fg": pal-accent "bg": pal-bg-line "bold": 1})
-(face-define "demo.highlight"    {"bg": (rgb 50 30 70)})
-(face-define "demo.match"        {"fg": pal-bg-deep "bg": pal-warn "bold": 1})
-
-(let _demo-text
-  (str-join
-    ["fn greet(name: String) -> String {"
-     "    let greeting = format!(\"hello, {}\", name);"
-     "    println!(\"{}\", greeting);"
-     "    return greeting;"
-     "}"
-     ""
-     "// TODO: support multiple languages"
-     "fn main() {"
-     "    let names = vec![\"world\", \"twilight\", \"rizz\"];"
-     "    for n in names {"
-     "        greet(n.to_string());"
-     "    }"
-     "}"]
-    "\n"))
-
-(fn _ov (sr sc er ec face props)
-  (do
-    (let id (overlay-create sr sc er ec face))
-    (if (!= (get props "display") ())
-        (overlay-put id "display" (get props "display"))
-        ())
-    (if (!= (get props "priority") ())
-        (overlay-put id "priority" (get props "priority"))
-        ())
-    (if (!= (get props "pad-to-width") ())
-        (overlay-put id "pad-to-width" (get props "pad-to-width"))
-        ())
-    id))
-
-(fn overlays-demo ()
-  (do
-    (buf-text-set (buf-no) _demo-text)
-    (clear-text-properties)
-    (put-text-property 1 19 1 26 "demo.lint.error")
-    (put-text-property 6 3 6 7 "demo.lint.warn")
-    (_ov 6 0 6 0 "demo.highlight"   {"pad-to-width": 1})
-    (_ov 0 35 0 46 "demo.ghost"      {"display": " &str "})
-    (_ov 2 4 2 28 "demo.fold"        {"display": "  ⋯ println …  "})
-    (_ov 8 16 8 47 "twilight.muted"  {"priority": 1})
-    (_ov 8 30 8 40 "twilight.accent" {"priority": 10})
-    (_ov 0 3  0 8  "demo.match" {})
-    (_ov 3 11 3 16 "demo.match" {})
-    (_ov 10 8 10 13 "demo.match" {})
-    (_ov 1 27 1 38 "twilight.reverse" {"display": {"space": 7}})
-    (notify "overlays-demo: applied. try :(overlays-clear)")))
-
-(keymap-set 'normal "<space>od" '(overlays-demo))
-
-(fn overlays-clear ()
-  (do
-    (clear-text-properties)
-    (buf-text-set (buf-no) "")
-    (notify "overlays-clear: text-properties cleared, buffer reset")))
-
-
-;; ---------------------------------------------------------------------------
-;; 8. Popups
-;; ---------------------------------------------------------------------------
-;;
-;; Popup faces, reused by `notify` / `messages` / `popup-help` / `popup-files`
-;; in `default.lisp`.
-
-(face-define "popup.default"     {"fg": pal-fg-base "bg": pal-bg-panel})
-(face-define "popup.border"      {"fg": pal-accent  "bg": pal-bg-panel})
-(face-define "popup.title"       {"fg": pal-warn    "bg": pal-bg-panel "bold": 1})
-(face-define "popup.dir"         {"fg": pal-accent  "bold": 1})
-(face-define "popup.file"        {"fg": pal-fg-base})
-
-(fn popup-help ()
-  (popup-open
-    {"text": (str-join
-              ["popup cheat-sheet"
-               "──────────────────────────"
-               "j / k         scroll one line"
-               "<c-d> / <c-u> half page"
-               "g / G         top / bottom"
-               "q / <esc>     dismiss"
-               ""
-               "tip: any popup defaulting to mode 'popup picks up these keys."]
-              "\n")
-     "placement":   {"kind": "side" "side": "bottom" "size": 12}
-     "border":      "rounded"
-     "title":       " help "
-     "face":        "popup.default"
-     "border-face": "popup.border"
-     "title-face":  "popup.title"}))
-
-(keymap-set 'normal "?" '(popup-help))
+;; Have fun.
+;; =============================================================================

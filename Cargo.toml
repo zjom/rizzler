@@ -11,7 +11,7 @@ description = "the rizz editor — terminal modal editor with embedded lisp."
 members = ["crates/*"]
 
 [workspace.dependencies]
-rizz = "0.4"
+rizz = "0.5.1"
 
 [dependencies]
 crossterm = "0.29.0"

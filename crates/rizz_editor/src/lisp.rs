@@ -637,8 +637,10 @@ fn builtins() -> Env {
         let b = as_u8(&args[2], "rgb")?;
         Ok(rgb_value(r, g, b))
     });
-    be!("span", 2, |args, _| {
-        let text = as_str(&args[0], "span")?;
+
+    // ---- widget tree builtins ---------------------------------------------
+    be!("w-span", 2, |args, _| {
+        let text = as_str(&args[0], "w-span")?;
         let style_val = with_editor_mut(|st| {
             let theme = st.theme().borrow();
             normalize_style_value(&args[1], &theme)
@@ -654,8 +656,6 @@ fn builtins() -> Env {
         Ok(Rc::new(Value::Map(m)))
     });
 
-    // ---- widget tree builtins ---------------------------------------------
-
     be!("set-frame", 1, |args, _| {
         let v = args[0].clone();
         let opt = if v.is_unit() { None } else { Some(v) };
@@ -663,8 +663,8 @@ fn builtins() -> Env {
         Ok(unit())
     });
 
-    be!("text", 2, |args, _| {
-        let text = as_str(&args[0], "text")?;
+    be!("w-text", 2, |args, _| {
+        let text = as_str(&args[0], "w-text")?;
         let style_val = with_editor_mut(|st| {
             let theme = st.theme().borrow();
             normalize_style_value(&args[1], &theme)
@@ -677,51 +677,51 @@ fn builtins() -> Env {
         Ok(Rc::new(Value::Map(span)))
     });
 
-    be!("line", 1, |args, _| {
+    be!("w-line", 1, |args, _| {
         let spans: Vec<Rc<Value>> = value_iter(&args[0]).collect();
         Ok(widget_line(spans))
     });
 
-    be!("right-align", 1, |args, _| {
+    be!("w-right-align", 1, |args, _| {
         Ok(widget_set_align(args[0].clone(), "right"))
     });
-    be!("center-align", 1, |args, _| {
+    be!("w-center-align", 1, |args, _| {
         Ok(widget_set_align(args[0].clone(), "center"))
     });
 
-    be!("vstack", 1, |args, _| {
+    be!("w-vstack", 1, |args, _| {
         Ok(widget_stack("vertical", &args[0]))
     });
-    be!("hstack", 1, |args, _| {
+    be!("w-hstack", 1, |args, _| {
         Ok(widget_stack("horizontal", &args[0]))
     });
 
-    be!("cells", 2, |args, _| {
-        let n = as_int(&args[0], "cells")?.max(0).min(u16::MAX as i64);
+    be!("w-cells", 2, |args, _| {
+        let n = as_int(&args[0], "w-cells")?.max(0).min(u16::MAX as i64);
         Ok(widget_constrained("cells", n, 1, args[1].clone()))
     });
-    be!("min-cells", 2, |args, _| {
-        let n = as_int(&args[0], "min-cells")?.max(0).min(u16::MAX as i64);
+    be!("w-min-cells", 2, |args, _| {
+        let n = as_int(&args[0], "w-min-cells")?.max(0).min(u16::MAX as i64);
         Ok(widget_constrained("min", n, 1, args[1].clone()))
     });
-    be!("fill", 2, |args, _| {
-        let n = as_int(&args[0], "fill")?.max(0).min(u16::MAX as i64);
+    be!("w-fill", 2, |args, _| {
+        let n = as_int(&args[0], "w-fill")?.max(0).min(u16::MAX as i64);
         Ok(widget_constrained("fill", n, 1, args[1].clone()))
     });
-    be!("frac", 3, |args, _| {
-        let n = as_int(&args[0], "frac")?.max(0).min(u16::MAX as i64);
-        let m = as_int(&args[1], "frac")?.max(1).min(u16::MAX as i64);
+    be!("w-frac", 3, |args, _| {
+        let n = as_int(&args[0], "w-frac")?.max(0).min(u16::MAX as i64);
+        let m = as_int(&args[1], "w-frac")?.max(1).min(u16::MAX as i64);
         Ok(widget_constrained("frac", n, m, args[2].clone()))
     });
 
-    be!("block", 2, |args, _| {
+    be!("w-block", 2, |args, _| {
         let child = args[0].clone();
         let props = match &*args[1] {
             Value::Map(m) => m.clone(),
             Value::Unit => ImHashMap::new(),
             _ => {
                 return Err(RuntimeError::type_mismatch(
-                    "block.props",
+                    "w-block.props",
                     "map | ()",
                     &args[1],
                 ));
@@ -738,13 +738,13 @@ fn builtins() -> Env {
         Ok(Rc::new(Value::Map(m)))
     });
 
-    be!("editor-tree", 1, |args, _| {
+    be!("w-editor-tree", 1, |args, _| {
         let props = match &*args[0] {
             Value::Map(m) => m.clone(),
             Value::Unit => ImHashMap::new(),
             _ => {
                 return Err(RuntimeError::type_mismatch(
-                    "editor-tree.props",
+                    "w-editor-tree.props",
                     "map | ()",
                     &args[0],
                 ));
@@ -761,23 +761,23 @@ fn builtins() -> Env {
         Ok(Rc::new(Value::Map(m)))
     });
 
-    be!("minibuffer", 0, |_, _| {
+    be!("w-minibuffer", 0, |_, _| {
         let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
         m.insert(strkey("type"), Rc::new(Value::Str("minibuffer".into())));
         Ok(Rc::new(Value::Map(m)))
     });
 
-    be!("empty", 0, |_, _| {
+    be!("w-empty", 0, |_, _| {
         let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
         m.insert(strkey("type"), Rc::new(Value::Str("empty".into())));
         Ok(Rc::new(Value::Map(m)))
     });
 
-    be!("buffer-view", 0, |args, _| {
+    be!("w-buffer-view", 0, |args, _| {
         let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
         m.insert(strkey("type"), Rc::new(Value::Str("buffer-view".into())));
         if let Some(arg) = args.first() {
-            let bufno = as_int(arg, "buffer-view.bufno")?.max(0);
+            let bufno = as_int(arg, "w-buffer-view.bufno")?.max(0);
             m.insert(strkey("bufno"), Rc::new(Value::Int(bufno)));
         }
         Ok(Rc::new(Value::Map(m)))
@@ -1509,7 +1509,7 @@ mod tests {
     #[test]
     fn span_builtin_emits_text_and_style_fields() {
         let mut s = test_state();
-        let v = s.eval_lisp(r#"(span "hi" 'header)"#).unwrap();
+        let v = s.eval_lisp(r#"(w-span "hi" 'header)"#).unwrap();
         match &*v {
             Value::Map(m) => {
                 let text = m
@@ -1524,7 +1524,7 @@ mod tests {
     #[test]
     fn set_frame_installs_user_layout() {
         let mut s = test_state();
-        s.eval_lisp(r#"(fn _star () (text "★" ()))"#).unwrap();
+        s.eval_lisp(r#"(fn _star () (w-text "★" ()))"#).unwrap();
         s.eval_lisp(r#"(set-frame _star)"#).unwrap();
         let (_, err) = s.precompute_frame();
         assert!(err.is_none(), "no frame errors: {err:?}");

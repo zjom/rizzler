@@ -354,11 +354,6 @@
 
 
 
-;; TODO: Change this to config dir
-(grammar-register-wasm "rizz"
-    "/Users/zihanjin/code/tree-sitter-rizz/tree-sitter-rizz.wasm"
-    "/Users/zihanjin/code/tree-sitter-rizz/queries/highlights.scm"
-    [".rz"])
 ;; ============================================================================
 ;;  Velvety Twilight — bundled default theme
 ;; ============================================================================

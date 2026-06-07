@@ -138,10 +138,10 @@ fn resolve_workdir(path: Option<&Path>, cwd: &Path) -> PathBuf {
 }
 
 /// Returns `(source, basedir)` for the init script, or `None` if there is
-/// no script to run. In tests the embedded `init.rz` is used and the
-/// basedir is the cwd; in prod the user-config init script is used,
-/// creating it from the embedded copy on first run.
-#[cfg(test)]
+/// no script to run. In tests and debug builds the embedded `init.rz` is
+/// used and the basedir is the cwd; in release builds the user-config init
+/// script is used, creating it from the embedded copy on first run.
+#[cfg(any(test, debug_assertions))]
 fn load_init_script() -> anyhow::Result<Option<(String, PathBuf)>> {
     let basedir = std::env::current_dir()?;
     Ok(Some((
@@ -150,7 +150,7 @@ fn load_init_script() -> anyhow::Result<Option<(String, PathBuf)>> {
     )))
 }
 
-#[cfg(not(test))]
+#[cfg(all(not(test), not(debug_assertions)))]
 fn load_init_script() -> anyhow::Result<Option<(String, PathBuf)>> {
     use std::fs;
     let Some(path) = crate::lisp::init_script_path() else {

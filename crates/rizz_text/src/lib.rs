@@ -3,7 +3,7 @@
 //! `Buffer` is the central type: a rope-backed text container that owns its
 //! own cursor, viewport, mode, change-tree, and attached metadata (text
 //! properties + overlays, soft-wrap settings + cache). All editing operations
-//! ([`crate::buffer::edits`]) and cursor motions ([`crate::buffer::cursor`])
+//! (`buffer::edits`) and cursor motions (`buffer::cursor`)
 //! go through it. Buffers don't know about rendering, key events, or lisp —
 //! they're a pure text + cursor abstraction.
 //!

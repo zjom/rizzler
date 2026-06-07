@@ -7,7 +7,7 @@
 //!   (`3j`, `12gg`).
 //!
 //! Higher-level binding tables (the keymap trie / registry that maps key
-//! sequences to actions) live in [`rizz_actions`] so they can reference the
+//! sequences to actions) live in `rizz_actions` so they can reference the
 //! `Action` enum directly.
 
 pub mod count_prefix;

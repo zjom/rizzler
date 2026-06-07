@@ -8,9 +8,9 @@
 //!
 //! The implementation is split across submodules by concern so each file
 //! stays navigable:
-//! - [`cursor`] — cursor movement, scrolling, clamping
-//! - [`edits`] — insert/delete + undo/redo
-//! - [`marks`] — selection anchor + keymap mode layers
+//! - `cursor` — cursor movement, scrolling, clamping
+//! - `edits` — insert/delete + undo/redo
+//! - `marks` — selection anchor + keymap mode layers
 //!
 //! The fields stay `pub(crate)` because submodules + `crate::io` touch them
 //! directly; everything else goes through the accessor methods on `Buffer`.

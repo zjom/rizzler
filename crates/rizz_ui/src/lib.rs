@@ -3,7 +3,7 @@
 //! - **Renderer-agnostic primitives** — [`styling`] (Style/Color/Theme),
 //!   [`widget`] (declarative widget tree built from lisp), [`popup`]
 //!   (overlay placement + stack), [`window`] (window tree), [`render`]
-//!   (Renderer trait + RenderedFrame data), [`scroll_math`] (re-export from
+//!   (Renderer trait + RenderedFrame data), [`scroll`] (re-export from
 //!   rizz_text), [`precompute`] (frame assembly: gutter rows, decorator
 //!   ranges, soft-wrap maps).
 //! - **Concrete ratatui renderer + components** — [`render_ratatui`] walks
@@ -21,6 +21,7 @@ pub mod styling;
 pub mod terminal;
 pub mod widget;
 pub mod window;
+pub use rizz_text::scroll;
 
 pub use render::{
     CursorStyle, DecoratorRanges, RenderedBuffer, RenderedFrame, RenderedGutter, Renderer,

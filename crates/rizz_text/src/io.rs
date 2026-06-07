@@ -19,7 +19,7 @@ pub fn from_reader(r: impl io::Read) -> io::Result<Buffer> {
 
 /// Construct a buffer associated with `path`. Attempts to read from disk; on
 /// any read failure produces an empty buffer with `fs_path` still set so a
-/// subsequent [`write`] will create the file.
+/// subsequent [`write()`] will create the file.
 pub fn with_path(path: Rc<Path>) -> Buffer {
     let mut buf = std::fs::File::open(&path)
         .and_then(from_reader)

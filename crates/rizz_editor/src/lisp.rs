@@ -4,7 +4,7 @@
 //! primitive exposed as a native function — and is threaded through one entry
 //! point on `State` (`State::eval_lisp` / `eval_lisp_value`). Editor primitives
 //! access mutable `State` via an RAII-guarded thread-local pointer (see
-//! [`with_editor_mut`]): the runtime is moved out of `State` for the duration
+//! `with_editor_mut`): the runtime is moved out of `State` for the duration
 //! of an eval, so there is never simultaneous aliasing of `&mut State`.
 
 use std::cell::Cell;

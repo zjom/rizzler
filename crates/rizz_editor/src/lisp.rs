@@ -219,8 +219,7 @@ fn builtins() -> Env {
     });
     b!("delete-motion", 1, |args, env| {
         let sym = as_ident(&args[0], "delete-motion")?;
-        let kind =
-            MoveKind::from_str(&sym).map_err(|_| unknown_variant("delete-motion", &sym))?;
+        let kind = MoveKind::from_str(&sym).map_err(|_| unknown_variant("delete-motion", &sym))?;
         let count = with_editor_mut(|st| st.pending_count_or_one());
         apply(Action::DeleteMotion { kind, count })?;
         ok_unit(env)
@@ -1478,7 +1477,7 @@ mod tests {
     #[test]
     fn default_style_lisp_loads_clean() {
         let mut s = test_state();
-        let src = include_str!("../../../default-style.lisp");
+        let src = include_str!("../../../default-style.rz");
         s.eval_lisp_script(src)
             .map_err(|e| format!("default-style.lisp eval failed: {e}"))
             .unwrap();

@@ -153,13 +153,13 @@ impl State {
 
         // Bundled defaults: keybindings, then visual configuration, then
         // (optional) user `init.lisp`.
-        if let Err(e) = state.eval_lisp_script(include_str!("../../../default.lisp")) {
+        if let Err(e) = state.eval_lisp_script(include_str!("../../../default.rz")) {
             #[cfg(test)]
             panic!("default.lisp eval failed: {e}");
             #[cfg(not(test))]
             eprintln!("default.lisp eval failed: {e}");
         }
-        if let Err(e) = state.eval_lisp_script(include_str!("../../../default-style.lisp")) {
+        if let Err(e) = state.eval_lisp_script(include_str!("../../../default-style.rz")) {
             #[cfg(test)]
             panic!("default-style.lisp eval failed: {e}");
             #[cfg(not(test))]

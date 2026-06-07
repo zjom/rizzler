@@ -401,7 +401,8 @@ impl State {
             .popups
             .iter()
             .map(|p| {
-                let outer = p.placement.resolve(editor_area);
+                let buf = &self.bufs[p.bufno];
+                let outer = rizz_ui::popup::resolve_popup_rect(p, editor_area, buf);
                 let inner = rizz_ui::popup::buffer_view_rect(&p.widget, outer, p.bufno);
                 (p.bufno, Position::new(inner.width, inner.height))
             })
@@ -720,7 +721,7 @@ mod tests {
     #[test]
     fn notify_records_history_and_shows_popup() {
         let mut s = test_state();
-        s.eval_lisp(r#"(notify "hello" {"force": 1})"#).unwrap();
+        s.eval_lisp(r#"(notify "hello")"#).unwrap();
         assert_eq!(
             s.message_history().cloned().collect::<Vec<_>>(),
             vec!["hello".into()]
@@ -733,7 +734,7 @@ mod tests {
     fn q_dismisses_popup() {
         use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
         let mut s = test_state();
-        s.eval_lisp(r#"(notify "oops" {"force": 1})"#).unwrap();
+        s.eval_lisp(r#"(notify "oops")"#).unwrap();
         assert!(s.has_popup());
         s.handle_key_event(CT::new(KeyCode::Char('q'), KeyModifiers::NONE))
             .unwrap();

@@ -285,7 +285,11 @@ fn draw_popup(
     f: &mut Frame,
     cur: &mut CursorPlacement,
 ) {
-    let outer = popup.placement.resolve(area);
+    let buf = match snap.bufs.get(popup.bufno) {
+        Some(b) => b,
+        None => return,
+    };
+    let outer = crate::popup::resolve_popup_rect(popup, area, buf);
     if outer.width == 0 || outer.height == 0 {
         return;
     }

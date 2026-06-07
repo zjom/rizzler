@@ -165,47 +165,24 @@
 ;;   * `popup-mode` reports the keymap mode of the topmost popup so we can
 ;;     refill an existing notify popup instead of stacking a new one.
 
-;; Short messages render as virtual text in the minibuffer strip; anything
-;; over `_notify-popup-threshold` chars opens the centered popup instead.
-;; The minibuffer auto-clears when the user enters command mode (`:`), so
-;; virtual text is wiped automatically the moment they start typing.
-;;
 ;; Both branches end with `()` (unit) so `command-submit` / `evaluate` don't
 ;; surface their return value (the popup bufno from `popup-open`, or the
 ;; unit from `buf-text-set`) — that would recursively call `notify` on the
 ;; return value and clobber what we just rendered.
 (let _notify-popup-threshold 80)
 
-(fn notify (msg . args)
+(fn notify (msg)
   (do
     (notify-record msg)
-    (let args (car args))
-    (let! force ())
-    (let! title " message — q/<esc>/<enter> to dismiss ")
-    (if (= 'map (typeof args))
-      (do (set! force (get args "force"))
-
-          (if (get args "title")
-              (set! title (get args "title"))
-              ())
-        )
-      ())
-    (if (or (deref force) (> (len msg) _notify-popup-threshold))
-            (if (= (popup-mode) "popup")
-                (buf-text-set (popup-bufno) msg)
-                (popup-open
-                  (block (buffer-view)
-                    {"border":      "plain"
-                     "title":       (deref title)
-                     "face":        "popup.default"
-                     "border-face": "popup.border"
-                     "title-face":  "popup.title"})
-                  {"text":      msg
-                   "modes":     ['popup]
-                   "placement": {"kind": "center" "w": 0.6 "h": 0.6}
-                   "wrap-mode": 'word}))
-        (buf-text-set (minibuffer-bufno) msg))
-      ()))
+    (if (= (popup-mode) "popup")
+        (buf-text-set (popup-bufno) msg)
+        (popup-open
+          (block (buffer-view) {"face": {"bg": (rgb   19   19   20)}})
+          {"modes":     ['popup]
+           "placement": {"kind": "side" "side": "bottom"}
+           "wrap-mode": 'word
+           "text":      msg}))
+    ()))
 
 ;; `:messages` — open the popup with the full notification history. Same
 ;; chrome as `notify`, but seeded with every recorded message instead of

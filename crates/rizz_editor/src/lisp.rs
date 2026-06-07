@@ -1305,11 +1305,13 @@ fn parse_placement(v: &Rc<Value>) -> Result<Placement, RuntimeError> {
                         "right" => Side::Right,
                         other => return Err(unknown_variant("placement.side", other)),
                     };
+                    // Default to Fit: the popup sizes itself to the minimum
+                    // rows/cols needed to contain the buffer's wrapped text.
                     let size = m
                         .get(&key("size"))
                         .map(parse_dim)
                         .transpose()?
-                        .unwrap_or(Dim::Cells(10));
+                        .unwrap_or(Dim::Fit);
                     Ok(Placement::Anchored { side, size })
                 }
                 "full" => Ok(Placement::Full),
@@ -1324,7 +1326,8 @@ fn parse_dim(v: &Rc<Value>) -> Result<Dim, RuntimeError> {
     match &**v {
         Value::Int(n) => Ok(Dim::Cells((*n).max(0) as u16)),
         Value::Float(f) => Ok(Dim::Frac(f.into_inner() as f32)),
-        _ => Err(RuntimeError::type_mismatch("dim", "int|float", v)),
+        Value::Ident(s) | Value::Str(s) if s.as_ref() == "fit" => Ok(Dim::Fit),
+        _ => Err(RuntimeError::type_mismatch("dim", "int|float|'fit", v)),
     }
 }
 

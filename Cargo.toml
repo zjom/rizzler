@@ -11,9 +11,11 @@ description = "the rizz editor — terminal modal editor with embedded lisp."
 members = ["crates/*"]
 
 [workspace.dependencies]
+anyhow = "1.0.102"
 rizz = "0.5.1"
 
 [dependencies]
+anyhow = { workspace = true }
 crossterm = "0.29.0"
 rizz_editor = { path = "crates/rizz_editor" }
 rizz_ui = { path = "crates/rizz_ui" }

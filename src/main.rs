@@ -1,11 +1,11 @@
-use std::{io, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
 use crossterm::event::{self, Event};
 
 use rizz_editor::{Config, State};
 use rizz_ui::{TerminalGuard, install_panic_hook};
 
-fn main() -> io::Result<()> {
+fn main() -> anyhow::Result<()> {
     install_panic_hook();
     let _guard = TerminalGuard::new()?;
     let path = std::env::args_os().nth(1).map(PathBuf::from);

@@ -5,7 +5,6 @@
 //! sends it through here. The single-funnel invariant is what makes undo,
 //! scripting, and tests tractable.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
@@ -29,7 +28,7 @@ use rizz_ui::{
 
 use crate::buffer_list::{BufferList, CycleDir};
 use crate::journal::Journal;
-use crate::lisp::{EditorGuard, LispRuntime, RenderPhaseGuard, init_script_path};
+use crate::lisp::{EditorGuard, LispRuntime, RenderPhaseGuard};
 
 pub use rizz_core::{FocusDir, SplitDir};
 
@@ -121,7 +120,7 @@ pub struct State {
 }
 
 impl State {
-    pub fn with_config(config: Config) -> io::Result<Self> {
+    pub fn with_config(config: Config) -> anyhow::Result<Self> {
         let workdir = std::env::current_dir()?;
         let mut state = Self {
             bufs: BufferList::new(),
@@ -145,34 +144,40 @@ impl State {
             state.bufs[1] = buffer_io::with_path(path.clone());
             if path.is_dir() {
                 state.workdir = path.clone();
-                state.lisp.as_mut().unwrap().set_basedir(path.as_ref());
             } else if let Some(parent) = path.parent() {
                 state.workdir = Rc::<Path>::from(parent);
-                state.lisp.as_mut().unwrap().set_basedir(path.as_ref());
             }
         }
         state.refresh_viewport();
 
-        // Bundled defaults: keybindings, then visual configuration, then
-        // (optional) user `init.lisp`.
-        if let Err(e) = state.eval_lisp_script(include_str!("../../../default.rz")) {
-            #[cfg(test)]
-            panic!("default.lisp eval failed: {e}");
-            #[cfg(not(test))]
-            eprintln!("default.lisp eval failed: {e}");
+        #[cfg(test)]
+        if let Err(e) = state.eval_lisp_script(include_str!("../../../init.rz")) {
+            panic!("init.rz eval failed: {e}");
         }
-        if let Err(e) = state.eval_lisp_script(include_str!("../../../default-style.rz")) {
-            #[cfg(test)]
-            panic!("default-style.lisp eval failed: {e}");
-            #[cfg(not(test))]
-            eprintln!("default-style.lisp eval failed: {e}");
-        }
-        if let Some(path) = init_script_path()
-            && let Ok(src) = fs::read_to_string(&path)
-            && let Err(e) = state.eval_lisp_script(&src)
+
+        #[cfg(not(test))]
         {
-            eprintln!("init.lisp ({}) eval failed: {e}", path.display());
+            use crate::lisp::init_script_path;
+            use std::fs;
+            if let Some(path) = init_script_path() {
+                if !path.exists() {
+                    fs::create_dir_all(path.parent().unwrap())?;
+                    fs::write(&path, include_str!("../../../init.rz"))?;
+                }
+                state.lisp.as_mut().unwrap().set_basedir(&path);
+                if let Ok(src) = fs::read_to_string(&path) {
+                    state
+                        .eval_lisp_script(&src)
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                }
+            }
         }
+
+        state
+            .lisp
+            .as_mut()
+            .unwrap()
+            .set_basedir(state.workdir.as_ref());
 
         Ok(state)
     }

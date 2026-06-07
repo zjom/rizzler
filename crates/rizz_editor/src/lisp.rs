@@ -140,12 +140,12 @@ impl Default for LispRuntime {
     }
 }
 
-/// Resolve `~/.config/editor/init.lisp` (or `$XDG_CONFIG_HOME/editor/init.lisp`).
+/// Resolve `~/.config/rizz/init.rz` (or `$XDG_CONFIG_HOME/editor/init.rz`).
 pub fn init_script_path() -> Option<PathBuf> {
     let dir = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(dir.join("editor").join("init.lisp"))
+    Some(dir.join("rizz").join("init.rz"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1475,9 +1475,9 @@ mod tests {
     #[test]
     fn default_style_lisp_loads_clean() {
         let mut s = test_state();
-        let src = include_str!("../../../default-style.rz");
+        let src = include_str!("../../../init.rz");
         s.eval_lisp_script(src)
-            .map_err(|e| format!("default-style.lisp eval failed: {e}"))
+            .map_err(|e| format!("init.rz eval failed: {e}"))
             .unwrap();
     }
 

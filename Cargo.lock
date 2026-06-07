@@ -586,6 +586,7 @@ dependencies = [
 name = "rizzler"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "crossterm 0.29.0",
  "rizz_editor",
  "rizz_ui",

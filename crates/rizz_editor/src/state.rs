@@ -450,6 +450,10 @@ impl State {
                     let f = self.focused_bufno();
                     self.bufs[f].delete_char_at(*pos);
                 }
+                Action::DeleteSelection => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].delete_selection();
+                }
                 Action::Undo => {
                     let f = self.focused_bufno();
                     self.bufs[f].undo();

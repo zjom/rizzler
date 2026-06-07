@@ -3,7 +3,7 @@
 //! the rope contents and the cursor position.
 
 use rizz_changetree::Delta;
-use rizz_core::Position;
+use rizz_core::{EditingMode, Position};
 use ropey::Rope;
 
 use super::Buffer;
@@ -76,6 +76,139 @@ impl Buffer {
             cursor_before: (abs_before.row, abs_before.col),
             cursor_after: (abs_after.row, abs_after.col),
         });
+    }
+
+    /// Remove the char range `[start..end)` from the rope and track the
+    /// edit as a single undo delta. Cursor lands at the start of the
+    /// range (clamped by the current mode). Returns `true` if anything
+    /// was removed. Pure deletion — no mode handling.
+    pub fn delete_range(&mut self, start: usize, end: usize) -> bool {
+        let len = self.buf.len_chars();
+        let s = start.min(len);
+        let e = end.min(len);
+        if s >= e {
+            return false;
+        }
+
+        let start_line = self.buf.char_to_line(s);
+        let end_line = self.buf.char_to_line(e - 1);
+        let before_n_lines = end_line - start_line + 1;
+        let before = snapshot_lines(&self.buf, start_line, before_n_lines);
+        let abs_before = self.abs_pos();
+
+        // Did the range cover whole lines exactly? If so we removed N
+        // lines outright; otherwise the partial lines collapse into one.
+        let total = self.buf.len_lines();
+        let s_at_line_start = s == self.buf.line_to_char(start_line);
+        let next_line_char = if end_line + 1 >= total {
+            len
+        } else {
+            self.buf.line_to_char(end_line + 1)
+        };
+        let e_at_line_end = e == next_line_char;
+        let whole_lines = s_at_line_start && e_at_line_end;
+
+        let target_col = s - self.buf.line_to_char(start_line);
+
+        self.buf.remove(s..e);
+        self.invalidate_wrap_cache();
+
+        let after_n_lines = if whole_lines { 0 } else { 1 };
+        let after = snapshot_lines(&self.buf, start_line, after_n_lines);
+
+        self.land_cursor_at(start_line, target_col);
+        let abs_after = self.abs_pos();
+
+        self.changetree.track_change(Delta {
+            start_line,
+            before: before.into(),
+            after: after.into(),
+            cursor_before: (abs_before.row, abs_before.col),
+            cursor_after: (abs_after.row, abs_after.col),
+        });
+
+        true
+    }
+
+    /// Delete the current visual selection and return to Normal mode.
+    /// Convenience wrapper around [`Buffer::delete_range`]: computes the
+    /// char range(s) implied by the buffer's mode + anchor + cursor, calls
+    /// `delete_range`, and switches the mode. No-op when the buffer is
+    /// not in a visual mode. For VisualBlock each row's column slice is
+    /// a separate `delete_range` call (and therefore a separate undo step).
+    pub fn delete_selection(&mut self) -> bool {
+        let Some(anchor) = self.selection_anchor else {
+            return false;
+        };
+        let mode = self.mode;
+        if !mode.is_visual() {
+            return false;
+        }
+        let cursor = self.abs_pos();
+
+        let lo_row = anchor.row.min(cursor.row);
+        let hi_row = anchor.row.max(cursor.row);
+        let lo_col = anchor.col.min(cursor.col);
+        let hi_col = anchor.col.max(cursor.col);
+
+        let (lo_pos, hi_pos) = if (anchor.row, anchor.col) <= (cursor.row, cursor.col) {
+            (anchor, cursor)
+        } else {
+            (cursor, anchor)
+        };
+
+        let changed = match mode {
+            EditingMode::Visual => {
+                let s = self.buf.line_to_char(lo_pos.row) + lo_pos.col;
+                let e = self.buf.line_to_char(hi_pos.row) + hi_pos.col + 1;
+                self.delete_range(s, e)
+            }
+            EditingMode::VisualLine => {
+                let total = self.buf.len_lines();
+                let last_line = total.saturating_sub(1);
+                let (s, e) = if hi_row >= last_line && lo_row > 0 {
+                    // Eat the preceding newline so deleting through EOF
+                    // doesn't leave a dangling trailing newline.
+                    (self.buf.line_to_char(lo_row) - 1, self.buf.len_chars())
+                } else {
+                    let s = self.buf.line_to_char(lo_row);
+                    let e = if hi_row + 1 >= total {
+                        self.buf.len_chars()
+                    } else {
+                        self.buf.line_to_char(hi_row + 1)
+                    };
+                    (s, e)
+                };
+                self.delete_range(s, e)
+            }
+            EditingMode::VisualBlock => {
+                // Iterate bottom-up so each row's char indices remain
+                // valid as we mutate the rope.
+                let mut any = false;
+                for row in (lo_row..=hi_row).rev() {
+                    let line_start = self.buf.line_to_char(row);
+                    let line = self.buf.line(row);
+                    let mut line_len = line.len_chars();
+                    if line_len > 0 && line.char(line_len - 1) == '\n' {
+                        line_len -= 1;
+                    }
+                    let actual_lo = lo_col.min(line_len);
+                    let actual_hi = (hi_col + 1).min(line_len);
+                    if actual_lo < actual_hi {
+                        any |= self
+                            .delete_range(line_start + actual_lo, line_start + actual_hi);
+                    }
+                }
+                if any {
+                    self.land_cursor_at(lo_row, lo_col);
+                }
+                any
+            }
+            _ => false,
+        };
+
+        self.set_mode(EditingMode::Normal);
+        changed
     }
 
     pub fn delete_char_at(&mut self, Position { col, row }: Position<usize>) {

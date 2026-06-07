@@ -208,6 +208,10 @@ fn builtins() -> Env {
         apply(Action::DeleteCharAt(Position::new(col, row)))?;
         ok_unit(env)
     });
+    b!("delete-selection", 0, |_, env| {
+        apply(Action::DeleteSelection)?;
+        ok_unit(env)
+    });
     b!("newline", 0, |_, env| {
         apply(Action::InsertNewline)?;
         ok_unit(env)

@@ -102,7 +102,9 @@
       (map mode "gE"       '(move-cursor 'big-word-back-end))
       (map mode "<c-d>"    '(move-cursor 'half-page-down))
       (map mode "<c-u>"    '(move-cursor 'half-page-up))
-      (map mode "zz"       '(move-cursor 'center))))
+      (map mode "zz"       '(move-cursor 'center))
+      (map mode "x"        '(delete-selection))
+      (map mode "d"        '(delete-selection))))
 
 (bind-visual-motions 'visual)
 (bind-visual-motions 'visual-block)

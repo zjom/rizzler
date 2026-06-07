@@ -24,6 +24,9 @@ pub enum Action {
     InsertNewline,
     DeleteChar,
     DeleteCharAt(Position<usize>),
+    /// Remove the focused buffer's current visual selection and return to
+    /// Normal mode. No-op when the buffer is not in a visual mode.
+    DeleteSelection,
     /// Reverse the focused buffer's most recent tracked edit.
     Undo,
     /// Re-apply the most recently undone edit on the focused buffer.

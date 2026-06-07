@@ -756,4 +756,169 @@ mod tests {
         assert!(!s.undo());
         assert_eq!(s.buf.to_string(), "hello");
     }
+
+    // ---- delete_selection --------------------------------------------
+
+    #[test]
+    fn delete_selection_visual_single_line() {
+        let mut s = mk("hello");
+        s.set_mode(EditingMode::Visual);
+        s.cursor_pos = Position::<u16>::new(2, 0);
+        assert!(s.delete_selection());
+        assert_eq!(s.buf.to_string(), "lo");
+        assert_eq!(s.mode, EditingMode::Normal);
+        assert_eq!(cur_col(&s), 0);
+        assert_eq!(cur_row(&s), 0);
+    }
+
+    #[test]
+    fn delete_selection_visual_across_lines_joins() {
+        let mut s = mk("abc\ndef\nghi");
+        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.set_mode(EditingMode::Visual);
+        s.cursor_pos = Position::<u16>::new(1, 1);
+        assert!(s.delete_selection());
+        assert_eq!(s.buf.to_string(), "af\nghi");
+        assert_eq!(s.mode, EditingMode::Normal);
+        assert_eq!(cur_row(&s), 0);
+        assert_eq!(cur_col(&s), 1);
+    }
+
+    #[test]
+    fn delete_selection_visual_undo_redo_roundtrip() {
+        let mut s = mk("abc\ndef\nghi");
+        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.set_mode(EditingMode::Visual);
+        s.cursor_pos = Position::<u16>::new(1, 1);
+        s.delete_selection();
+        assert_eq!(s.buf.to_string(), "af\nghi");
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "abc\ndef\nghi");
+        assert!(s.redo());
+        assert_eq!(s.buf.to_string(), "af\nghi");
+    }
+
+    #[test]
+    fn delete_selection_visual_line_middle() {
+        let mut s = mk("abc\ndef\nghi");
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.set_mode(EditingMode::VisualLine);
+        assert!(s.delete_selection());
+        assert_eq!(s.buf.to_string(), "abc\nghi");
+        assert_eq!(s.mode, EditingMode::Normal);
+        assert_eq!(cur_row(&s), 1);
+        assert_eq!(cur_col(&s), 0);
+    }
+
+    #[test]
+    fn delete_selection_visual_line_last_line_eats_preceding_newline() {
+        let mut s = mk("abc\ndef");
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.set_mode(EditingMode::VisualLine);
+        assert!(s.delete_selection());
+        assert_eq!(s.buf.to_string(), "abc");
+        assert_eq!(cur_row(&s), 0);
+    }
+
+    #[test]
+    fn delete_selection_visual_line_last_line_undo_redo() {
+        let mut s = mk("abc\ndef");
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.set_mode(EditingMode::VisualLine);
+        s.delete_selection();
+        assert_eq!(s.buf.to_string(), "abc");
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "abc\ndef");
+        assert!(s.redo());
+        assert_eq!(s.buf.to_string(), "abc");
+    }
+
+    #[test]
+    fn delete_selection_visual_line_all_lines() {
+        let mut s = mk("abc\ndef");
+        s.set_mode(EditingMode::VisualLine);
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        assert!(s.delete_selection());
+        assert_eq!(s.buf.to_string(), "");
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "abc\ndef");
+    }
+
+    #[test]
+    fn delete_selection_visual_block_rectangle() {
+        let mut s = mk("abcde\nfghij\nklmno");
+        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.set_mode(EditingMode::VisualBlock);
+        s.cursor_pos = Position::<u16>::new(3, 2);
+        assert!(s.delete_selection());
+        assert_eq!(s.buf.to_string(), "ae\nfj\nko");
+        assert_eq!(s.mode, EditingMode::Normal);
+        assert_eq!(cur_row(&s), 0);
+        assert_eq!(cur_col(&s), 1);
+    }
+
+    #[test]
+    fn delete_selection_visual_block_undo_redo() {
+        // VisualBlock is implemented as one `delete_range` call per row, so
+        // a 3-row block delete is 3 undo steps.
+        let mut s = mk("abcde\nfghij\nklmno");
+        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.set_mode(EditingMode::VisualBlock);
+        s.cursor_pos = Position::<u16>::new(3, 2);
+        s.delete_selection();
+        assert_eq!(s.buf.to_string(), "ae\nfj\nko");
+        while s.undo() {}
+        assert_eq!(s.buf.to_string(), "abcde\nfghij\nklmno");
+        while s.redo() {}
+        assert_eq!(s.buf.to_string(), "ae\nfj\nko");
+    }
+
+    // ---- delete_range ------------------------------------------------
+
+    #[test]
+    fn delete_range_within_line() {
+        let mut s = mk("hello");
+        assert!(s.delete_range(1, 4));
+        assert_eq!(s.buf.to_string(), "ho");
+        assert_eq!(cur_col(&s), 1);
+    }
+
+    #[test]
+    fn delete_range_across_lines_joins() {
+        let mut s = mk("abc\ndef\nghi");
+        assert!(s.delete_range(1, 6));
+        assert_eq!(s.buf.to_string(), "af\nghi");
+        assert_eq!(cur_row(&s), 0);
+        assert_eq!(cur_col(&s), 1);
+    }
+
+    #[test]
+    fn delete_range_whole_line() {
+        let mut s = mk("abc\ndef\nghi");
+        assert!(s.delete_range(4, 8));
+        assert_eq!(s.buf.to_string(), "abc\nghi");
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "abc\ndef\nghi");
+    }
+
+    #[test]
+    fn delete_range_empty_is_noop() {
+        let mut s = mk("hello");
+        assert!(!s.delete_range(2, 2));
+        assert_eq!(s.buf.to_string(), "hello");
+    }
+
+    #[test]
+    fn delete_range_clamps_end_past_eof() {
+        let mut s = mk("hello");
+        assert!(s.delete_range(2, 999));
+        assert_eq!(s.buf.to_string(), "he");
+    }
+
+    #[test]
+    fn delete_selection_noop_outside_visual() {
+        let mut s = mk("hello");
+        assert!(!s.delete_selection());
+        assert_eq!(s.buf.to_string(), "hello");
+    }
 }

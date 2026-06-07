@@ -496,8 +496,8 @@
           (set! _menu-index 0)
           (command-complete (get cands i))))))
 
-(map 'command "<c-d>" '(_menu-next))
-(map 'command "<c-u>" '(_menu-prev))
+(map 'command "<c-n>" '(_menu-next))
+(map 'command "<c-p>" '(_menu-prev))
 (map 'command "<c-y>" '(_menu-accept))
 
 ;; ============================================================================

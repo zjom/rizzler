@@ -119,9 +119,53 @@ pub struct State {
     workdir: Rc<Path>,
 }
 
+fn resolve_workdir(path: Option<&Path>, cwd: &Path) -> PathBuf {
+    match path {
+        Some(p) if p.is_dir() => p.to_path_buf(),
+        Some(p) => p.parent().map(Path::to_path_buf).unwrap_or_else(|| cwd.to_path_buf()),
+        None => cwd.to_path_buf(),
+    }
+}
+
+/// Returns `(source, basedir)` for the init script, or `None` if there is
+/// no script to run. In tests the embedded `init.rz` is used and the
+/// basedir is the cwd; in prod the user-config init script is used,
+/// creating it from the embedded copy on first run.
+#[cfg(test)]
+fn load_init_script() -> anyhow::Result<Option<(String, PathBuf)>> {
+    let basedir = std::env::current_dir()?;
+    Ok(Some((include_str!("../../../init.rz").to_string(), basedir)))
+}
+
+#[cfg(not(test))]
+fn load_init_script() -> anyhow::Result<Option<(String, PathBuf)>> {
+    use std::fs;
+    let Some(path) = crate::lisp::init_script_path() else {
+        return Ok(None);
+    };
+    if !path.exists() {
+        fs::create_dir_all(path.parent().unwrap())?;
+        fs::write(&path, include_str!("../../../init.rz"))?;
+    }
+    let src = fs::read_to_string(&path)?;
+    Ok(Some((src, path)))
+}
+
+#[cfg(test)]
+fn init_eval_err(e: RizzError) -> anyhow::Error {
+    panic!("init.rz eval failed: {e}");
+}
+
+#[cfg(not(test))]
+fn init_eval_err(e: RizzError) -> anyhow::Error {
+    anyhow::anyhow!(e.to_string())
+}
+
 impl State {
     pub fn with_config(config: Config) -> anyhow::Result<Self> {
-        let workdir = std::env::current_dir()?;
+        let cwd = std::env::current_dir()?;
+        let workdir = resolve_workdir(config.path.as_deref(), &cwd);
+
         let mut state = Self {
             bufs: BufferList::new(),
             windows: WindowTree::new(1),
@@ -139,40 +183,19 @@ impl State {
             frame_fn: None,
             workdir: workdir.into(),
         };
-        if let Some(path) = config.path {
-            let path = Rc::<Path>::from(path);
-            state.bufs[1] = buffer_io::with_path(path.clone());
-            if path.is_dir() {
-                state.workdir = path.clone();
-            } else if let Some(parent) = path.parent() {
-                state.workdir = Rc::<Path>::from(parent);
-            }
+        if let Some(path) = config.path
+            && !path.is_dir()
+        {
+            state.bufs[1] = buffer_io::with_path(Rc::<Path>::from(path));
         }
         state.refresh_viewport();
 
-        #[cfg(test)]
-        if let Err(e) = state.eval_lisp_script(include_str!("../../../init.rz")) {
-            panic!("init.rz eval failed: {e}");
+        // Point the lisp basedir at the init script while it runs (so `open`
+        // resolves relative to it), then restore it to the editor workdir.
+        if let Some((src, basedir)) = load_init_script()? {
+            state.lisp.as_mut().unwrap().set_basedir(&basedir);
+            state.eval_lisp_script(&src).map_err(init_eval_err)?;
         }
-
-        #[cfg(not(test))]
-        {
-            use crate::lisp::init_script_path;
-            use std::fs;
-            if let Some(path) = init_script_path() {
-                if !path.exists() {
-                    fs::create_dir_all(path.parent().unwrap())?;
-                    fs::write(&path, include_str!("../../../init.rz"))?;
-                }
-                state.lisp.as_mut().unwrap().set_basedir(&path);
-                if let Ok(src) = fs::read_to_string(&path) {
-                    state
-                        .eval_lisp_script(&src)
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                }
-            }
-        }
-
         state
             .lisp
             .as_mut()

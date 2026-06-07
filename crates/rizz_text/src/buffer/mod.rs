@@ -80,6 +80,12 @@ pub struct Buffer {
     /// "wrap is off" — fall back to file-row movement.
     pub(crate) wrap_cache: Option<WrapMap>,
     pub(crate) changetree: ChangeTree,
+    /// When `Some(end_char)`, the current changetree leaf is an open insert
+    /// batch: the next `insert_char` whose target char index equals
+    /// `end_char` extends that leaf in place instead of pushing a new node.
+    /// Cleared by anything that breaks the run — a non-insert edit, a
+    /// cursor move, a mode change, undo/redo.
+    pub(crate) insert_batch_end: Option<usize>,
 }
 
 impl Buffer {
@@ -154,6 +160,13 @@ impl Buffer {
     /// render builds a fresh map.
     pub(crate) fn invalidate_wrap_cache(&mut self) {
         self.wrap_cache = None;
+    }
+
+    /// End the current insert-coalescing run so the next typed character
+    /// pushes a new changetree node. Called by anything that breaks the
+    /// run: a non-insert edit, a cursor move, a mode change, undo/redo.
+    pub(crate) fn close_insert_batch(&mut self) {
+        self.insert_batch_end = None;
     }
 
     /// Most recent visual-line layout (from the last render's precompute
@@ -736,10 +749,16 @@ mod tests {
 
     #[test]
     fn undo_chain_then_new_edit_drops_redo() {
+        // Each insert run is coalesced into one undo step; the mode round-trip
+        // closes the run so the three inserts become three distinct nodes.
         let mut s = mk("");
-        s.mode = EditingMode::Insert;
+        s.set_mode(EditingMode::Insert);
         s.insert_char('a');
+        s.set_mode(EditingMode::Normal);
+        s.set_mode(EditingMode::Insert);
         s.insert_char('b');
+        s.set_mode(EditingMode::Normal);
+        s.set_mode(EditingMode::Insert);
         s.insert_char('c');
         s.undo();
         s.undo();
@@ -748,6 +767,48 @@ mod tests {
         s.insert_char('Z');
         assert_eq!(s.buf.to_string(), "aZ");
         assert!(!s.redo());
+    }
+
+    #[test]
+    fn consecutive_inserts_coalesce_into_one_undo_step() {
+        let mut s = mk("");
+        s.set_mode(EditingMode::Insert);
+        s.insert_char('a');
+        s.insert_char('b');
+        s.insert_char('c');
+        assert_eq!(s.buf.to_string(), "abc");
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "");
+        assert!(!s.undo());
+    }
+
+    #[test]
+    fn insert_run_breaks_on_mode_change() {
+        let mut s = mk("");
+        s.set_mode(EditingMode::Insert);
+        s.insert_char('a');
+        s.insert_char('b');
+        s.set_mode(EditingMode::Normal);
+        s.set_mode(EditingMode::Insert);
+        s.insert_char('c');
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "ab");
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "");
+    }
+
+    #[test]
+    fn insert_run_breaks_on_cursor_move() {
+        let mut s = mk("xy");
+        s.set_mode(EditingMode::Insert);
+        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.insert_char('a');
+        s.move_cursor(MoveKind::LineStart);
+        s.insert_char('b');
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "xya");
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "xy");
     }
 
     #[test]

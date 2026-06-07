@@ -52,6 +52,25 @@ impl ChangeTree {
         self.cur = newnode_id;
     }
 
+    /// Mutate the current leaf's delta in place. Used to coalesce a run of
+    /// adjacent edits (e.g. typed characters in insert mode) into a single
+    /// tree node so undo reverts the whole run. Returns `false` when the
+    /// current node is the root, in which case the caller should fall back
+    /// to [`Self::track_change`].
+    pub fn extend_current(&mut self, f: impl FnOnce(&mut Delta)) -> bool {
+        match self
+            .nodes
+            .get_mut(&self.cur)
+            .expect("self.cur must refer to a valid node")
+        {
+            Node::Leaf(leaf) => {
+                f(&mut leaf.delta);
+                true
+            }
+            Node::Root(_) => false,
+        }
+    }
+
     pub fn undo(&mut self) -> Option<Delta> {
         if self.cur == self.trunk {
             return None;

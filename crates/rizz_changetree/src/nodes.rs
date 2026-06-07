@@ -1,15 +1,16 @@
 use std::{cmp::Ordering, collections::BinaryHeap, rc::Rc, time::Instant};
 
-/// Edit recorded in the change tree. A contiguous span starting at
-/// `start_line` had text `before` and is now `after` — undo restores
-/// `before` + `cursor_before`, redo applies `after` + `cursor_after`. The
-/// `before`/`after` snapshots are line-aligned blobs; the line count each
-/// occupies is derived from the string itself.
+/// Edit recorded in the change tree. A splice at char index `at`: the
+/// range `removed` was deleted and `inserted` was written in its place.
+/// Undo reinstates `removed` and lands the cursor at `cursor_before`;
+/// redo reapplies `inserted` and lands the cursor at `cursor_after`.
+/// Either side may be empty — a pure insert has `removed = ""`, a pure
+/// delete has `inserted = ""`.
 #[derive(Debug, Clone)]
 pub struct Delta {
-    pub start_line: usize,
-    pub before: Rc<str>,
-    pub after: Rc<str>,
+    pub at: usize,
+    pub removed: Rc<str>,
+    pub inserted: Rc<str>,
     pub cursor_before: (usize, usize),
     pub cursor_after: (usize, usize),
 }

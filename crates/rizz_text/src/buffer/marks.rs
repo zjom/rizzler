@@ -35,6 +35,9 @@ impl Buffer {
     }
 
     pub fn set_mode(&mut self, mode: EditingMode) {
+        if self.mode != mode {
+            self.close_insert_batch();
+        }
         let was_visual = self.mode.is_visual();
         let is_visual = mode.is_visual();
         if is_visual && !was_visual {

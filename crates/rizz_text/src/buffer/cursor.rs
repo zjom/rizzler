@@ -101,6 +101,7 @@ impl Buffer {
     }
 
     pub fn move_cursor(&mut self, m: MoveKind) {
+        self.close_insert_batch();
         use MoveKind as MK;
         match m {
             MK::Relative(Position { col: dx, row: dy }) => {

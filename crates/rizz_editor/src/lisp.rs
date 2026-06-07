@@ -16,8 +16,8 @@ use std::str::FromStr;
 
 use anyhow::anyhow;
 use im::{HashMap as ImHashMap, Vector};
-use rizz::RizzError;
-use rizz::runtime::{self, Env, NativeFn, RuntimeError, Value};
+use rizz::runtime::{Env, NativeFn, RuntimeError, Value};
+use rizz::{RizzError, Runtime};
 
 use rizz_actions::Action;
 use rizz_core::{EditingMode, FocusDir, Position, SplitDir};
@@ -100,26 +100,20 @@ fn with_editor_mut<R>(f: impl FnOnce(&mut State) -> R) -> R {
 // LispRuntime
 // ---------------------------------------------------------------------------
 
-pub struct LispRuntime {
-    env: Env,
-}
+pub struct LispRuntime(Runtime);
 
 impl LispRuntime {
     pub fn new() -> Self {
         let env = rizz::prelude::install(builtins());
-        Self { env }
+        Self(Runtime::with_env(env))
     }
 
     pub fn eval_str(&mut self, src: &str) -> Result<Rc<Value>, RizzError> {
-        let (v, env) = rizz::parse_and_run_with_env(src.as_bytes(), &self.env)?;
-        self.env = env;
-        Ok(v)
+        self.0.eval(src.as_bytes())
     }
 
     pub fn eval_value(&mut self, form: Rc<Value>) -> Result<Rc<Value>, RizzError> {
-        let (v, env) = runtime::eval(form, &self.env)?;
-        self.env = env;
-        Ok(v)
+        Ok(self.0.eval_form(form)?)
     }
 
     pub fn eval_script(&mut self, src: &str) -> Result<(), RizzError> {
@@ -129,7 +123,7 @@ impl LispRuntime {
 
     /// Borrow the current environment.
     pub fn env(&self) -> &Env {
-        &self.env
+        self.0.env()
     }
 }
 
@@ -409,34 +403,19 @@ fn builtins() -> Env {
     });
 
     b!("evaluate", 0, |_, env| {
-        let src = with_editor_mut(|st| {
-            st.focused_buf()
-                .selected_text()
-                .unwrap_or_else(|| st.focused_buf().text())
-        });
+        let src = {
+            with_editor_mut(|st| {
+                st.focused_buf()
+                    .selected_text()
+                    .unwrap_or_else(|| st.focused_buf().text())
+            })
+        };
         match rizz::parse_and_run_with_env(src.as_bytes(), env) {
             Ok((v, new_env)) => {
                 if !v.is_unit() {
                     notify_via_env(&v.display(), &new_env);
                 }
                 Ok((unit(), new_env))
-            }
-            Err(e) => {
-                notify_via_env(&e.to_string(), env);
-                ok_unit(env)
-            }
-        }
-    });
-
-    b!("evaluate-file", 1, |args, env| {
-        let s = as_str(&args[0], "evaluate-file")?;
-        let f = std::fs::File::open(s.as_ref())?;
-        match rizz::parse_and_run_with_env(f, env) {
-            Ok((v, new_env)) => {
-                if !v.is_unit() && args.len() > 1 && args[1].is_truthy() {
-                    notify_via_env(&v.display(), &new_env);
-                }
-                Ok((v, new_env))
             }
             Err(e) => {
                 notify_via_env(&e.to_string(), env);

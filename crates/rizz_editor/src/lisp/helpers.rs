@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use anyhow::anyhow;
 use rizz::runtime::{Env, NativeFn, RuntimeError, Value};
+use tracing::{trace, warn};
 
 use rizz_actions::Action;
 use rizz_core::EditingMode;
@@ -95,12 +96,14 @@ pub(super) fn unit() -> Rc<Value> {
 /// render-phase callback.
 pub(super) fn apply(action: Action) -> Result<(), RuntimeError> {
     if in_render_phase() {
+        warn!(?action, "lisp builtin attempted to mutate during render phase");
         return Err(RuntimeError::TypeMismatch {
             name: "editor-action".into(),
             expected: "non-mutating call".into(),
             got: "called from a render callback".into(),
         });
     }
+    trace!(?action, "lisp -> action");
     let result = with_editor_mut(|st| st.apply(&[Rc::new(action)]));
     result.map_err(|e| RuntimeError::Other(anyhow!("{e}")))
 }
@@ -125,8 +128,10 @@ pub fn quote_for_lisp(s: &str) -> String {
 
 /// Fire `(notify "<msg>")` against `env`.
 pub(super) fn notify_via_env(msg: &str, env: &Env) {
+    trace!(msg, "notify_via_env");
     let src = format!("(notify {})", quote_for_lisp(msg));
     if let Err(e) = rizz::parse_and_run_with_env(src.as_bytes(), env) {
+        warn!(error = %e, msg, "notify_via_env failed -> falling back to journal");
         with_editor_mut(|st| {
             st.record_message(msg);
             st.record_message(&format!("notify failed: {e}"));

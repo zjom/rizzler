@@ -4,9 +4,7 @@ use im::Vector;
 use rizz::runtime::Value;
 use rizz_actions::Action;
 
-use super::super::helpers::{
-    Builtins, apply, as_str, notify_via_env, unit, wrap_shell_style,
-};
+use super::super::helpers::{Builtins, apply, as_str, notify_via_env, unit, wrap_shell_style};
 use super::super::with_editor_mut;
 
 pub(super) fn register(b: &mut Builtins) {
@@ -75,5 +73,46 @@ pub(super) fn register(b: &mut Builtins) {
                 .collect()
         });
         Ok(Rc::new(Value::Array(cmds)))
+    });
+
+    b.be("command-prefix", 0, |_, _| {
+        let s = with_editor_mut(|st| st.minibuffer_completion_prefix());
+        Ok(Rc::new(Value::Str(s.into())))
+    });
+
+    // Iterating the lisp env via `Env::filter` with an always-true predicate
+    // is the supported escape hatch — the bindings map is private. The clone
+    // is O(1) thanks to `im::HashMap`'s persistent representation, so the
+    // only real cost is the single linear scan we'd have done anyway.
+    b.be("command-completions", 0, |_, env| {
+        let prefix = with_editor_mut(|st| st.minibuffer_completion_prefix());
+        let mut names: Vec<Rc<str>> = Vec::new();
+        let _ = env.clone().filter(|(name, _)| {
+            if name.starts_with(prefix.as_str()) && !name.starts_with('_') {
+                names.push(name.clone());
+            }
+            true
+        });
+        names.sort();
+        let arr: Vector<Rc<Value>> = names.into_iter().map(|s| Rc::new(Value::Str(s))).collect();
+        Ok(Rc::new(Value::Array(arr)))
+    });
+
+    b.be("command-complete", 1, |args, _| {
+        let s = as_str(&args[0], "command-complete")?;
+        with_editor_mut(|st| st.apply_minibuffer_completion(&s));
+        Ok(unit())
+    });
+
+    b.be("longest-common-prefix", 1, |args, _| {
+        let arr = args[0].as_array().ok_or_else(|| {
+            rizz::runtime::RuntimeError::type_mismatch("longest-common-prefix", "array", &args[0])
+        })?;
+        let mut strings: Vec<Rc<str>> = Vec::with_capacity(arr.len());
+        for v in arr.iter() {
+            strings.push(as_str(v, "longest-common-prefix")?);
+        }
+        let s = crate::completion::longest_common_prefix(strings.iter().map(|s| s.as_ref()));
+        Ok(Rc::new(Value::Str(s.into())))
     });
 }

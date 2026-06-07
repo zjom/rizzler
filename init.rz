@@ -372,6 +372,134 @@
 (map 'command "<left>"      '(move-cursor 'left))
 (map 'command "<right>"     '(move-cursor 'right))
 
+;; Tab completion. The matching itself lives in Rust:
+;;
+;;   (command-completions)     → array of fn-names matching the token at point
+;;   (command-complete s)      → splice s in over that token
+;;   (longest-common-prefix a) → largest string every member of a starts with
+;;
+;; The lisp side just decides what to do with that data: one match → insert
+;; it; many matches → advance to the longest shared prefix so the next tab
+;; (or keystroke) narrows things further. The candidate list itself is shown
+;; in the hint bar (see `_command-hint` below), so the user sees the menu
+;; without having to open a popup.
+(fn _command-tab ()
+  (do
+    (let cands (command-completions))
+    (let n (len cands))
+    (cond
+      ((= n 0) ())
+      ((= n 1) (command-complete (first cands)))
+      (else
+        (do
+          (let common (longest-common-prefix cands))
+          (if (> (len common) (len (command-prefix)))
+              (command-complete common)
+              ()))))))
+
+(map 'command "<tab>" '(_command-tab))
+
+;; ----- vertical completion menu ----------------------------------------
+;; When more than one candidate is available the hint row grows into a
+;; navigable vertical menu:
+;;
+;;   <c-d>   move highlight down (wraps)
+;;   <c-u>   move highlight up   (wraps)
+;;   <c-y>   accept the highlighted candidate
+;;   <tab>   still advances to the longest common prefix
+;;
+;; State is a single `ref` holding the selected index. The renderer reads
+;; the live candidate list each frame and clamps the index, so typing or
+;; backspacing in the minibuffer naturally re-anchors the menu without us
+;; having to wire up any "candidates changed" callback.
+
+(let _menu-max-rows 8)
+(let _menu-index    (ref 0))
+
+;; Candidate list visible to the menu. Empty unless we're in command mode
+;; with a non-empty prefix — otherwise an empty minibuffer would balloon
+;; the bottom of the screen with every binding in the env.
+(fn _menu-cands ()
+  (if (= (focused-mode) "command")
+      (if (= (command-prefix) "")
+          []
+          (command-completions))
+      []))
+
+;; Clamp the persisted index to the live candidate count.
+(fn _menu-clamped (n)
+  (do
+    (let i (deref _menu-index))
+    (if (<= n 0) 0
+    (if (< i 0) 0
+    (if (>= i n) 0
+                 i)))))
+
+;; Pad every candidate to the same width so the selection highlight covers
+;; the whole row, not just the candidate's characters. Self-contained — uses
+;; only builtins so we don't rely on top-level helpers that may be defined
+;; further down the file (closures capture env at fn-definition time).
+(fn _menu-padded (cands)
+  (do
+    (let max-w (reduce
+                 (fn _w (acc s) (if (> (len s) acc) (len s) acc))
+                 0 cands))
+    (let pad-w (+ max-w 2))
+    (fn _spaces (n)
+      (str-join (fmap (fn _sp (_) " ") (range 0 n)) ""))
+    (fmap (fn _r (s)
+            (str-join [" " s (_spaces (- pad-w (+ (len s) 1)))] ""))
+          cands)))
+
+(fn _menu-row (cand i sel)
+  (w-line [(w-text cand
+                   (if (= i sel) "vague.menu-selected" "vague.menu"))]))
+
+;; Build the vstack widget. Caller passes the already-clamped selected
+;; index and (len cands) so this fn doesn't redundantly read the ref.
+(fn _menu-build (cands n sel)
+  (do
+    (let max-rows (min n _menu-max-rows))
+    (let scroll
+      (if (>= sel max-rows)
+          (+ (- sel max-rows) 1)
+          0))
+    (let visible (_menu-padded (slice cands scroll (+ scroll max-rows))))
+    (let local-sel (- sel scroll))
+    (w-vstack
+      (fmapi (fn _row (j c) (w-cells 1 (_menu-row c j local-sel)))
+             visible))))
+
+(fn _menu-next ()
+  (do
+    (let n (len (_menu-cands)))
+    (if (<= n 0) ()
+        (do
+          (let i (_menu-clamped n))
+          (set! _menu-index (if (>= (+ i 1) n) 0 (+ i 1)))))))
+
+(fn _menu-prev ()
+  (do
+    (let n (len (_menu-cands)))
+    (if (<= n 0) ()
+        (do
+          (let i (_menu-clamped n))
+          (set! _menu-index (if (<= i 0) (- n 1) (- i 1)))))))
+
+(fn _menu-accept ()
+  (do
+    (let cands (_menu-cands))
+    (let n (len cands))
+    (if (<= n 0) ()
+        (do
+          (let i (_menu-clamped n))
+          (set! _menu-index 0)
+          (command-complete (get cands i))))))
+
+(map 'command "<c-d>" '(_menu-next))
+(map 'command "<c-u>" '(_menu-prev))
+(map 'command "<c-y>" '(_menu-accept))
+
 ;; ============================================================================
 ;;  Vague — bundled default theme (ported from vague.nvim)
 ;; ============================================================================
@@ -453,6 +581,11 @@
 
 (face-define "vague.signature"  {"fg": pal-string "italic": 1})
 (face-define "vague.reverse"    {"reverse": 1 "bold": 1})
+
+;; Faces used by the command-mode completion menu. The selected row gets a
+;; warning-coloured bar so it pops against the dimmer base row.
+(face-define "vague.menu"          {"fg": pal-fg "bg": pal-line})
+(face-define "vague.menu-selected" {"fg": pal-bg "bg": pal-warning "bold": 1})
 
 
 ;; Tree-sitter syntax faces. The precompute pass looks up
@@ -583,6 +716,37 @@
 ;; bindings you just installed.
 ;;
 ;; TODO: extend the chain below as you add new modes or custom hints.
+
+;; In command mode the hint row doubles as the tab-completion surface. With
+;; an empty prefix it's a single-line greeting; with one matching candidate
+;; it's a single-line confirmation; with many it expands into a navigable
+;; vertical menu (see "vertical completion menu" up top).
+(fn _command-hint ()
+  (do
+    (let pref (command-prefix))
+    (if (= pref "")
+        (w-line [(w-text "  command mode — type a form and press <enter> · <tab> to complete  "
+                         "vague.muted")])
+        (do
+          (let cands (command-completions))
+          (let n (len cands))
+          (cond
+            ((= n 0)
+             (w-line [(w-text "  no completions  " "vague.muted")]))
+            ((= n 1)
+             (w-line [(w-text "  " "vague.muted")
+                      (w-text (first cands) "vague.accent")
+                      (w-text "  <tab> to insert  " "vague.muted")]))
+            (else
+             (_menu-build cands n (_menu-clamped n))))))))
+
+;; Rows the hint area should reserve. 1 cell by default; up to _menu-max-rows
+;; when the completion menu has 2+ candidates to show.
+(fn _hint-height ()
+  (do
+    (let n (len (_menu-cands)))
+    (if (< n 2) 1 (min n _menu-max-rows))))
+
 (fn _hint-bar ()
   (do
     (let m (focused-mode))
@@ -592,8 +756,7 @@
     (if (= m "insert")
         (w-line [(w-text "  press <esc> to leave insert mode  " "vague.muted")])
     (if (= m "command")
-        (w-line [(w-text "  command mode — type a form and press <enter>  "
-                         "vague.muted")])
+        (_command-hint)
         (w-line [(w-text "  visual: y to yank · d to delete · <esc> to cancel  "
                          "vague.muted")]))))))
 
@@ -631,7 +794,7 @@
         {"gutter":       _gutter
          "gutter-width": 5}))
      (w-cells 1 (_status-line))
-     (w-cells 1 (_hint-bar))
+     (w-cells (_hint-height) (_hint-bar))
      (w-cells 1 (w-minibuffer))]))
 
 (set-frame _frame)

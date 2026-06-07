@@ -24,6 +24,7 @@ use std::rc::Rc;
 
 use rizz::runtime::{Env, Value};
 use rizz::{RizzError, Runtime};
+use tracing::{debug, instrument, trace};
 
 use crate::state::State;
 
@@ -114,17 +115,23 @@ impl LispRuntime {
     }
 
     pub fn set_basedir(&mut self, p: impl Into<PathBuf>) {
-        self.0 = Runtime::with_env(self.0.env().clone().with_base_dir(Some(p.into())))
+        let p = p.into();
+        debug!(basedir = %p.display(), "lisp runtime basedir set");
+        self.0 = Runtime::with_env(self.0.env().clone().with_base_dir(Some(p)))
     }
 
+    #[instrument(skip(self, src), fields(bytes = src.len()))]
     pub fn eval_str(&mut self, src: &str) -> Result<Rc<Value>, RizzError> {
         self.0.eval(src.as_bytes())
     }
 
+    #[instrument(skip(self, form))]
     pub fn eval_value(&mut self, form: Rc<Value>) -> Result<Rc<Value>, RizzError> {
+        trace!(form = %form.display(), "eval_form");
         Ok(self.0.eval_form(form)?)
     }
 
+    #[instrument(skip(self, src), fields(bytes = src.len()))]
     pub fn eval_script(&mut self, src: &str) -> Result<(), RizzError> {
         self.eval_str(src)?;
         Ok(())
@@ -210,6 +217,101 @@ mod tests {
         ))
         .unwrap();
         assert!(s.quit_requested());
+    }
+
+    #[test]
+    fn command_completions_filters_by_prefix() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut s = test_state();
+        // Enter command mode and type "ed" — should match "edit"/"evaluate".
+        for (code, mods) in [
+            (KeyCode::Char(':'), KeyModifiers::NONE),
+            (KeyCode::Char('e'), KeyModifiers::NONE),
+            (KeyCode::Char('d'), KeyModifiers::NONE),
+        ] {
+            s.handle_key_event(crossterm::event::KeyEvent::new(code, mods))
+                .unwrap();
+        }
+        let v = s.eval_lisp("(command-completions)").unwrap();
+        let arr = v.as_array().expect("array");
+        let names: Vec<String> = arr.iter().map(|x| x.display()).collect();
+        assert!(
+            names.contains(&"edit".to_string()),
+            "missing edit: {names:?}"
+        );
+        assert!(names.iter().all(|n| n.starts_with("ed")));
+        // private (_-prefixed) bindings should be filtered out.
+        assert!(names.iter().all(|n| !n.starts_with('_')));
+    }
+
+    #[test]
+    fn command_complete_replaces_token_at_cursor() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut s = test_state();
+        for (code, mods) in [
+            (KeyCode::Char(':'), KeyModifiers::NONE),
+            (KeyCode::Char('q'), KeyModifiers::NONE),
+        ] {
+            s.handle_key_event(crossterm::event::KeyEvent::new(code, mods))
+                .unwrap();
+        }
+        s.eval_lisp(r#"(command-complete "quit")"#).unwrap();
+        let v = s.eval_lisp("(command-prefix)").unwrap();
+        assert_eq!(v.display(), "quit");
+    }
+
+    /// Multi-match path: `:bufn<tab>` should advance to `buf-n` (the
+    /// longest prefix shared by `buf-next` and the rest of the `buf-n*`
+    /// family) without picking any one — leaving the user room to narrow.
+    #[test]
+    fn tab_in_command_mode_advances_to_longest_common_prefix() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut s = test_state();
+        for (code, mods) in [
+            (KeyCode::Char(':'), KeyModifiers::NONE),
+            (KeyCode::Char('b'), KeyModifiers::NONE),
+            (KeyCode::Char('u'), KeyModifiers::NONE),
+            (KeyCode::Char('f'), KeyModifiers::NONE),
+            (KeyCode::Char('-'), KeyModifiers::NONE),
+            (KeyCode::Char('n'), KeyModifiers::NONE),
+            (KeyCode::Tab, KeyModifiers::NONE),
+        ] {
+            s.handle_key_event(crossterm::event::KeyEvent::new(code, mods))
+                .unwrap();
+        }
+        let v = s.eval_lisp("(command-prefix)").unwrap();
+        // `buf-no` and `buf-next` share `buf-n`; tab should land there.
+        assert_eq!(v.display(), "buf-n");
+    }
+
+    /// End-to-end: `:q<tab>` should complete to `quit` once init.rz has
+    /// bound `<tab>` in command mode. Exercises the path from key event →
+    /// keymap → `_command-tab` fn → `command-complete` builtin.
+    #[test]
+    fn tab_in_command_mode_completes_single_match() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut s = test_state();
+        for (code, mods) in [
+            (KeyCode::Char(':'), KeyModifiers::NONE),
+            (KeyCode::Char('q'), KeyModifiers::NONE),
+            (KeyCode::Char('u'), KeyModifiers::NONE),
+            (KeyCode::Char('i'), KeyModifiers::NONE),
+            (KeyCode::Tab, KeyModifiers::NONE),
+        ] {
+            s.handle_key_event(crossterm::event::KeyEvent::new(code, mods))
+                .unwrap();
+        }
+        let v = s.eval_lisp("(command-prefix)").unwrap();
+        assert_eq!(v.display(), "quit");
+    }
+
+    #[test]
+    fn longest_common_prefix_builtin_matches_helper() {
+        let mut s = test_state();
+        let v = s
+            .eval_lisp(r#"(longest-common-prefix ["edit" "editor" "edits"])"#)
+            .unwrap();
+        assert_eq!(v.display(), "edit");
     }
 
     #[test]

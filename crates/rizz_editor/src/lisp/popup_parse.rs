@@ -15,10 +15,7 @@ use super::helpers::{
 };
 use crate::state::PopupSpec;
 
-pub(super) fn parse_popup_options(
-    v: &Rc<Value>,
-    spec: &mut PopupSpec,
-) -> Result<(), RuntimeError> {
+pub(super) fn parse_popup_options(v: &Rc<Value>, spec: &mut PopupSpec) -> Result<(), RuntimeError> {
     let m = match &**v {
         Value::Unit => return Ok(()),
         Value::Map(m) => m,

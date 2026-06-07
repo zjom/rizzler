@@ -5,9 +5,7 @@ use rizz::runtime::Value;
 use rizz_actions::Action;
 use rizz_input::KeyEvent;
 
-use super::super::helpers::{
-    Builtins, apply, as_str, parse_mode_name, str_mismatch_msg, unit,
-};
+use super::super::helpers::{Builtins, apply, as_str, parse_mode_name, str_mismatch_msg, unit};
 use super::super::with_editor_mut;
 
 pub(super) fn register(b: &mut Builtins) {

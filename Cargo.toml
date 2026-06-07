@@ -13,9 +13,22 @@ members = ["crates/*"]
 [workspace.dependencies]
 anyhow = "1.0.102"
 rizz = "0.6.2"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", default-features = false, features = [
+    "ansi",
+    "env-filter",
+    "fmt",
+    "smallvec",
+    "std",
+    "tracing-log",
+] }
+tracing-appender = "0.2.3"
 
 [dependencies]
 anyhow = { workspace = true }
 crossterm = "0.29.0"
 rizz_editor = { path = "crates/rizz_editor" }
 rizz_ui = { path = "crates/rizz_ui" }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }

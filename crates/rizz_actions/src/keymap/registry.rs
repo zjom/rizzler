@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use rizz_input::KeyEvent;
+use tracing::{debug, trace};
 
 use crate::action::Action;
 use crate::keymap::default::default_keymaps;
@@ -49,14 +50,17 @@ impl KeymapRegistry {
         if continuing && let Some(cur) = self.cur.take() {
             match walk(&cur, key) {
                 WalkOutcome::Action(a) => {
+                    trace!(?key, prev_mode = ?self.prev_mode, "keymap continued -> action");
                     self.prev_mode = None;
                     return Some(vec![a]);
                 }
                 WalkOutcome::Descend(n) => {
+                    trace!(?key, prev_mode = ?self.prev_mode, "keymap continued -> descend");
                     self.cur = Some(n);
                     return None;
                 }
                 WalkOutcome::Miss => {
+                    debug!(?key, prev_mode = ?self.prev_mode, "keymap continuation missed -> restart");
                     // Drop the stale sequence; fall through to a fresh
                     // top-level resolution so the user's key still has a
                     // chance to match a different layer.
@@ -72,9 +76,11 @@ impl KeymapRegistry {
             };
             match walk(&root, key) {
                 WalkOutcome::Action(a) => {
+                    trace!(?key, %mode, "keymap resolved -> action");
                     return Some(vec![a]);
                 }
                 WalkOutcome::Descend(n) => {
+                    trace!(?key, %mode, "keymap resolved -> descend");
                     self.cur = Some(n);
                     self.prev_mode = Some(mode.clone());
                     return None;
@@ -82,6 +88,7 @@ impl KeymapRegistry {
                 WalkOutcome::Miss => {}
             }
         }
+        trace!(?key, ?modes, "keymap miss across all modes");
         None
     }
 

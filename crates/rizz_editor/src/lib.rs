@@ -18,6 +18,7 @@
 //! `state.render()` + `state.handle_key_event(...)` in a loop.
 
 pub mod buffer_list;
+pub mod completion;
 pub mod journal;
 pub mod lisp;
 pub mod state;

@@ -9,3 +9,4 @@ rizz_core = { path = "../rizz_core" }
 rizz_text = { path = "../rizz_text" }
 rizz_input = { path = "../rizz_input" }
 rizz = { workspace = true }
+tracing = { workspace = true }

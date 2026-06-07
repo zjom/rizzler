@@ -18,3 +18,4 @@ rizz_ringbuffer = { path = "../rizz_ringbuffer" }
 rizz_text = { path = "../rizz_text" }
 rizz_ui = { path = "../rizz_ui" }
 thiserror = "2.0.18"
+tracing = { workspace = true }

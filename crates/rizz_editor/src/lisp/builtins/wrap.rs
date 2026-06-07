@@ -3,9 +3,7 @@ use std::rc::Rc;
 use rizz::runtime::Value;
 use rizz_text::wrap::WrapMode;
 
-use super::super::helpers::{
-    Builtins, as_ident_or_str, as_int, unit, unknown_variant,
-};
+use super::super::helpers::{Builtins, as_ident_or_str, as_int, unit, unknown_variant};
 use super::super::with_editor_mut;
 
 pub(super) fn register(b: &mut Builtins) {

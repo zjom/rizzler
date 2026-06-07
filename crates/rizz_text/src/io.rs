@@ -6,6 +6,7 @@ use ropey::Rope;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
+use tracing::{debug, info, warn};
 
 use crate::buffer::Buffer;
 
@@ -23,9 +24,16 @@ pub fn from_reader(r: impl io::Read) -> io::Result<Buffer> {
 /// highlighter — `State::install_dynamic_highlighter` consults the
 /// `TsRegistry` after the buffer is added to the buffer list.
 pub fn with_path(path: Rc<Path>) -> Buffer {
-    let mut buf = std::fs::File::open(&path)
-        .and_then(from_reader)
-        .unwrap_or_default();
+    let mut buf = match std::fs::File::open(&path).and_then(from_reader) {
+        Ok(b) => {
+            info!(path = %path.display(), bytes = b.buf.len_bytes(), "loaded buffer from disk");
+            b
+        }
+        Err(e) => {
+            debug!(path = %path.display(), error = %e, "no on-disk file (or read failed) -> empty buffer");
+            Buffer::default()
+        }
+    };
     buf.fs_path = Some(path);
     buf
 }
@@ -36,13 +44,27 @@ pub fn with_path(path: Rc<Path>) -> Buffer {
 pub fn write(buffer: &mut Buffer, path: Option<Rc<Path>>) -> io::Result<()> {
     let resolved = path.or_else(|| buffer.fs_path.take());
     if let Some(path) = resolved {
-        let f = std::fs::OpenOptions::new()
+        match std::fs::OpenOptions::new()
             .create(true)
             .truncate(true)
             .write(true)
-            .open(&path)?;
-        buffer.buf.write_to(f)?;
-        buffer.fs_path = Some(path);
+            .open(&path)
+        {
+            Ok(f) => {
+                if let Err(e) = buffer.buf.write_to(f) {
+                    warn!(path = %path.display(), error = %e, "rope write_to failed");
+                    return Err(e);
+                }
+                info!(path = %path.display(), bytes = buffer.buf.len_bytes(), "wrote buffer to disk");
+                buffer.fs_path = Some(path);
+            }
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "could not open file for write");
+                return Err(e);
+            }
+        }
+    } else {
+        debug!("write: no path on buffer -> no-op");
     }
     Ok(())
 }

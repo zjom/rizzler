@@ -14,6 +14,7 @@ use crossterm::event::KeyEvent as CTKeyEvent;
 use rizz::RizzError;
 use rizz::runtime::Value;
 use rizz_ringbuffer::RingBuffer;
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use rizz_actions::{Action, KeymapRegistry};
 use rizz_core::{EditingMode, Position};
@@ -198,6 +199,12 @@ impl State {
         let cwd = std::env::current_dir()?;
         let workdir = resolve_workdir(config.edit_path.as_deref(), &cwd);
         let config_dir = config.config_dir.unwrap_or_else(default_config_dir);
+        info!(
+            workdir = %workdir.display(),
+            config_dir = %config_dir.display(),
+            edit_path = ?config.edit_path,
+            "constructing State"
+        );
 
         let mut state = Self {
             bufs: BufferList::new(),
@@ -235,8 +242,10 @@ impl State {
     /// template if missing, and eval it with the lisp basedir pointed at the
     /// config dir (so `(open "foo.rz")` inside `init.rz` resolves relative to
     /// it). Restores the basedir to the editor workdir on the way out.
+    #[instrument(skip(self), fields(config_dir = %self.config_dir.display()))]
     fn run_init_script(&mut self) -> anyhow::Result<()> {
         let src = load_init_script(&self.config_dir)?;
+        debug!(bytes = src.len(), "loaded init.rz");
         let config_dir = self.config_dir.clone();
         self.lisp.as_mut().unwrap().set_basedir(config_dir.as_ref());
         let eval_result = self.eval_lisp_script(&src);
@@ -244,6 +253,11 @@ impl State {
             .as_mut()
             .unwrap()
             .set_basedir(self.workdir.as_ref());
+        if let Err(e) = &eval_result {
+            error!(error = %e, "init.rz eval failed");
+        } else {
+            info!("init.rz eval ok");
+        }
         eval_result.map_err(init_eval_err)
     }
 
@@ -279,16 +293,34 @@ impl State {
         result
     }
 
+    #[instrument(skip(self, src), fields(bytes = src.len()))]
     pub fn eval_lisp(&mut self, src: &str) -> Result<Rc<Value>, RizzError> {
-        self.with_lisp(|lisp| lisp.eval_str(src))
+        trace!(src = %src.chars().take(200).collect::<String>(), "eval_lisp src");
+        let r = self.with_lisp(|lisp| lisp.eval_str(src));
+        match &r {
+            Ok(v) => trace!(result = %v.display(), "eval_lisp ok"),
+            Err(e) => warn!(error = %e, "eval_lisp err"),
+        }
+        r
     }
 
+    #[instrument(skip(self, form))]
     pub fn eval_lisp_value(&mut self, form: Rc<Value>) -> Result<Rc<Value>, RizzError> {
-        self.with_lisp(|lisp| lisp.eval_value(form))
+        trace!(form = %form.display(), "eval_lisp_value form");
+        let r = self.with_lisp(|lisp| lisp.eval_value(form));
+        if let Err(e) = &r {
+            warn!(error = %e, "eval_lisp_value err");
+        }
+        r
     }
 
+    #[instrument(skip(self, src), fields(bytes = src.len()))]
     pub fn eval_lisp_script(&mut self, src: &str) -> Result<(), RizzError> {
-        self.with_lisp(|lisp| lisp.eval_script(src))
+        let r = self.with_lisp(|lisp| lisp.eval_script(src));
+        if let Err(e) = &r {
+            warn!(error = %e, "eval_lisp_script err");
+        }
+        r
     }
 
     pub fn focused_buf(&self) -> &Buffer {
@@ -314,6 +346,7 @@ impl State {
     }
 
     pub fn record_message(&mut self, msg: &str) {
+        info!(target: "rizz::journal", msg, "journal: message");
         self.journal.record_message(msg);
     }
 
@@ -322,6 +355,7 @@ impl State {
     }
 
     pub fn record_cmd(&mut self, msg: &str) {
+        info!(target: "rizz::journal", cmd = msg, "journal: command");
         self.journal.record_command(msg);
     }
     pub fn cmd_history(&self) -> impl Iterator<Item = &Rc<str>> {
@@ -331,8 +365,10 @@ impl State {
     /// Bridge from Rust-internal failure paths (eval errors, render-callback
     /// errors) to the lisp-side `notify` fn defined in `default.lisp`.
     pub fn notify_via_lisp(&mut self, msg: &str) {
+        debug!(msg, "notify_via_lisp");
         let src = format!("(notify {})", crate::lisp::quote_for_lisp(msg));
         if let Err(e) = self.eval_lisp(&src) {
+            error!(error = %e, "notify-via-lisp failed");
             self.record_message(&format!("notify failed: {e}"));
         }
     }
@@ -344,6 +380,11 @@ impl State {
     /// Push a popup onto the overlay stack. Creates a backing buffer of
     /// kind [`BufferKind::Popup`], appends it to `self.bufs`, and returns
     /// its bufno.
+    #[instrument(skip(self, spec), fields(
+        modes = ?spec.mode_layers,
+        buffer_mode = ?spec.buffer_mode,
+        wrap_mode = ?spec.wrap_mode,
+    ))]
     pub fn open_popup(&mut self, spec: PopupSpec) -> usize {
         let mut buf = Buffer::popup();
         if let Some(text) = spec.initial_text {
@@ -366,14 +407,18 @@ impl State {
             show_cursor: spec.show_cursor,
         });
         self.refresh_viewport();
+        info!(bufno, "popup opened");
         bufno
     }
 
+    #[instrument(skip(self))]
     pub fn close_popup(&mut self) -> bool {
         let Some(popup) = self.popups.pop() else {
+            trace!("no popup to close");
             return false;
         };
         let removed = popup.bufno;
+        info!(bufno = removed, "closing popup");
         if removed < self.bufs.len() && self.bufs[removed].kind() == BufferKind::Popup {
             self.bufs.remove(removed);
             self.popups.shift_bufnos_after_removal(removed);
@@ -410,6 +455,32 @@ impl State {
         cmd
     }
 
+    /// The substring of the minibuffer token that ends at the cursor — what
+    /// candidate completions must `starts_with`. Always operates on the
+    /// minibuffer regardless of which buffer currently has focus, since a
+    /// completion popup may have stolen focus while the cmd line is still up.
+    pub fn minibuffer_completion_prefix(&self) -> String {
+        let mb = self.bufs.minibuffer();
+        crate::completion::prefix_at(&mb.text(), mb.abs_col())
+    }
+
+    /// Replace the token under the minibuffer cursor with `replacement`,
+    /// landing the cursor at the end of the inserted text. Falls back to a
+    /// plain insert when the cursor isn't on a token. Operates on the
+    /// minibuffer directly — see [`Self::minibuffer_completion_prefix`].
+    pub fn apply_minibuffer_completion(&mut self, replacement: &str) {
+        let (text, cursor) = {
+            let mb = self.bufs.minibuffer();
+            (mb.text(), mb.abs_col())
+        };
+        let (start, end) = crate::completion::token_bounds(&text, cursor);
+        let mb = self.bufs.minibuffer_mut();
+        if start < end {
+            mb.delete_range(start, end);
+        }
+        mb.insert_many(replacement);
+    }
+
     pub fn workdir(&self) -> Rc<Path> {
         self.workdir.clone()
     }
@@ -420,6 +491,10 @@ impl State {
     /// so a bad call doesn't silently break future buffer loads. After
     /// registration, any already-open buffer whose extension matches and has
     /// no highlighter attached gets one installed in place.
+    #[instrument(skip(self, highlights_query), fields(
+        library_path = %library_path.display(),
+        query_bytes = highlights_query.len(),
+    ))]
     pub fn register_grammar(
         &mut self,
         name: &str,
@@ -427,8 +502,14 @@ impl State {
         library_path: &Path,
         highlights_query: &str,
     ) -> Result<(), rizz_ts::TsError> {
-        self.ts_registry
-            .register(name, extensions, library_path, highlights_query)?;
+        if let Err(e) = self
+            .ts_registry
+            .register(name, extensions, library_path, highlights_query)
+        {
+            error!(error = %e, "register_grammar failed");
+            return Err(e);
+        }
+        info!(?extensions, "registered grammar");
         for i in 0..self.bufs.len() {
             self.install_highlighter(i);
         }
@@ -516,6 +597,7 @@ impl State {
         self.quit
     }
 
+    #[instrument(skip(self), fields(code = ?event.code, mods = ?event.modifiers))]
     pub fn handle_key_event(&mut self, event: CTKeyEvent) -> io::Result<()> {
         let now = Instant::now();
         let timedout = self
@@ -526,14 +608,19 @@ impl State {
 
         let ke: KeyEvent = event.into();
         if self.count_prefix.feed(ke, self.count_eligible()) {
+            trace!(?ke, "key consumed by count prefix");
             self.refresh_viewport();
             return self.render();
         }
 
         let modes = self.bufs[self.focused_bufno()].active_modes();
+        debug!(?ke, ?modes, timedout, "resolving key against keymap");
         if let Some(action) = self.keymap.resolve(&modes, ke, timedout) {
+            debug!(actions = action.len(), "keymap resolved -> applying actions");
             self.apply(&action)?;
             self.count_prefix.clear();
+        } else {
+            trace!(?ke, "no action resolved (descent or miss)");
         }
         self.refresh_viewport();
         let focused = self.focused_bufno();
@@ -557,18 +644,27 @@ impl State {
         )
     }
 
+    #[instrument(skip(self, actions), fields(count = actions.len()))]
     pub fn apply(&mut self, actions: &[Rc<Action>]) -> io::Result<()> {
         for action in actions {
+            trace!(action = ?action.as_ref(), "applying action");
             match action.as_ref() {
                 Action::Noop => {}
-                Action::Quit => self.quit = true,
-                Action::SetMode(m) => self.set_mode(*m),
+                Action::Quit => {
+                    info!("Action::Quit -> set quit flag");
+                    self.quit = true;
+                }
+                Action::SetMode(m) => {
+                    debug!(mode = ?m, "Action::SetMode");
+                    self.set_mode(*m);
+                }
                 Action::InsertChar(c) => {
                     let f = self.focused_bufno();
                     self.bufs[f].insert_char(*c);
                 }
                 Action::InsertMany(s) => {
                     let f = self.focused_bufno();
+                    debug!(bufno = f, len = s.len(), "Action::InsertMany");
                     self.bufs[f].insert_many(s);
                 }
                 Action::InsertNewline => {
@@ -589,50 +685,85 @@ impl State {
                 }
                 Action::DeleteLine { count } => {
                     let f = self.focused_bufno();
+                    debug!(bufno = f, count, "Action::DeleteLine");
                     self.bufs[f].delete_line(*count);
                 }
                 Action::DeleteMotion { kind, count } => {
                     let f = self.focused_bufno();
+                    debug!(bufno = f, ?kind, count, "Action::DeleteMotion");
                     self.bufs[f].delete_motion(*kind, *count);
                 }
                 Action::Undo => {
                     let f = self.focused_bufno();
+                    debug!(bufno = f, "Action::Undo");
                     self.bufs[f].undo();
                 }
                 Action::Redo => {
                     let f = self.focused_bufno();
+                    debug!(bufno = f, "Action::Redo");
                     self.bufs[f].redo();
                 }
                 Action::MoveCursor { kind, count } => {
                     let f = self.focused_bufno();
+                    trace!(bufno = f, ?kind, count, "Action::MoveCursor");
                     self.bufs[f].move_cursor_n(*kind, *count);
                 }
-                Action::CommandCancel => self.exit_minibuffer(),
+                Action::CommandCancel => {
+                    debug!("Action::CommandCancel");
+                    self.exit_minibuffer();
+                }
                 Action::BufCreate { path, set_active } => {
+                    info!(?path, set_active, "Action::BufCreate");
                     self.create_buf(*set_active, path.clone())?;
                 }
                 Action::BufDelete => {
                     let editor = self.windows.focused_bufno();
+                    info!(bufno = editor, "Action::BufDelete");
                     self.delete_buf(editor);
                 }
-                Action::BufNext => self.cycle_buffer(CycleDir::Next),
-                Action::BufPrev => self.cycle_buffer(CycleDir::Prev),
+                Action::BufNext => {
+                    debug!("Action::BufNext");
+                    self.cycle_buffer(CycleDir::Next);
+                }
+                Action::BufPrev => {
+                    debug!("Action::BufPrev");
+                    self.cycle_buffer(CycleDir::Prev);
+                }
                 Action::BufEdit(path) => {
+                    info!(?path, "Action::BufEdit");
                     self.edit_buf(path.clone())?;
                 }
-                Action::BufWrite(path) => self.write_buf(path.clone())?,
-                Action::WindowSplit(dir) => self.window_split(*dir),
-                Action::WindowClose => self.window_close(),
-                Action::WindowFocusNext => self.windows.focus_next(),
-                Action::WindowFocus(d) => self.windows.focus_dir(*d),
+                Action::BufWrite(path) => {
+                    info!(?path, "Action::BufWrite");
+                    self.write_buf(path.clone())?;
+                }
+                Action::WindowSplit(dir) => {
+                    info!(?dir, "Action::WindowSplit");
+                    self.window_split(*dir);
+                }
+                Action::WindowClose => {
+                    info!("Action::WindowClose");
+                    self.window_close();
+                }
+                Action::WindowFocusNext => {
+                    debug!("Action::WindowFocusNext");
+                    self.windows.focus_next();
+                }
+                Action::WindowFocus(d) => {
+                    debug!(dir = ?d, "Action::WindowFocus");
+                    self.windows.focus_dir(*d);
+                }
                 Action::KeymapSet { mode, lhs, rhs } => {
+                    debug!(%mode, keys = lhs.len(), "Action::KeymapSet");
                     self.keymap.set(mode.clone(), lhs, rhs.clone());
                 }
                 Action::KeymapRemove { mode, lhs } => {
+                    debug!(%mode, keys = lhs.len(), "Action::KeymapRemove");
                     self.keymap.remove(mode.clone(), lhs);
                 }
                 Action::EvalLisp(form) => {
                     if let Err(e) = self.eval_lisp_value(form.clone()) {
+                        warn!(error = %e, "Action::EvalLisp failed -> notifying");
                         self.notify_via_lisp(&e.to_string());
                     }
                 }
@@ -643,16 +774,19 @@ impl State {
 
     fn set_mode(&mut self, mode: EditingMode) {
         if mode == EditingMode::Command {
+            debug!("entering command mode (focusing minibuffer)");
             self.bufs.minibuffer_mut().clear();
             self.bufs.minibuffer_mut().set_mode(EditingMode::Command);
             self.focus_minibuffer = true;
         } else {
             let f = self.focused_bufno();
+            debug!(bufno = f, ?mode, "setting buffer mode");
             self.bufs[f].set_mode(mode);
         }
     }
 
     fn exit_minibuffer(&mut self) {
+        debug!("exiting minibuffer");
         self.bufs.minibuffer_mut().clear();
         self.bufs.minibuffer_mut().set_mode(EditingMode::Command);
         self.focus_minibuffer = false;
@@ -660,6 +794,7 @@ impl State {
         self.bufs[editor].set_mode(EditingMode::Normal);
     }
 
+    #[instrument(skip(self))]
     fn create_buf(&mut self, set_active: bool, path: Option<Rc<Path>>) -> io::Result<usize> {
         let buf = match path {
             Some(p) => self.bufs.buffer_for_path(p),
@@ -670,15 +805,21 @@ impl State {
         if set_active {
             self.windows.set_focused_bufno(bufno);
         }
+        info!(bufno, set_active, "created buffer");
         Ok(bufno)
     }
 
+    #[instrument(skip(self))]
     fn edit_buf(&mut self, path: Rc<Path>) -> io::Result<usize> {
         let idx = match self.bufs.find_by_path(&path) {
-            Some(idx) => idx,
+            Some(idx) => {
+                debug!(bufno = idx, "edit_buf: reusing existing buffer");
+                idx
+            }
             None => {
                 let pushed = self.bufs.push(buffer_io::with_path(path));
                 self.install_highlighter(pushed);
+                info!(bufno = pushed, "edit_buf: created new buffer");
                 pushed
             }
         };
@@ -686,17 +827,27 @@ impl State {
         Ok(idx)
     }
 
+    #[instrument(skip(self))]
     fn write_buf(&mut self, path: Option<Rc<Path>>) -> io::Result<()> {
         let editor = self.windows.focused_bufno();
-        buffer_io::write(&mut self.bufs[editor], path)
+        let r = buffer_io::write(&mut self.bufs[editor], path);
+        if let Err(e) = &r {
+            error!(bufno = editor, error = %e, "write_buf failed");
+        } else {
+            info!(bufno = editor, "wrote buffer");
+        }
+        r
     }
 
+    #[instrument(skip(self))]
     fn delete_buf(&mut self, bufno: usize) {
         if bufno >= self.bufs.len() || self.bufs[bufno].kind() == BufferKind::Minibuffer {
+            warn!(bufno, "delete_buf: skipping (oob or minibuffer)");
             return;
         }
 
         if self.bufs.file_buf_count() == 1 {
+            debug!(bufno, "delete_buf: last file buffer -> resetting");
             self.bufs.reset(bufno);
             self.windows.for_each_leaf_mut(|b| *b = bufno);
             return;
@@ -712,24 +863,31 @@ impl State {
             }
         });
         self.popups.shift_bufnos_after_removal(bufno);
+        info!(bufno, "deleted buffer");
     }
 
     fn window_split(&mut self, dir: SplitDir) {
         self.bufs.push(Buffer::new());
         let new_bufno = self.bufs.len() - 1;
         self.windows.split(dir, new_bufno);
+        info!(?dir, new_bufno, "window split");
     }
 
     fn window_close(&mut self) {
+        debug!("closing focused window");
         self.windows.close_focused();
     }
 
     fn cycle_buffer(&mut self, dir: CycleDir) {
         if let Some(i) = self.bufs.cycle(self.windows.focused_bufno(), dir) {
+            debug!(?dir, bufno = i, "cycled buffer");
             self.windows.set_focused_bufno(i);
+        } else {
+            trace!(?dir, "cycle_buffer: no cycle (single file buffer)");
         }
     }
 
+    #[instrument(skip(self))]
     pub fn render(&mut self) -> io::Result<()> {
         let focused = self.focused_bufno();
         let (frame, error_msg) = self.precompute_frame();
@@ -752,7 +910,11 @@ impl State {
             popups: self.popups.as_slice(),
         };
         let result = self.renderer.render(snap, &frame);
+        if let Err(e) = &result {
+            error!(error = %e, "renderer.render failed");
+        }
         if let Some(msg) = error_msg {
+            warn!(msg = %msg, "precompute reported an error -> notifying via lisp");
             self.notify_via_lisp(&msg);
         }
         result
@@ -760,6 +922,7 @@ impl State {
 
     /// Run every region under an `EditorGuard`, packing the results into a
     /// `RenderedFrame` the renderer can consume without ever touching lisp.
+    #[instrument(skip(self))]
     pub fn precompute_frame(&mut self) -> (RenderedFrame, Option<String>) {
         // Bring every buffer's syntax tree up to date before precompute walks
         // them immutably. `refresh_highlight` short-circuits when no language

@@ -438,6 +438,10 @@ impl State {
                     let f = self.focused_bufno();
                     self.bufs[f].insert_char(*c);
                 }
+                Action::InsertMany(s) => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].insert_many(s);
+                }
                 Action::InsertNewline => {
                     let f = self.focused_bufno();
                     self.bufs[f].insert_char('\n');

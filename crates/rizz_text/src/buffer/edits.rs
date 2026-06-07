@@ -51,6 +51,40 @@ impl Buffer {
         self.insert_batch_end = Some(cidx + 1);
     }
 
+    /// Insert `s` at the cursor as a single tracked edit. Unlike repeated
+    /// [`Buffer::insert_char`] calls — which coalesce into an insert batch
+    /// only while the cursor stays put — this records one delta up front, so
+    /// the whole string undoes/redoes as a single step regardless of newlines.
+    pub fn insert_many(&mut self, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        self.close_insert_batch();
+        let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;
+        let abs_before = self.abs_pos();
+
+        self.buf.insert(cidx, s);
+        self.invalidate_wrap_cache();
+
+        let newlines = s.chars().filter(|&c| c == '\n').count();
+        let (new_row, new_col) = if newlines > 0 {
+            let tail = s.chars().rev().take_while(|&c| c != '\n').count();
+            (abs_before.row + newlines, tail)
+        } else {
+            (abs_before.row, abs_before.col + s.chars().count())
+        };
+        self.land_cursor_at(new_row, new_col);
+        let abs_after = self.abs_pos();
+
+        self.changetree.track_change(Delta {
+            at: cidx,
+            removed: Rc::from(""),
+            inserted: Rc::from(s),
+            cursor_before: (abs_before.row, abs_before.col),
+            cursor_after: (abs_after.row, abs_after.col),
+        });
+    }
+
     pub fn delete_char(&mut self) {
         self.close_insert_batch();
         let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;

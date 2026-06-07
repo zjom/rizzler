@@ -200,11 +200,7 @@ fn builtins() -> Env {
     });
     b!("insert", 1, |args, env| {
         let s = as_str(&args[0], "insert")?;
-        with_editor_mut(|st| {
-            for c in s.chars() {
-                let _ = st.apply(&[Rc::new(Action::InsertChar(c))]);
-            }
-        });
+        apply(Action::InsertMany(s))?;
         ok_unit(env)
     });
     b!("delete-char", 0, |_, env| {

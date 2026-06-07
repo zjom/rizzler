@@ -21,6 +21,8 @@ pub enum Action {
     SetMode(EditingMode),
 
     InsertChar(char),
+    /// Insert a whole string at the cursor as a single undo step.
+    InsertMany(Rc<str>),
     InsertNewline,
     DeleteChar,
     DeleteCharAt(Position<usize>),

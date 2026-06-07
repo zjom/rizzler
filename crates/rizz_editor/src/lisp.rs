@@ -104,7 +104,7 @@ pub struct LispRuntime(Runtime);
 
 impl LispRuntime {
     pub fn new() -> Self {
-        let env = rizz::prelude::install(builtins());
+        let env = builtins().union(rizz::prelude::env());
         Self(Runtime::with_env(env))
     }
 

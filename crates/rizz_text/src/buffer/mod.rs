@@ -982,4 +982,115 @@ mod tests {
         assert!(!s.delete_selection());
         assert_eq!(s.buf.to_string(), "hello");
     }
+
+    // ---- delete_line (vim `dd`) --------------------------------------
+
+    #[test]
+    fn delete_line_removes_current_line_and_newline() {
+        let mut s = mk("abc\ndef\nghi");
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        assert!(s.delete_line(1));
+        assert_eq!(s.buf.to_string(), "abc\nghi");
+        assert_eq!(cur_row(&s), 1);
+        assert_eq!(cur_col(&s), 0);
+    }
+
+    #[test]
+    fn delete_line_on_last_line_eats_preceding_newline() {
+        let mut s = mk("abc\ndef");
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        assert!(s.delete_line(1));
+        assert_eq!(s.buf.to_string(), "abc");
+        assert_eq!(cur_row(&s), 0);
+    }
+
+    #[test]
+    fn delete_line_count_deletes_multiple_lines() {
+        let mut s = mk("a\nb\nc\nd\ne");
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        assert!(s.delete_line(3));
+        assert_eq!(s.buf.to_string(), "a\ne");
+        assert_eq!(cur_row(&s), 1);
+    }
+
+    #[test]
+    fn delete_line_undo_restores_text() {
+        let mut s = mk("abc\ndef\nghi");
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.delete_line(1);
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "abc\ndef\nghi");
+    }
+
+    // ---- delete_motion (vim `d<motion>`) -----------------------------
+
+    #[test]
+    fn delete_motion_word_forward_drops_through_whitespace() {
+        let mut s = mk("hello world");
+        assert!(s.delete_motion(MoveKind::WordForward, 1));
+        assert_eq!(s.buf.to_string(), "world");
+    }
+
+    #[test]
+    fn delete_motion_word_end_includes_target_char() {
+        let mut s = mk("hello world");
+        assert!(s.delete_motion(MoveKind::WordEnd, 1));
+        assert_eq!(s.buf.to_string(), " world");
+    }
+
+    #[test]
+    fn delete_motion_line_end_stops_before_newline() {
+        let mut s = mk("hello world\nrest");
+        s.cursor_pos = Position::<u16>::new(6, 0);
+        assert!(s.delete_motion(MoveKind::LineEnd, 1));
+        assert_eq!(s.buf.to_string(), "hello \nrest");
+    }
+
+    #[test]
+    fn delete_motion_left_deletes_char_to_the_left() {
+        let mut s = mk("abc");
+        s.cursor_pos = Position::<u16>::new(1, 0);
+        assert!(s.delete_motion(MoveKind::Relative(Position::new(-1, 0)), 1));
+        assert_eq!(s.buf.to_string(), "bc");
+    }
+
+    #[test]
+    fn delete_motion_right_at_end_of_line_deletes_last_char() {
+        let mut s = mk("abc");
+        s.cursor_pos = Position::<u16>::new(2, 0);
+        assert!(s.delete_motion(MoveKind::Relative(Position::new(1, 0)), 1));
+        assert_eq!(s.buf.to_string(), "ab");
+    }
+
+    #[test]
+    fn delete_motion_word_back_deletes_to_prev_word_start() {
+        let mut s = mk("hello world");
+        s.cursor_pos = Position::<u16>::new(6, 0);
+        assert!(s.delete_motion(MoveKind::WordStart, 1));
+        assert_eq!(s.buf.to_string(), "world");
+    }
+
+    #[test]
+    fn delete_motion_down_is_linewise() {
+        let mut s = mk("a\nb\nc\nd\ne");
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        assert!(s.delete_motion(MoveKind::Relative(Position::new(0, 1)), 1));
+        assert_eq!(s.buf.to_string(), "a\nd\ne");
+    }
+
+    #[test]
+    fn delete_motion_file_end_is_linewise() {
+        let mut s = mk("a\nb\nc\nd\ne");
+        s.cursor_pos = Position::<u16>::new(0, 2);
+        assert!(s.delete_motion(MoveKind::FileEnd, 1));
+        assert_eq!(s.buf.to_string(), "a\nb");
+    }
+
+    #[test]
+    fn delete_motion_undo_restores_text() {
+        let mut s = mk("hello world");
+        s.delete_motion(MoveKind::WordForward, 1);
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "hello world");
+    }
 }

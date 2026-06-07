@@ -212,6 +212,19 @@ fn builtins() -> Env {
         apply(Action::DeleteSelection)?;
         ok_unit(env)
     });
+    b!("delete-line", 0, |_, env| {
+        let count = with_editor_mut(|st| st.pending_count_or_one());
+        apply(Action::DeleteLine { count })?;
+        ok_unit(env)
+    });
+    b!("delete-motion", 1, |args, env| {
+        let sym = as_ident(&args[0], "delete-motion")?;
+        let kind =
+            MoveKind::from_str(&sym).map_err(|_| unknown_variant("delete-motion", &sym))?;
+        let count = with_editor_mut(|st| st.pending_count_or_one());
+        apply(Action::DeleteMotion { kind, count })?;
+        ok_unit(env)
+    });
     b!("newline", 0, |_, env| {
         apply(Action::InsertNewline)?;
         ok_unit(env)

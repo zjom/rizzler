@@ -9,7 +9,7 @@ use std::rc::Rc;
 use rizz_changetree::Delta;
 use rizz_core::{EditingMode, Position};
 
-use super::Buffer;
+use super::{Buffer, MoveKind};
 
 impl Buffer {
     pub fn insert_char(&mut self, c: char) {
@@ -197,6 +197,92 @@ impl Buffer {
         changed
     }
 
+    /// Delete `count` whole lines starting at the cursor (vim `dd` / `Ndd`).
+    /// Eats the preceding newline when the deletion runs to EOF so the file
+    /// doesn't gain a dangling trailing blank line. Returns whether anything
+    /// changed.
+    pub fn delete_line(&mut self, count: u32) -> bool {
+        self.close_insert_batch();
+        let n = count.max(1) as usize;
+        let start_row = self.abs_row();
+        let last_line = self.buf.len_lines().saturating_sub(1);
+        if start_row > last_line {
+            return false;
+        }
+        let end_row = (start_row + n - 1).min(last_line);
+        self.delete_line_range(start_row, end_row)
+    }
+
+    /// Delete from the cursor to `kind`'s target (vim `d<motion>`). Vertical
+    /// or whole-file motions delete entire lines (`dj`, `dk`, `dgg`, `dG`,
+    /// `dLineNum`); everything else deletes the spanned character range.
+    /// Returns whether anything changed.
+    pub fn delete_motion(&mut self, kind: MoveKind, count: u32) -> bool {
+        self.close_insert_batch();
+
+        let start_pos = self.abs_pos();
+        let start_cidx = self.buf.line_to_char(start_pos.row) + start_pos.col;
+
+        // Run the motion under Insert-mode clamping so it can land past the
+        // last char of a line — needed for `dl` at end-of-line, `d$`, etc.
+        let saved_cursor = self.cursor_pos;
+        let saved_file = self.file_pos;
+        let saved_mode = self.mode;
+        self.mode = EditingMode::Insert;
+        self.move_cursor_n(kind, count);
+        let end_pos = self.abs_pos();
+        let end_cidx = self.buf.line_to_char(end_pos.row) + end_pos.col;
+        self.cursor_pos = saved_cursor;
+        self.file_pos = saved_file;
+        self.mode = saved_mode;
+
+        if is_linewise_motion(kind) {
+            let lo = start_pos.row.min(end_pos.row);
+            let hi = start_pos.row.max(end_pos.row);
+            return self.delete_line_range(lo, hi);
+        }
+
+        let len = self.buf.len_chars();
+        let (s, e) = if start_cidx <= end_cidx {
+            let end = if is_inclusive_motion(kind) {
+                (end_cidx + 1).min(len)
+            } else {
+                end_cidx
+            };
+            (start_cidx, end)
+        } else {
+            (end_cidx, start_cidx)
+        };
+
+        self.delete_range(s, e)
+    }
+
+    /// Delete every line in `[lo_row..=hi_row]`, joining the surrounding
+    /// content so no blank line is left behind. Used by `dd` and by `dj`/`dk`
+    /// linewise motions.
+    fn delete_line_range(&mut self, lo_row: usize, hi_row: usize) -> bool {
+        let total = self.buf.len_lines();
+        if total == 0 {
+            return false;
+        }
+        let last_line = total.saturating_sub(1);
+        let hi_row = hi_row.min(last_line);
+        let lo_row = lo_row.min(last_line);
+
+        let (s, e) = if hi_row >= last_line && lo_row > 0 {
+            (self.buf.line_to_char(lo_row) - 1, self.buf.len_chars())
+        } else {
+            let s = self.buf.line_to_char(lo_row);
+            let e = if hi_row + 1 >= total {
+                self.buf.len_chars()
+            } else {
+                self.buf.line_to_char(hi_row + 1)
+            };
+            (s, e)
+        };
+        self.delete_range(s, e)
+    }
+
     pub fn delete_char_at(&mut self, Position { col, row }: Position<usize>) {
         self.close_insert_batch();
         if row >= self.buf.len_lines() {
@@ -270,4 +356,23 @@ impl Buffer {
         self.cursor_pos.col = (col - self.file_pos.col) as u16;
         self.clamp_cursor();
     }
+}
+
+/// Motions whose `d<motion>` form deletes whole lines instead of a char
+/// range — vertical relatives, file ends, and explicit line jumps.
+fn is_linewise_motion(kind: MoveKind) -> bool {
+    use MoveKind as MK;
+    match kind {
+        MK::FileStart | MK::FileEnd | MK::LineNum(_) => true,
+        MK::Relative(p) if p.row != 0 => true,
+        _ => false,
+    }
+}
+
+/// Motions where vim treats the target character as part of the operated
+/// range — only the end-of-word family. Forward motions otherwise stop just
+/// before the target, and backward motions naturally include the target by
+/// virtue of the `[end, start)` slice.
+fn is_inclusive_motion(kind: MoveKind) -> bool {
+    matches!(kind, MoveKind::WordEnd | MoveKind::BigWordEnd)
 }

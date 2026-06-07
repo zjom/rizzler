@@ -454,6 +454,14 @@ impl State {
                     let f = self.focused_bufno();
                     self.bufs[f].delete_selection();
                 }
+                Action::DeleteLine { count } => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].delete_line(*count);
+                }
+                Action::DeleteMotion { kind, count } => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].delete_motion(*kind, *count);
+                }
                 Action::Undo => {
                     let f = self.focused_bufno();
                     self.bufs[f].undo();

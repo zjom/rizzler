@@ -27,6 +27,17 @@ pub enum Action {
     /// Remove the focused buffer's current visual selection and return to
     /// Normal mode. No-op when the buffer is not in a visual mode.
     DeleteSelection,
+    /// Vim `dd` — delete `count` whole lines starting at the cursor.
+    DeleteLine {
+        count: u32,
+    },
+    /// Vim `d<motion>` — delete from the cursor to the destination of
+    /// running `kind` `count` times. Vertical / file-jump motions delete
+    /// whole lines; everything else deletes a character range.
+    DeleteMotion {
+        kind: MoveKind,
+        count: u32,
+    },
     /// Reverse the focused buffer's most recent tracked edit.
     Undo,
     /// Re-apply the most recently undone edit on the focused buffer.

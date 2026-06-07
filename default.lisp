@@ -26,6 +26,28 @@
                            (move-cursor 'up)))
 
 (map 'normal "x"      '(delete-char-at (cursor-col) (cursor-line)))
+
+;; vim `dd` deletes the current line; `d<motion>` deletes from the cursor to
+;; the motion's destination. Each combo is its own keymap entry — the trie
+;; resolves them as multi-key sequences.
+(map 'normal "dd"     '(delete-line))
+(map 'normal "dh"     '(delete-motion 'left))
+(map 'normal "dl"     '(delete-motion 'right))
+(map 'normal "dj"     '(delete-motion 'down))
+(map 'normal "dk"     '(delete-motion 'up))
+(map 'normal "d0"     '(delete-motion 'line-start))
+(map 'normal "d^"     '(delete-motion 'line-first-non-blank))
+(map 'normal "d$"     '(delete-motion 'line-end))
+(map 'normal "dw"     '(delete-motion 'word-forward))
+(map 'normal "dW"     '(delete-motion 'big-word-forward))
+(map 'normal "db"     '(delete-motion 'word-start))
+(map 'normal "dB"     '(delete-motion 'big-word-start))
+(map 'normal "de"     '(delete-motion 'word-end))
+(map 'normal "dE"     '(delete-motion 'big-word-end))
+(map 'normal "dge"    '(delete-motion 'word-back-end))
+(map 'normal "dgE"    '(delete-motion 'big-word-back-end))
+(map 'normal "dgg"    '(delete-motion 'file-start))
+(map 'normal "dG"     '(delete-motion 'file-end))
 (map 'normal "u"      '(undo))
 (map 'normal "<c-r>"  '(redo))
 (map 'normal "j"      '(move-cursor 'down))

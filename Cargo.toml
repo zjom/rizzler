@@ -12,7 +12,7 @@ members = ["crates/*"]
 
 [workspace.dependencies]
 anyhow = "1.0.102"
-rizz = "0.6.1"
+rizz = "0.6.2"
 
 [dependencies]
 anyhow = { workspace = true }

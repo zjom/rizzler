@@ -147,7 +147,24 @@ impl Default for LispRuntime {
 fn builtins() -> Env {
     let mut entries: Vec<(&str, NativeFn)> = Vec::new();
     let mut aliases: Vec<(&str, &str)> = Vec::new();
-    macro_rules! b {
+    // Default builtin: reads env (for `with_editor_mut` callbacks that need
+    // theme/state lookups, or just to thread sibling bindings) but does not
+    // extend it. The closure returns just the value.
+    macro_rules! be {
+        ($name:expr, $nargs:expr, $f:expr) => {
+            entries.push(($name, NativeFn::with_env($name.into(), $nargs, $f)));
+        };
+        ($name:expr, $nargs:expr, $f:expr, $doc:expr) => {
+            entries.push((
+                $name,
+                NativeFn::with_env($name.into(), $nargs, $f).with_doc(Rc::from($doc)),
+            ));
+        };
+    }
+    // Env-extending builtin. The closure returns `(value, new_env)` and the
+    // returned env is threaded back into the caller's scope by the runtime —
+    // use this only for forms that genuinely introduce top-level bindings.
+    macro_rules! bi {
         ($name:expr, $nargs:expr, $f:expr) => {
             entries.push(($name, NativeFn::impure($name.into(), $nargs, $f)));
         };
@@ -165,164 +182,164 @@ fn builtins() -> Env {
     }
 
     // mode + lifecycle
-    b!(
+    be!(
         "quit",
         0,
-        |_, env| {
+        |_, _| {
             apply(Action::Quit)?;
-            ok_unit(env)
+            Ok(unit())
         },
         "(quit/0)\nexit the application"
     );
     alias!("q" => "quit");
 
-    b!(
+    be!(
         "set-mode",
         1,
-        |args, env| {
+        |args, _| {
             let mode = parse_mode_ident(&args[0])?;
             apply(Action::SetMode(mode))?;
-            ok_unit(env)
+            Ok(unit())
         },
         "(set-mode/1)\nchange the editing mode.\naccepts one of: 'normal | 'insert | 'visual | 'visual-line | 'visual-block | 'command"
     );
 
     // text editing
-    b!("insert-char", 1, |args, env| {
+    be!("insert-char", 1, |args, _| {
         let s = as_str(&args[0], "insert-char")?;
         let c = s
             .chars()
             .next()
             .ok_or_else(|| str_mismatch("insert-char", "non-empty str"))?;
         apply(Action::InsertChar(c))?;
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("insert", 1, |args, env| {
+    be!("insert", 1, |args, _| {
         let s = as_str(&args[0], "insert")?;
         apply(Action::InsertMany(s))?;
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("delete-char", 0, |_, env| {
+    be!("delete-char", 0, |_, _| {
         apply(Action::DeleteChar)?;
-        ok_unit(env)
+        Ok(unit())
     });
 
-    b!("delete-char-at", 2, |args, env| {
+    be!("delete-char-at", 2, |args, _| {
         let col = as_usize(&args[0], "delete-char-at")?;
         let row = as_usize(&args[1], "delete-char-at")?;
         apply(Action::DeleteCharAt(Position::new(col, row)))?;
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("delete-selection", 0, |_, env| {
+    be!("delete-selection", 0, |_, _| {
         apply(Action::DeleteSelection)?;
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("delete-line", 0, |_, env| {
+    be!("delete-line", 0, |_, _| {
         let count = with_editor_mut(|st| st.pending_count_or_one());
         apply(Action::DeleteLine { count })?;
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("delete-motion", 1, |args, env| {
+    be!("delete-motion", 1, |args, _| {
         let sym = as_ident(&args[0], "delete-motion")?;
         let kind = MoveKind::from_str(&sym).map_err(|_| unknown_variant("delete-motion", &sym))?;
         let count = with_editor_mut(|st| st.pending_count_or_one());
         apply(Action::DeleteMotion { kind, count })?;
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("newline", 0, |_, env| {
+    be!("newline", 0, |_, _| {
         apply(Action::InsertNewline)?;
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("undo", 0, |_, env| {
+    be!("undo", 0, |_, _| {
         apply(Action::Undo)?;
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("redo", 0, |_, env| {
+    be!("redo", 0, |_, _| {
         apply(Action::Redo)?;
-        ok_unit(env)
+        Ok(unit())
     });
 
     // cursor movement
-    b!("move-cursor", 1, |args, env| {
+    be!("move-cursor", 1, |args, _| {
         let sym = as_ident(&args[0], "move-cursor")?;
         let mk = MoveKind::from_str(&sym).map_err(|_| unknown_variant("move-cursor", &sym))?;
         let count = with_editor_mut(|st| st.pending_count_or_one());
         apply(Action::MoveCursor { kind: mk, count })?;
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("move-cursor-rel", 2, |args, env| {
+    be!("move-cursor-rel", 2, |args, _| {
         let dx = as_int(&args[0], "move-cursor-rel")?;
         let dy = as_int(&args[1], "move-cursor-rel")?;
         let mk = MoveKind::Relative(Position::new(dx as i16, dy as i16));
         let count = with_editor_mut(|st| st.pending_count_or_one());
         apply(Action::MoveCursor { kind: mk, count })?;
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("line", 1, |args, env| {
+    be!("line", 1, |args, _| {
         let n = as_int(&args[0], "line")?;
         let mk = MoveKind::LineNum(n.max(0) as usize);
         apply(Action::MoveCursor { kind: mk, count: 1 })?;
-        ok_unit(env)
+        Ok(unit())
     });
 
     // buffer management
-    b!("buf-create", 0, |_, env| {
+    be!("buf-create", 0, |_, _| {
         apply(Action::BufCreate {
             set_active: true,
             path: None,
         })?;
-        ok_unit(env)
+        Ok(unit())
     });
     alias!("bc" => "buf-create");
-    b!("buf-delete", 0, |_, env| {
+    be!("buf-delete", 0, |_, _| {
         apply(Action::BufDelete)?;
-        ok_unit(env)
+        Ok(unit())
     });
     alias!("bd" => "buf-delete");
-    b!("buf-next", 0, |_, env| {
+    be!("buf-next", 0, |_, _| {
         apply(Action::BufNext)?;
-        ok_unit(env)
+        Ok(unit())
     });
     alias!("bn" => "buf-next");
-    b!("buf-prev", 0, |_, env| {
+    be!("buf-prev", 0, |_, _| {
         apply(Action::BufPrev)?;
-        ok_unit(env)
+        Ok(unit())
     });
     alias!("bp" => "buf-prev");
-    b!("edit", 1, |args, env| {
+    be!("edit", 1, |args, _| {
         let p = as_str(&args[0], "edit")?;
         let path = std::path::PathBuf::from_str(&p).unwrap();
         apply(Action::BufEdit(path.into()))?;
-        ok_unit(env)
+        Ok(unit())
     });
     alias!("e" => "edit");
-    b!("write", 0, |_, env| {
+    be!("write", 0, |_, _| {
         apply(Action::BufWrite(None))?;
-        ok_unit(env)
+        Ok(unit())
     });
     alias!("w" => "write");
-    b!("write-as", 1, |args, env| {
+    be!("write-as", 1, |args, _| {
         let p = as_str(&args[0], "write-as")?;
         let path = std::path::PathBuf::from_str(&p).unwrap();
         apply(Action::BufWrite(Some(path.into())))?;
-        ok_unit(env)
+        Ok(unit())
     });
 
     // windows
-    b!("window-split", 1, |args, env| {
+    be!("window-split", 1, |args, _| {
         let dir = match as_ident(&args[0], "window-split")?.as_ref() {
             "vertical" | "v" => SplitDir::Vertical,
             "horizontal" | "h" => SplitDir::Horizontal,
             other => return Err(unknown_variant("window-split", other)),
         };
         apply(Action::WindowSplit(dir))?;
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("window-close", 0, |_, env| {
+    be!("window-close", 0, |_, _| {
         apply(Action::WindowClose)?;
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("window-focus", 1, |args, env| {
+    be!("window-focus", 1, |args, _| {
         let dir = match as_ident(&args[0], "window-focus")?.as_ref() {
             "left" => FocusDir::Left,
             "right" => FocusDir::Right,
@@ -331,15 +348,15 @@ fn builtins() -> Env {
             other => return Err(unknown_variant("window-focus", other)),
         };
         apply(Action::WindowFocus(dir))?;
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("window-focus-next", 0, |_, env| {
+    be!("window-focus-next", 0, |_, _| {
         apply(Action::WindowFocusNext)?;
-        ok_unit(env)
+        Ok(unit())
     });
 
     // keymap
-    b!("keymap-set", 3, |args, env| {
+    be!("keymap-set", 3, |args, _| {
         let mode = parse_mode_name(&args[0])?;
         let lhs_str = as_str(&args[1], "keymap-set")?;
         let lhs =
@@ -350,19 +367,19 @@ fn builtins() -> Env {
             lhs,
             rhs: Rc::new(Action::EvalLisp(form)),
         })?;
-        ok_unit(env)
+        Ok(unit())
     });
 
-    b!("keymap-remove", 2, |args, env| {
+    be!("keymap-remove", 2, |args, _| {
         let mode = parse_mode_name(&args[0])?;
         let lhs_str = as_str(&args[1], "keymap-remove")?;
         let lhs = KeyEvent::parse_sequence(&lhs_str)
             .map_err(|e| str_mismatch_msg("keymap-remove", &e))?;
         apply(Action::KeymapRemove { mode, lhs })?;
-        ok_unit(env)
+        Ok(unit())
     });
 
-    b!("keymap-get", 1, |args, env| {
+    be!("keymap-get", 1, |args, _| {
         let mode = parse_mode_name(&args[0])?;
         let mappings = with_editor_mut(|st| {
             st.keymap_registry()
@@ -386,11 +403,11 @@ fn builtins() -> Env {
                 })
                 .collect::<Vec<Value>>()
         });
-        Ok((Rc::new(mappings.into()), env.clone()))
+        Ok(Rc::new(mappings.into()))
     });
 
     // minibuffer flow
-    b!("command-submit", 0, |_, env| {
+    bi!("command-submit", 0, |_, env| {
         let cmd = with_editor_mut(|st| st.take_minibuffer_command());
         with_editor_mut(|st| st.record_cmd(&cmd));
         let src = wrap_shell_style(&cmd);
@@ -403,17 +420,17 @@ fn builtins() -> Env {
             }
             Err(e) => {
                 notify_via_env(&e.to_string(), env);
-                ok_unit(env)
+                Ok((unit(), env.clone()))
             }
         }
     });
 
-    b!("command-cancel", 0, |_, env| {
+    be!("command-cancel", 0, |_, _| {
         apply(Action::CommandCancel)?;
-        ok_unit(env)
+        Ok(unit())
     });
 
-    b!("evaluate", 0, |_, env| {
+    bi!("evaluate", 0, |_, env| {
         let src = {
             with_editor_mut(|st| {
                 st.focused_buf()
@@ -430,35 +447,35 @@ fn builtins() -> Env {
             }
             Err(e) => {
                 notify_via_env(&e.to_string(), env);
-                ok_unit(env)
+                Ok((unit(), env.clone()))
             }
         }
     });
 
-    b!("notify-record", 1, |args, env| {
+    be!("notify-record", 1, |args, _| {
         let s = as_str(&args[0], "notify-record")?;
         with_editor_mut(|st| st.record_message(&s));
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("message-history", 0, |_, env| {
+    be!("message-history", 0, |_, _| {
         let msgs: Vector<Rc<Value>> = with_editor_mut(|st| {
             st.message_history()
                 .map(|s| Rc::new(Value::Str(s.clone())))
                 .collect()
         });
-        Ok((Rc::new(Value::Array(msgs)), env.clone()))
+        Ok(Rc::new(Value::Array(msgs)))
     });
-    b!("command-history", 0, |_, env| {
+    be!("command-history", 0, |_, _| {
         let cmds: Vector<Rc<Value>> = with_editor_mut(|st| {
             st.cmd_history()
                 .map(|s| Rc::new(Value::Str(s.clone())))
                 .collect()
         });
-        Ok((Rc::new(Value::Array(cmds)), env.clone()))
+        Ok(Rc::new(Value::Array(cmds)))
     });
 
     // popups
-    b!("popup-open", 1, |args, env| {
+    be!("popup-open", 1, |args, _| {
         let widget = with_editor_mut(|st| {
             let theme = st.theme().borrow();
             parse_widget(&args[0], &theme)
@@ -468,35 +485,35 @@ fn builtins() -> Env {
             parse_popup_options(opts, &mut spec)?;
         }
         let bufno = with_editor_mut(|st| st.open_popup(spec));
-        Ok((Rc::new(Value::Int(bufno as i64)), env.clone()))
+        Ok(Rc::new(Value::Int(bufno as i64)))
     });
-    b!("popup-close", 0, |_, env| {
+    be!("popup-close", 0, |_, _| {
         let closed = with_editor_mut(|st| st.close_popup());
-        Ok((Rc::new(Value::Int(closed as i64)), env.clone()))
+        Ok(Rc::new(Value::Int(closed as i64)))
     });
-    b!("popup-bufno", 0, |_, env| {
+    be!("popup-bufno", 0, |_, _| {
         let v = with_editor_mut(|st| {
             st.top_popup_bufno()
                 .map(|n| Value::Int(n as i64))
                 .unwrap_or(Value::Unit)
         });
-        Ok((Rc::new(v), env.clone()))
+        Ok(Rc::new(v))
     });
-    b!("minibuffer-bufno", 0, |_, env| {
+    be!("minibuffer-bufno", 0, |_, _| {
         let n = with_editor_mut(|st| st.minibuffer_bufno());
-        Ok((Rc::new(Value::Int(n as i64)), env.clone()))
+        Ok(Rc::new(Value::Int(n as i64)))
     });
-    b!("popup-mode", 0, |_, env| {
+    be!("popup-mode", 0, |_, _| {
         let v = with_editor_mut(|st| st.top_popup_mode().map(Value::Str).unwrap_or(Value::Unit));
-        Ok((Rc::new(v), env.clone()))
+        Ok(Rc::new(v))
     });
-    b!("popup?", 0, |_, env| {
+    be!("popup?", 0, |_, _| {
         let v = with_editor_mut(|st| st.has_popup());
-        Ok((Rc::new(Value::Int(v as i64)), env.clone()))
+        Ok(Rc::new(Value::Int(v as i64)))
     });
 
     // queries
-    b!("buf-text-set", 2, |args, env| {
+    be!("buf-text-set", 2, |args, _| {
         let bufno = as_int(&args[0], "buf-text-set")?;
         if bufno < 0 {
             return Err(RuntimeError::type_mismatch(
@@ -514,67 +531,67 @@ fn builtins() -> Env {
         }
 
         with_editor_mut(|st| st.set_buffer_contents(bufno as usize, &text));
-        Ok((unit(), env.clone()))
+        Ok(unit())
     });
 
-    b!("buf-text", 0, |_, env| {
+    be!("buf-text", 0, |_, _| {
         let s = with_editor_mut(|st| st.focused_buf().text());
-        Ok((Rc::new(s.into()), env.clone()))
+        Ok(Rc::new(s.into()))
     });
 
-    b!("buf-no", 0, |_, env| {
+    be!("buf-no", 0, |_, _| {
         let s = with_editor_mut(|st| st.focused_bufno());
-        Ok((Rc::new(Value::Int(s as i64)), env.clone()))
+        Ok(Rc::new(Value::Int(s as i64)))
     });
 
-    b!("buf-path", 0, |_, env| {
+    be!("buf-path", 0, |_, _| {
         let v: Value = with_editor_mut(|st| st.focused_buf().fs_path())
             .map(|p| p.to_string_lossy().as_ref().into())
             .map(|s: Rc<str>| Value::Str(s))
             .unwrap_or(Value::Unit);
-        Ok((Rc::new(v), env.clone()))
+        Ok(Rc::new(v))
     });
     alias!("%"=>"buf-path");
 
-    b!("selected-text", 0, |_, env| {
+    be!("selected-text", 0, |_, _| {
         let s = with_editor_mut(|st| st.focused_buf().selected_text());
-        Ok((Rc::new(s.into()), env.clone()))
+        Ok(Rc::new(s.into()))
     });
 
-    b!("cursor-line", 0, |_, env| {
+    be!("cursor-line", 0, |_, _| {
         let n = with_editor_mut(|st| st.focused_buf().abs_row() as i64);
-        Ok((Rc::new(n.into()), env.clone()))
+        Ok(Rc::new(n.into()))
     });
 
-    b!("line-at", 1, |args, env| {
+    be!("line-at", 1, |args, _| {
         let idx = as_usize(&args[0], "line-at")?;
         let s = with_editor_mut(|st| st.focused_buf().lines_at(idx).next().map(|s| s.to_string()));
-        Ok((Rc::new(s.into()), env.clone()))
+        Ok(Rc::new(s.into()))
     });
 
-    b!("cursor-col", 0, |_, env| {
+    be!("cursor-col", 0, |_, _| {
         let n = with_editor_mut(|st| st.focused_buf().abs_col() as i64);
-        Ok((Rc::new(n.into()), env.clone()))
+        Ok(Rc::new(n.into()))
     });
 
     // wrap settings
-    b!("buffer-wrap", 0, |args, env| {
+    be!("buffer-wrap", 0, |args, _| {
         if let Some(arg) = args.first() {
             let sym = as_ident_or_str(arg, "buffer-wrap")?;
             let m = WrapMode::from_str(&sym).ok_or_else(|| unknown_variant("buffer-wrap", &sym))?;
             with_editor_mut(|st| st.focused_buf_mut().set_wrap_mode(m));
-            ok_unit(env)
+            Ok(unit())
         } else {
             let s: Rc<str> = with_editor_mut(|st| st.focused_buf().wrap_mode().as_str().into());
-            Ok((Rc::new(Value::Str(s)), env.clone()))
+            Ok(Rc::new(Value::Str(s)))
         }
     });
-    b!("buffer-wrap?", 0, |_, env| {
+    be!("buffer-wrap?", 0, |_, _| {
         let s: Rc<str> = with_editor_mut(|st| st.focused_buf().wrap_mode().as_str().into());
-        Ok((Rc::new(Value::Str(s)), env.clone()))
+        Ok(Rc::new(Value::Str(s)))
     });
 
-    b!("buffer-wrap-column", 1, |args, env| {
+    be!("buffer-wrap-column", 1, |args, _| {
         let n = as_int(&args[0], "buffer-wrap-column")?;
         let col = if n <= 0 {
             None
@@ -582,17 +599,17 @@ fn builtins() -> Env {
             Some(n.min(u16::MAX as i64) as u16)
         };
         with_editor_mut(|st| st.focused_buf_mut().set_wrap_column(col));
-        ok_unit(env)
+        Ok(unit())
     });
 
-    b!("buffer-breakindent", 1, |args, env| {
+    be!("buffer-breakindent", 1, |args, _| {
         let n = as_int(&args[0], "buffer-breakindent")?;
         with_editor_mut(|st| st.focused_buf_mut().set_breakindent(n != 0));
-        ok_unit(env)
+        Ok(unit())
     });
 
     // styling: faces + colors
-    b!("face-define", 2, |args, env| {
+    be!("face-define", 2, |args, _| {
         let name = as_ident_or_str(&args[0], "face-define")?;
         let style = with_editor_mut(|st| {
             let theme = st.theme().borrow();
@@ -601,9 +618,9 @@ fn builtins() -> Env {
         with_editor_mut(|st| {
             st.theme().borrow_mut().insert(name, style);
         });
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("face-of", 1, |args, env| {
+    be!("face-of", 1, |args, _| {
         let name = as_ident_or_str(&args[0], "face-of")?;
         let v = with_editor_mut(|st| {
             st.theme()
@@ -612,15 +629,15 @@ fn builtins() -> Env {
                 .map(style_to_value)
                 .unwrap_or_else(|| Rc::new(Value::Unit))
         });
-        Ok((v, env.clone()))
+        Ok(v)
     });
-    b!("rgb", 3, |args, env| {
+    be!("rgb", 3, |args, _| {
         let r = as_u8(&args[0], "rgb")?;
         let g = as_u8(&args[1], "rgb")?;
         let b = as_u8(&args[2], "rgb")?;
-        Ok((rgb_value(r, g, b), env.clone()))
+        Ok(rgb_value(r, g, b))
     });
-    b!("span", 2, |args, env| {
+    be!("span", 2, |args, _| {
         let text = as_str(&args[0], "span")?;
         let style_val = with_editor_mut(|st| {
             let theme = st.theme().borrow();
@@ -634,19 +651,19 @@ fn builtins() -> Env {
         if !style_val.is_unit() {
             m.insert(Rc::new(Value::Str("style".into())), style_val);
         }
-        Ok((Rc::new(Value::Map(m)), env.clone()))
+        Ok(Rc::new(Value::Map(m)))
     });
 
     // ---- widget tree builtins ---------------------------------------------
 
-    b!("set-frame", 1, |args, env| {
+    be!("set-frame", 1, |args, _| {
         let v = args[0].clone();
         let opt = if v.is_unit() { None } else { Some(v) };
         with_editor_mut(|st| st.set_frame_fn(opt));
-        ok_unit(env)
+        Ok(unit())
     });
 
-    b!("text", 2, |args, env| {
+    be!("text", 2, |args, _| {
         let text = as_str(&args[0], "text")?;
         let style_val = with_editor_mut(|st| {
             let theme = st.theme().borrow();
@@ -657,59 +674,47 @@ fn builtins() -> Env {
         if !style_val.is_unit() {
             span.insert(strkey("style"), style_val);
         }
-        Ok((Rc::new(Value::Map(span)), env.clone()))
+        Ok(Rc::new(Value::Map(span)))
     });
 
-    b!("line", 1, |args, env| {
+    be!("line", 1, |args, _| {
         let spans: Vec<Rc<Value>> = value_iter(&args[0]).collect();
-        Ok((widget_line(spans), env.clone()))
+        Ok(widget_line(spans))
     });
 
-    b!("right-align", 1, |args, env| {
-        Ok((widget_set_align(args[0].clone(), "right"), env.clone()))
+    be!("right-align", 1, |args, _| {
+        Ok(widget_set_align(args[0].clone(), "right"))
     });
-    b!("center-align", 1, |args, env| {
-        Ok((widget_set_align(args[0].clone(), "center"), env.clone()))
-    });
-
-    b!("vstack", 1, |args, env| {
-        Ok((widget_stack("vertical", &args[0]), env.clone()))
-    });
-    b!("hstack", 1, |args, env| {
-        Ok((widget_stack("horizontal", &args[0]), env.clone()))
+    be!("center-align", 1, |args, _| {
+        Ok(widget_set_align(args[0].clone(), "center"))
     });
 
-    b!("cells", 2, |args, env| {
+    be!("vstack", 1, |args, _| {
+        Ok(widget_stack("vertical", &args[0]))
+    });
+    be!("hstack", 1, |args, _| {
+        Ok(widget_stack("horizontal", &args[0]))
+    });
+
+    be!("cells", 2, |args, _| {
         let n = as_int(&args[0], "cells")?.max(0).min(u16::MAX as i64);
-        Ok((
-            widget_constrained("cells", n, 1, args[1].clone()),
-            env.clone(),
-        ))
+        Ok(widget_constrained("cells", n, 1, args[1].clone()))
     });
-    b!("min-cells", 2, |args, env| {
+    be!("min-cells", 2, |args, _| {
         let n = as_int(&args[0], "min-cells")?.max(0).min(u16::MAX as i64);
-        Ok((
-            widget_constrained("min", n, 1, args[1].clone()),
-            env.clone(),
-        ))
+        Ok(widget_constrained("min", n, 1, args[1].clone()))
     });
-    b!("fill", 2, |args, env| {
+    be!("fill", 2, |args, _| {
         let n = as_int(&args[0], "fill")?.max(0).min(u16::MAX as i64);
-        Ok((
-            widget_constrained("fill", n, 1, args[1].clone()),
-            env.clone(),
-        ))
+        Ok(widget_constrained("fill", n, 1, args[1].clone()))
     });
-    b!("frac", 3, |args, env| {
+    be!("frac", 3, |args, _| {
         let n = as_int(&args[0], "frac")?.max(0).min(u16::MAX as i64);
         let m = as_int(&args[1], "frac")?.max(1).min(u16::MAX as i64);
-        Ok((
-            widget_constrained("frac", n, m, args[2].clone()),
-            env.clone(),
-        ))
+        Ok(widget_constrained("frac", n, m, args[2].clone()))
     });
 
-    b!("block", 2, |args, env| {
+    be!("block", 2, |args, _| {
         let child = args[0].clone();
         let props = match &*args[1] {
             Value::Map(m) => m.clone(),
@@ -730,10 +735,10 @@ fn builtins() -> Env {
                 m.insert(strkey(k), v.clone());
             }
         }
-        Ok((Rc::new(Value::Map(m)), env.clone()))
+        Ok(Rc::new(Value::Map(m)))
     });
 
-    b!("editor-tree", 1, |args, env| {
+    be!("editor-tree", 1, |args, _| {
         let props = match &*args[0] {
             Value::Map(m) => m.clone(),
             Value::Unit => ImHashMap::new(),
@@ -753,33 +758,33 @@ fn builtins() -> Env {
         if let Some(w) = props.get(&strkey("gutter-width")) {
             m.insert(strkey("gutter-width"), w.clone());
         }
-        Ok((Rc::new(Value::Map(m)), env.clone()))
+        Ok(Rc::new(Value::Map(m)))
     });
 
-    b!("minibuffer", 0, |_, env| {
+    be!("minibuffer", 0, |_, _| {
         let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
         m.insert(strkey("type"), Rc::new(Value::Str("minibuffer".into())));
-        Ok((Rc::new(Value::Map(m)), env.clone()))
+        Ok(Rc::new(Value::Map(m)))
     });
 
-    b!("empty", 0, |_, env| {
+    be!("empty", 0, |_, _| {
         let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
         m.insert(strkey("type"), Rc::new(Value::Str("empty".into())));
-        Ok((Rc::new(Value::Map(m)), env.clone()))
+        Ok(Rc::new(Value::Map(m)))
     });
 
-    b!("buffer-view", 0, |args, env| {
+    be!("buffer-view", 0, |args, _| {
         let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
         m.insert(strkey("type"), Rc::new(Value::Str("buffer-view".into())));
         if let Some(arg) = args.first() {
             let bufno = as_int(arg, "buffer-view.bufno")?.max(0);
             m.insert(strkey("bufno"), Rc::new(Value::Int(bufno)));
         }
-        Ok((Rc::new(Value::Map(m)), env.clone()))
+        Ok(Rc::new(Value::Map(m)))
     });
 
     // text properties + overlays
-    b!("put-text-property", 5, |args, env| {
+    be!("put-text-property", 5, |args, _| {
         let start_row = as_usize(&args[0], "put-text-property")?;
         let start_col = as_usize(&args[1], "put-text-property")?;
         let end_row = as_usize(&args[2], "put-text-property")?;
@@ -797,16 +802,16 @@ fn builtins() -> Env {
                     pad_to_width: false,
                 });
         });
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("clear-text-properties", 0, |_, env| {
+    be!("clear-text-properties", 0, |_, _| {
         with_editor_mut(|st| {
             st.focused_buf_mut().props_mut().clear_text_properties();
         });
-        ok_unit(env)
+        Ok(unit())
     });
 
-    b!("overlay-create", 5, |args, env| {
+    be!("overlay-create", 5, |args, _| {
         let start_row = as_usize(&args[0], "overlay-create")?;
         let start_col = as_usize(&args[1], "overlay-create")?;
         let end_row = as_usize(&args[2], "overlay-create")?;
@@ -822,9 +827,9 @@ fn builtins() -> Env {
                 pad_to_width: false,
             })
         });
-        Ok((Rc::new(Value::Int(id.0 as i64)), env.clone()))
+        Ok(Rc::new(Value::Int(id.0 as i64)))
     });
-    b!("overlay-put", 3, |args, env| {
+    be!("overlay-put", 3, |args, _| {
         let id = rizz_text::OverlayId(as_int(&args[0], "overlay-put")? as u64);
         let key = as_ident_or_str(&args[1], "overlay-put")?;
         enum Update {
@@ -856,46 +861,46 @@ fn builtins() -> Env {
                 }
             }
         });
-        ok_unit(env)
+        Ok(unit())
     });
-    b!("overlay-delete", 1, |args, env| {
+    be!("overlay-delete", 1, |args, _| {
         let id = rizz_text::OverlayId(as_int(&args[0], "overlay-delete")? as u64);
         with_editor_mut(|st| {
             st.focused_buf_mut().props_mut().delete_overlay(id);
         });
-        ok_unit(env)
+        Ok(unit())
     });
 
-    b!("focused-mode", 0, |_, env| {
+    be!("focused-mode", 0, |_, _| {
         let s = with_editor_mut(|st| st.focused_buf().mode().as_str());
-        Ok((Rc::new(Value::Str(s.into())), env.clone()))
+        Ok(Rc::new(Value::Str(s.into())))
     });
 
-    b!("last-key", 0, |_, env| {
+    be!("last-key", 0, |_, _| {
         let s = with_editor_mut(|st| {
             st.last_key()
                 .map(|k| k.code.to_string())
                 .unwrap_or_else(|| "None".to_string())
         });
-        Ok((Rc::new(Value::Str(s.into())), env.clone()))
+        Ok(Rc::new(Value::Str(s.into())))
     });
 
-    b!("workdir", 0, |_, env| {
+    be!("workdir", 0, |_, _| {
         let d: Value = with_editor_mut(|st| st.workdir()).as_ref().into();
-        Ok((Rc::new(d), env.clone()))
+        Ok(Rc::new(d))
     });
 
-    b!(
+    be!(
         "config-dir",
         0,
-        |_, env| {
+        |_, _| {
             let d: Value = with_editor_mut(|st| st.config_dir()).as_ref().into();
-            Ok((Rc::new(d), env.clone()))
+            Ok(Rc::new(d))
         },
         "(config-dir/0)\nreturn the directory holding init.rz"
     );
 
-    b!(
+    bi!(
         "reload-config",
         0,
         |_, env| {
@@ -913,41 +918,41 @@ fn builtins() -> Env {
         "(reload-config/0)\nre-read init.rz from the config dir and evaluate it"
     );
 
-    b!("fs-canonicalize", 1, |args, env| {
+    be!("fs-canonicalize", 1, |args, _| {
         let s = as_str(&args[0], "fs-canonicalize")?;
         let path = std::fs::canonicalize(s.as_ref())?;
-        Ok((Rc::new(path.into()), env.clone()))
+        Ok(Rc::new(path.into()))
     });
 
-    b!("fs-parent", 1, |args, env| {
+    be!("fs-parent", 1, |args, _| {
         let s = as_str(&args[0], "fs-parent")?;
         let path = PathBuf::from_str(&s).unwrap();
         if let Some(parent) = path.parent()
             && parent.exists()
         {
-            Ok((Rc::new(parent.into()), env.clone()))
+            Ok(Rc::new(parent.into()))
         } else {
-            Ok((unit(), env.clone()))
+            Ok(unit())
         }
     });
 
-    b!("fs-readdir", 1, |args, env| {
+    be!("fs-readdir", 1, |args, _| {
         let path = as_str(&args[0], "fs-readdir")?;
         let dirs = std::fs::read_dir(path.as_ref())?
             .map(|res| res.map(|e| e.path().into()))
             .collect::<Result<Vector<Value>, std::io::Error>>()?;
-        Ok((Rc::new(dirs.into()), env.clone()))
+        Ok(Rc::new(dirs.into()))
     });
     alias!("ls"=>"fs-readdir");
     alias!("readdir"=>"fs-readdir");
 
-    b!("fs-isdir", 1, |args, env| {
+    be!("fs-isdir", 1, |args, _| {
         let path = as_str(&args[0], "fs-isdir")?;
         let meta = std::fs::metadata(path.as_ref())?;
-        Ok((Rc::new(meta.is_dir().into()), env.clone()))
+        Ok(Rc::new(meta.is_dir().into()))
     });
 
-    b!("exec", 1, |args, env| {
+    be!("exec", 1, |args, _| {
         let cmd_args = as_str(&args[0], "exec")?;
         let mut prog = cmd_args.split_ascii_whitespace();
 
@@ -977,7 +982,7 @@ fn builtins() -> Env {
             (Rc::new("stderr".into()), Rc::new(stderr.into())),
             (Rc::new("code".into()), Rc::new(code)),
         ]);
-        Ok((Rc::new(Value::Map(m)), env.clone()))
+        Ok(Rc::new(Value::Map(m)))
     });
 
     // Runtime-loaded tree-sitter grammars. `(grammar-register name lib-path
@@ -985,10 +990,10 @@ fn builtins() -> Env {
     // `tree_sitter_<name>` factory, compiles the highlights query, and
     // indexes it by `ext` — either a single string like `".py"` or an array
     // of strings.
-    b!(
+    be!(
         "grammar-register",
         4,
-        |args, env| {
+        |args, _| {
             let name = as_str(&args[0], "grammar-register")?;
             let lib_path = as_str(&args[1], "grammar-register")?;
             let scm_path = as_str(&args[2], "grammar-register")?;
@@ -997,7 +1002,7 @@ fn builtins() -> Env {
             let lib_path = std::path::PathBuf::from(lib_path.as_ref());
             with_editor_mut(|st| st.register_grammar(&name, &exts, &lib_path, &highlights))
                 .map_err(|e| RuntimeError::Other(anyhow!("{e}")))?;
-            ok_unit(env)
+            Ok(unit())
         },
         "(grammar-register/4)\nregister a tree-sitter grammar loaded from a shared library (.so/.dylib/.dll).\nthe library must export `tree_sitter_<name>` — Neovim's `parser/*.so` ABI.\nargs: <name str> <library-path str> <highlights.scm path str> <ext: str | [str ...]>"
     );
@@ -1016,10 +1021,6 @@ fn builtins() -> Env {
 
 fn unit() -> Rc<Value> {
     Rc::new(Value::Unit)
-}
-
-fn ok_unit(env: &Env) -> Result<(Rc<Value>, Env), RuntimeError> {
-    Ok((unit(), env.clone()))
 }
 
 /// Run `action` against the live `State`. Errors when called from inside a
@@ -1568,5 +1569,18 @@ mod tests {
         .unwrap();
         let b = s.focused_buf();
         assert_eq!(b.cursor_pos().row as i64 + b.file_pos().row as i64, 1);
+    }
+
+    /// Regression for the NativeFn::Impure semantics: `evaluate` runs the
+    /// focused buffer's text and the bindings it introduces must persist into
+    /// subsequent evals.
+    #[test]
+    fn evaluate_persists_top_level_bindings() {
+        let mut s = test_state();
+        s.eval_lisp("(set-mode 'insert)").unwrap();
+        s.eval_lisp(r#"(insert "(let regress-val 42)")"#).unwrap();
+        s.eval_lisp("(evaluate)").unwrap();
+        let v = s.eval_lisp("regress-val").unwrap();
+        assert_eq!(*v, Value::Int(42));
     }
 }

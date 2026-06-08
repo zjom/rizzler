@@ -141,7 +141,11 @@ impl KeymapRegistry {
             }
         }
         trace!(?key, ?modes, "keymap miss across all modes");
-        if actions.is_empty() { None } else { Some(actions) }
+        if actions.is_empty() {
+            None
+        } else {
+            Some(actions)
+        }
     }
 
     /// If the descending key would have inserted as text in `mode` (via

@@ -185,9 +185,7 @@ example:
             let n = n_raw.max(0).min(u16::MAX as i64);
             let m = m_raw.max(1).min(u16::MAX as i64);
             match kind_str {
-                "cells" | "min" | "fill" | "frac" => {
-                    Ok(widget_constrained(kind_str, n, m, child))
-                }
+                "cells" | "min" | "fill" | "frac" => Ok(widget_constrained(kind_str, n, m, child)),
                 other => Err(RuntimeError::TypeMismatch {
                     name: "w-size.kind".into(),
                     expected: "'cells | 'min | 'fill | 'frac".into(),

@@ -166,10 +166,7 @@ impl WindowTree {
         if let Some(leaf) = self.node_at_mut(&path) {
             *leaf = Window::Split {
                 dir,
-                children: vec![
-                    (1, Window::leaf(current_buf)),
-                    (1, Window::leaf(new_buf)),
-                ],
+                children: vec![(1, Window::leaf(current_buf)), (1, Window::leaf(new_buf))],
             };
         }
         self.focused.push(1);
@@ -283,7 +280,7 @@ impl WindowTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use slotmap::{KeyData, Key};
+    use slotmap::{Key, KeyData};
 
     fn bid(n: u64) -> BufferId {
         BufferId::from(KeyData::from_ffi(n))

@@ -142,7 +142,7 @@ fn walk(
             cur,
             ctx,
         ),
-        Widget::EditorTree { .. } => walk_editor_tree(area, snap, fd, f, cur),
+        Widget::EditorTree => walk_editor_tree(area, snap, fd, f, cur),
         Widget::Minibuffer => {
             MinibufferLine::render(area, snap, f);
             if let Some(pos) = MinibufferLine::cursor(area, snap) {

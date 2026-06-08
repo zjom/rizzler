@@ -3,9 +3,7 @@ use std::rc::Rc;
 use anyhow::anyhow;
 use rizz::runtime::{RuntimeError, Value};
 
-use super::super::helpers::{
-    Builtins, as_int, as_usize, buf_id_from_int, buf_id_to_int, unit,
-};
+use super::super::helpers::{Builtins, as_int, as_usize, buf_id_from_int, buf_id_to_int, unit};
 use super::super::with_editor_mut;
 
 pub(super) fn register(b: &mut Builtins) {

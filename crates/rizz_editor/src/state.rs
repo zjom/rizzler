@@ -125,6 +125,11 @@ pub struct State {
     theme: ThemeCell,
     /// Lisp callable that builds the frame's widget tree each render.
     frame_fn: Option<Rc<Value>>,
+    /// Lisp callable + width that renders the per-row gutter for every file
+    /// buffer. `None` = no gutter. Set by the lisp `set-gutter` builtin and
+    /// consumed by the precompute pass.
+    gutter_fn: Option<Rc<Value>>,
+    gutter_width: u16,
     workdir: Rc<Path>,
     /// Directory holding `init.rz`. Stored so `reload-config` (and any
     /// future config-path query from lisp) can locate the script after init.
@@ -224,6 +229,8 @@ impl State {
             lisp: Some(LispRuntime::new()),
             theme: ThemeCell::default(),
             frame_fn: None,
+            gutter_fn: None,
+            gutter_width: 0,
             workdir: workdir.into(),
             config_dir: config_dir.into(),
             ts_registry: TsRegistry::new(),
@@ -346,6 +353,22 @@ impl State {
 
     pub fn get_frame_fn(&self) -> Option<&Rc<Value>> {
         self.frame_fn.as_ref()
+    }
+
+    /// Install the per-frame gutter callback. `width` is the column count
+    /// reserved on the left of every file buffer; pass `None` for `f` to
+    /// disable the gutter entirely (`width` is then ignored).
+    pub fn set_gutter(&mut self, f: Option<Rc<Value>>, width: u16) {
+        self.gutter_fn = f;
+        self.gutter_width = width;
+    }
+
+    pub fn gutter_fn(&self) -> Option<&Rc<Value>> {
+        self.gutter_fn.as_ref()
+    }
+
+    pub fn gutter_width(&self) -> u16 {
+        self.gutter_width
     }
 
     pub fn last_key(&self) -> Option<KeyEvent> {
@@ -1009,6 +1032,8 @@ impl State {
             theme: &self.theme,
             minibuffer: self.bufs.minibuffer_id(),
             file_bufs: self.bufs.file_ids(),
+            gutter: self.gutter_fn.as_ref(),
+            gutter_width: self.gutter_width,
             lisp_env: lisp.env(),
         });
 

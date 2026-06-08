@@ -49,11 +49,11 @@ pub enum Widget {
         child: Box<Widget>,
     },
     /// The editor window tree leaf. Renderer expands this into the current
-    /// `WindowTree`'s split layout.
-    EditorTree {
-        gutter_width: u16,
-        gutter: Option<Rc<Value>>,
-    },
+    /// `WindowTree`'s split layout. Gutter content + width are not part of
+    /// this widget any more — they're a state-level setting (see the lisp
+    /// `(set-gutter fn width)` builtin) so the per-buffer treatment doesn't
+    /// have to be encoded in the layout vocabulary.
+    EditorTree,
     /// The minibuffer leaf. Single row.
     Minibuffer,
     /// Render a single buffer into the allocated rect via `EditorView`. When
@@ -124,7 +124,7 @@ pub fn parse_widget(v: &Rc<Value>, theme: &Theme) -> Result<Widget, RuntimeError
                 "stack" => parse_stack(m, theme),
                 "constrained" => parse_constrained(m, theme),
                 "block" => parse_block(m, theme),
-                "editor-tree" => parse_editor_tree(m),
+                "editor-tree" => Ok(Widget::EditorTree),
                 "minibuffer" => Ok(Widget::Minibuffer),
                 "buffer-view" => parse_buffer_view(m),
                 "empty" => Ok(Widget::Empty),
@@ -259,20 +259,6 @@ fn parse_buffer_view(m: &im::HashMap<Rc<Value>, Rc<Value>>) -> Result<Widget, Ru
         .filter(|&n| n > 0)
         .map(|n| BufferId::from(KeyData::from_ffi(n as u64)));
     Ok(Widget::BufferView { buf })
-}
-
-fn parse_editor_tree(m: &im::HashMap<Rc<Value>, Rc<Value>>) -> Result<Widget, RuntimeError> {
-    let gutter_width = m
-        .get(&key("gutter-width"))
-        .and_then(|v| v.as_int())
-        .map(|n| n.max(0).min(u16::MAX as i64) as u16)
-        .unwrap_or(0);
-    let gutter = m.get(&key("gutter")).cloned();
-    let gutter = gutter.filter(|v| !v.is_unit());
-    Ok(Widget::EditorTree {
-        gutter_width,
-        gutter,
-    })
 }
 
 pub fn parse_border(s: &str) -> BorderStyle {

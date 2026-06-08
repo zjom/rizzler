@@ -6,8 +6,8 @@
 //!    only affects the next frame).
 //! 2. Evaluate the user's `set-frame` fn — its return value is parsed into a
 //!    [`Widget`] tree.
-//! 3. For each `EditorTree` node found in the tree, pre-render the gutter
-//!    rows for every editor buffer using the node's `gutter` callback.
+//! 3. For every file buffer, pre-render the gutter rows using the
+//!    state-level gutter callback (set via the `set-gutter` lisp builtin).
 //! 4. Build per-buffer decorator ranges: built-in `base-fg`, selection
 //!    highlight, current-line highlight, plus the buffer's `PropStore`
 //!    (text properties + overlays).
@@ -45,6 +45,11 @@ pub struct PrecomputeInput<'a> {
     /// File buffers (the ones the user can cycle through with `:bn`/`:bp`).
     /// Only these get a gutter; popup-backing buffers don't.
     pub file_bufs: &'a [BufferId],
+    /// Gutter render fn + cell width. `None` means "no gutter" — file buffers
+    /// render without one. Set per-frame from State so a `set-gutter` lisp
+    /// call takes effect the next render.
+    pub gutter: Option<&'a Rc<Value>>,
+    pub gutter_width: u16,
     pub lisp_env: &'a Env,
 }
 
@@ -56,6 +61,8 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
         theme,
         minibuffer,
         file_bufs,
+        gutter,
+        gutter_width,
         lisp_env,
     } = input;
 
@@ -86,8 +93,6 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
         None => default_layout(),
     };
 
-    let (gutter_width, gutter_fn) = find_editor_tree_spec(&root);
-
     let mut per_buf: SecondaryMap<BufferId, RenderedBuffer> = SecondaryMap::new();
     for (id, buf) in bufs.iter() {
         let mut rb = RenderedBuffer::default();
@@ -96,7 +101,7 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
         let is_minibuffer = id == minibuffer;
 
         if is_file && gutter_width > 0 {
-            let g = build_gutter(buf, gutter_width, gutter_fn.as_ref(), &theme_snap, lisp_env);
+            let g = build_gutter(buf, gutter_width, gutter, &theme_snap, lisp_env);
             match g {
                 Ok(g) => rb.gutter = Some(g),
                 Err(e) => record(&mut errors, "gutter", e),
@@ -165,10 +170,7 @@ fn default_layout() -> Widget {
                 kind: ConstraintKind::Min,
                 n: 1,
                 m: 1,
-                child: Box::new(Widget::EditorTree {
-                    gutter_width: 0,
-                    gutter: None,
-                }),
+                child: Box::new(Widget::EditorTree),
             },
             Widget::Constrained {
                 kind: ConstraintKind::Cells,
@@ -177,27 +179,6 @@ fn default_layout() -> Widget {
                 child: Box::new(Widget::Minibuffer),
             },
         ],
-    }
-}
-
-fn find_editor_tree_spec(w: &Widget) -> (u16, Option<Rc<Value>>) {
-    match w {
-        Widget::EditorTree {
-            gutter_width,
-            gutter,
-        } => (*gutter_width, gutter.clone()),
-        Widget::Stack { children, .. } => {
-            for c in children {
-                let (w, f) = find_editor_tree_spec(c);
-                if w > 0 || f.is_some() {
-                    return (w, f);
-                }
-            }
-            (0, None)
-        }
-        Widget::Constrained { child, .. } => find_editor_tree_spec(child),
-        Widget::Block { child, .. } => find_editor_tree_spec(child),
-        _ => (0, None),
     }
 }
 

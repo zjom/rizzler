@@ -519,7 +519,7 @@
 ;;    (w-line [span ...])                — single screen row
 ;;    (w-text "..." 'face)               — shorthand for one span
 ;;    (w-block child {...})              — bordered/titled box
-;;    (w-editor-tree {...})              — the editor window tree leaf
+;;    (w-editor-tree)                    — the editor window tree leaf
 ;;    (w-minibuffer)                     — the minibuffer leaf
 ;;
 ;;  Faces, text properties, and overlays are unchanged from before.
@@ -798,15 +798,13 @@
 ;; different fn hot-swaps the layout. There can be only one frame fn.
 (fn _frame ()
   (w-vstack
-    [(w-min-cells 1
-      (w-editor-tree
-        {"gutter":       _gutter
-         "gutter-width": 5}))
+    [(w-min-cells 1 (w-editor-tree))
      (w-cells (_hint-height) (_hint-bar))
      (w-cells 1 (_status-line))
      (w-cells 1 (w-minibuffer))]))
 
 (set-frame _frame)
+(set-gutter _gutter 5)
 
 ;; ============================================================================
 ;; Notifications and the message log

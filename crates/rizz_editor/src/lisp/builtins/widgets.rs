@@ -57,7 +57,7 @@ the widget tree to render. pass () to clear the installed callback and revert
 to the default empty layout.
 example:
   (fn _frame ()
-    (w-vstack [(w-min-cells 1 (w-editor-tree ()))
+    (w-vstack [(w-min-cells 1 (w-editor-tree))
                (w-cells 1 (w-minibuffer))]))
   (set-frame _frame)
   (set-frame ())   ; clear"#,
@@ -155,7 +155,7 @@ children default to Min(1).
 children is an array of widgets.
 example:
   (w-vstack
-    [(w-min-cells 1 (w-editor-tree ()))
+    [(w-min-cells 1 (w-editor-tree))
      (w-cells 1 (_status-line))
      (w-cells 1 (w-minibuffer))])"#,
     );
@@ -188,7 +188,7 @@ N is clamped to [0, u16::MAX]. the constraint only matters when child sits
 inside an (w-vstack ...) or (w-hstack ...); outside a stack it is ignored.
 example:
   (w-vstack [(w-cells 1 (_status-line))
-             (w-min-cells 1 (w-editor-tree ()))])"#,
+             (w-min-cells 1 (w-editor-tree))])"#,
     );
     b.be_doc(
         "w-min-cells",
@@ -202,7 +202,7 @@ wrap child with a minimum-length constraint of N cells (ratatui Constraint::Min)
 N is clamped to [0, u16::MAX]. use this for a region that should grow to fill
 leftover space after fixed-size siblings claim theirs.
 example:
-  (w-vstack [(w-min-cells 1 (w-editor-tree ()))
+  (w-vstack [(w-min-cells 1 (w-editor-tree))
              (w-cells 1 (w-minibuffer))])"#,
     );
     b.be_doc(
@@ -280,45 +280,53 @@ example:
 
     b.be_doc(
         "w-editor-tree",
-        1,
+        0,
+        |_, _| {
+            let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+            m.insert(strkey("type"), Rc::new(Value::Str("editor-tree".into())));
+            Ok(Rc::new(Value::Map(m)))
+        },
+        r#"(w-editor-tree/0)
+the leaf widget that the renderer expands into the current window tree
+(with all open splits and their buffers). takes no arguments — the gutter
+is configured separately via (set-gutter fn width), since it's a per-
+buffer concern, not a per-layout one.
+example:
+  (w-editor-tree)"#,
+    );
+
+    b.be_doc(
+        "set-gutter",
+        2,
         |args, _| {
-            let props = match &*args[0] {
-                Value::Map(m) => m.clone(),
-                Value::Unit => ImHashMap::new(),
-                _ => {
+            let f = args[0].clone();
+            let width = match args[1].as_int() {
+                Some(n) => n.max(0).min(u16::MAX as i64) as u16,
+                None => {
                     return Err(RuntimeError::type_mismatch(
-                        "w-editor-tree.props",
-                        "map | ()",
-                        &args[0],
+                        "set-gutter.width",
+                        "int",
+                        &args[1],
                     ));
                 }
             };
-            let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
-            m.insert(strkey("type"), Rc::new(Value::Str("editor-tree".into())));
-            if let Some(g) = props.get(&strkey("gutter")) {
-                m.insert(strkey("gutter"), g.clone());
-            }
-            if let Some(w) = props.get(&strkey("gutter-width")) {
-                m.insert(strkey("gutter-width"), w.clone());
-            }
-            Ok(Rc::new(Value::Map(m)))
+            let fn_opt = if f.is_unit() { None } else { Some(f) };
+            with_editor_mut(|st| st.set_gutter(fn_opt, width));
+            Ok(unit())
         },
-        r#"(w-editor-tree/1)
-the leaf widget that the renderer expands into the current window tree
-(with all open splits and their buffers). props is a map (or ()) with optional
-keys:
-  "gutter":       fn called once per visible row to render the gutter. it
-                  receives the file row number (int) or () for rows past EOF,
-                  and must return a widget — typically (w-text ...).
-  "gutter-width": int columns reserved for the gutter (default 0). when the
-                  gutter fn is set, give this enough width for the longest
-                  row label you produce.
+        r#"(set-gutter/2)
+install the per-row gutter callback used by every file buffer. fn is called
+once per visible row with either the file row number (int) or () for rows
+past EOF; it must return a widget — typically (w-text ...). width is the
+number of columns reserved for the gutter on the left of the buffer view.
+pass () for fn to disable the gutter entirely.
 example:
   (fn _gutter (n)
     (if (= n ())
         (w-text "     " "vague.gutter")
         (w-text (str-join [" " (to-str n) " "] "") "vague.gutter")))
-  (w-editor-tree {"gutter": _gutter "gutter-width": 5})"#,
+  (set-gutter _gutter 5)
+  (set-gutter () 0)   ; disable"#,
     );
 
     b.be_doc(
@@ -334,7 +342,7 @@ the single-row minibuffer leaf widget. put it somewhere in your frame tree
 (typically the bottom row of an outer (w-vstack ...)) so command-mode input
 and notifications have a place to render.
 example:
-  (w-vstack [(w-min-cells 1 (w-editor-tree ()))
+  (w-vstack [(w-min-cells 1 (w-editor-tree))
              (w-cells 1 (w-minibuffer))])"#,
     );
 

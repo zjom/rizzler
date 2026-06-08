@@ -283,15 +283,19 @@ area since there's no backing buffer to measure).
 child is any widget — the entire vocabulary of (w-block), (w-vstack),
 (w-line), (w-buffer-view BUFID), … is available.
 
-placement is resolved against the rect the overlay sits inside, so
-(w-overlay 'centered ...) at the top of the frame fn centers on the
-terminal, while the same call nested in a panel centers in that panel.
+placement is resolved against the rect the overlay sits inside. when
+the overlay is a child of (w-vstack) or (w-hstack), it floats over the
+*whole* stack — the layout pretends it isn't there, so the flowing
+siblings still share the entire area, and the overlay's placement
+resolves against that same full area. nest it deeper to scope it.
 
 example:
-  (if saving?
-      (w-overlay (placement-anchored 'top 1)
-                 (w-line [(w-span " saving… " 'header)] 'center))
-      (w-empty))"#,
+  (w-vstack
+    [(w-size 'min 1 (w-editor-tree))
+     (w-size 'cells 1 (_status-line))
+     ;; floats over the whole vstack, doesn't steal a row from anyone
+     (w-overlay (placement-anchored 'top 1)
+                (w-line [(w-span " saving… " 'header)] 'center))])"#,
     );
 
     b.be_doc(
@@ -371,10 +375,14 @@ example:
             Ok(Rc::new(Value::Map(m)))
         },
         r#"(w-empty/0)
-a widget that draws nothing. useful as a placeholder, or as the alternate branch
-of a conditional that must return a widget but should render no content.
+a widget that draws nothing and takes zero layout cells. use it as the
+"off" branch of a conditional in a stack — the slot vanishes instead of
+leaving an empty row behind.
 example:
-  (fn _maybe-status () (if show-status (_status-line) (w-empty)))"#,
+  (w-vstack
+    [(w-size 'min 1 (w-editor-tree))
+     (w-size 'cells 1 (w-minibuffer))
+     (if show-help (_help-banner) (w-empty))])   ; row disappears if off"#,
     );
 
     b.be_doc(

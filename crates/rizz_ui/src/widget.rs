@@ -86,17 +86,20 @@ pub enum ConstraintKind {
 
 impl Widget {
     /// Translate this widget's outer constraint (if any) into a ratatui
-    /// [`Constraint`].
+    /// [`Constraint`]. [`Widget::Empty`] takes zero cells so `(w-empty)` is
+    /// a true "no layout slot" placeholder in conditional branches — handy
+    /// when you want a stack child to disappear when its predicate is
+    /// false instead of leaving a blank row behind.
     pub fn outer_constraint(&self) -> Constraint {
-        if let Widget::Constrained { kind, n, m, .. } = self {
-            match kind {
+        match self {
+            Widget::Constrained { kind, n, m, .. } => match kind {
                 ConstraintKind::Cells => Constraint::Length(*n),
                 ConstraintKind::Min => Constraint::Min(*n),
                 ConstraintKind::Fill => Constraint::Fill(*n),
                 ConstraintKind::Frac => Constraint::Ratio(*n as u32, (*m).max(1) as u32),
-            }
-        } else {
-            Constraint::Min(1)
+            },
+            Widget::Empty => Constraint::Length(0),
+            _ => Constraint::Min(1),
         }
     }
 

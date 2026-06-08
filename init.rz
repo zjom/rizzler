@@ -802,6 +802,35 @@
                (_seg-bufno)]
               'right))]))
 
+;; ----- (w-overlay) demo: floating selection-size badge --------------------
+;;
+;; (w-overlay PLACEMENT CHILD) paints CHILD on top of its parent without
+;; taking layout space. As a child of (w-vstack) / (w-hstack) the overlay
+;; floats over the *whole* stack — the flowing siblings still share the
+;; entire area as if the overlay weren't there.
+;;
+;; This one shows a small "[N chars]" hint anchored to the top row of the
+;; editor area whenever a visual selection is active. (_seg-selection-hint)
+;; already surfaces the same number in the status line at the bottom; this
+;; floats a louder version near where your eye is, with no permanent space
+;; cost (an inactive selection returns (w-empty), which collapses to a
+;; zero-cell slot in the stack).
+;;
+;; Tweak/turn off freely: replace (_selection-badge) with (w-empty) in the
+;; frame fn to disable; swap the placement constructor for a different
+;; floating position; or use the same pattern to surface anything (saving
+;; indicator, chord-prefix hint, …).
+(fn _selection-badge ()
+  (do
+    (let sel (selected-text))
+    (if (= sel ())
+        (w-empty)
+        (w-overlay
+          (placement-anchored 'top 1)
+          (w-line [(w-span (str-join ["  " (to-str (len sel)) " chars selected  "] "")
+                           "vague.warn")]
+                  'right)))))
+
 ;; `_frame` is the single function the renderer calls per frame to assemble
 ;; the whole UI. `set-frame` installs it; calling `set-frame` again with a
 ;; different fn hot-swaps the layout. There can be only one frame fn.
@@ -810,7 +839,8 @@
     [(w-size 'min   1 (w-editor-tree))
      (w-size 'cells (_hint-height) (_hint-bar))
      (w-size 'cells 1 (_status-line))
-     (w-size 'cells 1 (w-minibuffer))]))
+     (w-size 'cells 1 (w-minibuffer))
+     (_selection-badge)]))
 
 (set-frame _frame)
 (set-gutter _gutter 5)

@@ -210,26 +210,39 @@ fn walk_stack<'fr>(
     if children.is_empty() {
         return;
     }
-    let constraints: Vec<Constraint> = children.iter().map(|c| c.outer_constraint()).collect();
-    let direction = match dir {
-        StackDir::Vertical => Direction::Vertical,
-        StackDir::Horizontal => Direction::Horizontal,
-    };
-    let rects = Layout::default()
-        .direction(direction)
-        .constraints(constraints)
-        .split(area);
-    for (child, rect) in children.iter().zip(rects.iter()) {
-        walk(
-            child.unwrap_constraint(),
-            *rect,
-            snap,
-            fd,
-            f,
-            cur,
-            overlays,
-            ctx,
-        );
+    // Overlay children are out-of-flow: they don't take a layout slice from
+    // the stack, they float over the stack's full area. Partition them out
+    // before computing the layout so the remaining children share the area
+    // as if the overlay wasn't there at all.
+    let (flow, floats): (Vec<&Widget>, Vec<&Widget>) = children
+        .iter()
+        .partition(|c| !matches!(c.unwrap_constraint(), Widget::Overlay { .. }));
+
+    if !flow.is_empty() {
+        let constraints: Vec<Constraint> = flow.iter().map(|c| c.outer_constraint()).collect();
+        let direction = match dir {
+            StackDir::Vertical => Direction::Vertical,
+            StackDir::Horizontal => Direction::Horizontal,
+        };
+        let rects = Layout::default()
+            .direction(direction)
+            .constraints(constraints)
+            .split(area);
+        for (child, rect) in flow.iter().zip(rects.iter()) {
+            walk(
+                child.unwrap_constraint(),
+                *rect,
+                snap,
+                fd,
+                f,
+                cur,
+                overlays,
+                ctx,
+            );
+        }
+    }
+    for c in floats {
+        walk(c.unwrap_constraint(), area, snap, fd, f, cur, overlays, ctx);
     }
 }
 

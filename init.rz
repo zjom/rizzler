@@ -304,8 +304,7 @@
 (map 'normal "zz"     '(move-cursor 'center))
 
 ;; ----- window management (<c-w> prefix) --------------------------------
-;; Windows are the editor's panes. `<c-w>` is the conventional prefix; the
-;; trie handles the chord wait for you.
+;; Windows are the editor's panes. `<c-w>` is the conventional prefix;
 (map 'normal "<c-w>q" '(window-close))
 (map 'normal "<c-w>\"" '(window-split 'vertical))
 (map 'normal "<c-w>|" '(window-split 'horizontal))
@@ -427,7 +426,7 @@
 ;; both `-inner` and `-around`. `select-*` is the visual-mode flavor; bind
 ;; it under `'visual` so `v` puts you in visual mode and the chord lands.
 
-;; `op` is the operator symbol (`'delete-inner`, `'yank-around`, …) and
+;; `op` is the operator symbol (`'delete-inner`, `'yank-around`, ...) and
 ;; `obj` is the text-object name (passed as a string — the builtin accepts
 ;; both symbols and strings).
 ;;
@@ -485,9 +484,7 @@
 ;;
 ;; The lisp side just decides what to do with that data: one match → insert
 ;; it; many matches → advance to the longest shared prefix so the next tab
-;; (or keystroke) narrows things further. The candidate list itself is shown
-;; in the hint bar (see `_command-hint` below), so the user sees the menu
-;; without having to open a popup.
+;; (or keystroke) narrows things further.
 (fn _command-tab ()
   (do
     (let cands (command-completions))
@@ -830,25 +827,6 @@
         (w-span label "vague.warn"))))
 
 
-;; The "hint bar" sits below the status line and changes based on the
-;; current mode. It's a low-friction place to remind yourself of the
-;; bindings you just installed.
-;;
-;; TODO: extend the chain below as you add new modes or custom hints.
-
-;; In command mode the hint row doubles as the tab-completion surface. With
-;; an empty prefix it's a single-line greeting; with one matching candidate
-;; it's a single-line confirmation; with many it expands into a navigable
-;; vertical menu (see "vertical completion menu" up top).
-(fn _command-hint ()
-  (do
-    (let pref (command-prefix))
-    (if (= pref "")
-        (w-line [(w-span "  command mode — type a form and press <enter> · <tab> to complete  "
-                         "vague.muted")])
-        (w-line [(w-span "  <c-n>/<c-p> to move · <c-y> to accept · <tab> to extend  "
-                         "vague.muted")]))))
-
 ;; Floating completion menu. Sits as an overlay anchored to the bottom
 ;; of the editor area, growing upward as more candidates appear so the
 ;; editor rows underneath stay visible everywhere the menu doesn't paint.
@@ -864,29 +842,11 @@
           (w-overlay (placement-anchored 'bottom rows)
                      (_menu-build cands n (_menu-clamped n)))))))
 
-(fn _hint-bar ()
-  (do
-    (let m (focused-mode))
-    (if (= m "normal")
-        (w-line [(w-span "  press : for commands · i to insert · v to select  "
-                         "vague.muted")])
-    (if (= m "insert")
-        (w-line [(w-span "  press <esc> to leave insert mode  " "vague.muted")])
-    (if (= m "command")
-        (_command-hint)
-        (w-line [(w-span "  visual: y to yank · d to delete · <esc> to cancel  "
-                         "vague.muted")]))))))
-
 ;; Vertical stack, top-to-bottom:
 ;;
 ;;    editor windows  (min-cells 1)   ← grows to fill
-;;    bottom hint     (cells 1)
 ;;    status line     (cells 1)
 ;;    minibuffer      (cells 1)
-;;
-;; The hint is always one row; when the completion menu has 1 or more candidates
-;; it floats above the editor as a (w-overlay) (see `_menu-overlay`),
-;; which paints over editor cells without stealing layout rows from them.
 ;;
 ;; The status line is an hstack with a `fill` spacer between the left and
 ;; right groups so right-aligned segments hug the right margin.
@@ -922,7 +882,7 @@
 ;; Tweak/turn off freely: replace (_selection-badge) with (w-empty) in the
 ;; frame fn to disable; swap the placement constructor for a different
 ;; floating position; or use the same pattern to surface anything (saving
-;; indicator, chord-prefix hint, …).
+;; indicator, chord-prefix hint, ...).
 (fn _selection-badge ()
   (do
     (let sel (selected-text))
@@ -941,7 +901,6 @@
   (w-vstack
     [(w-size 'min   1 (w-vstack [(w-editor-tree)
                                  (_menu-overlay)]))
-     (w-size 'cells 1 (_hint-bar))
      (w-size 'cells 1 (_status-line))
      (w-size 'cells 1 (w-minibuffer))
      (_selection-badge)]))

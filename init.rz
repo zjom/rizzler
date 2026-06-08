@@ -520,9 +520,16 @@
 ;;                                          for the denominator)
 ;;    (w-line [span ...])                — single screen row
 ;;    (w-span "..." 'face)               — shorthand for one span
-;;    (w-block child {...})              — bordered/titled box
+;;    (w-block {props} child)            — bordered/titled box
+;;    (w-overlay placement child)        — non-focusable floating overlay
+;;    (w-buffer-view BUFID)              — render a specific buffer
+;;    (w-popup-self)                     — inside a popup: the popup's own buf
 ;;    (w-editor-tree)                    — the editor window tree leaf
 ;;    (w-minibuffer)                     — the minibuffer leaf
+;;
+;;  placement values are either 'centered / 'full, or any of the constructor
+;;  fns: (placement-centered W H), (placement-anchored SIDE SIZE),
+;;  (placement-at X Y W H).
 ;;
 ;;  Faces, text properties, and overlays are unchanged from before.
 ;; ============================================================================
@@ -821,24 +828,23 @@
 ;; Two collaborators in Rust make this possible:
 ;;   * `notify-record` appends `msg` to the history vector (still owned by
 ;;     `State` so `:messages` / `(message-history)` stay coherent).
-;;   * `popup-mode` reports the keymap mode of the topmost popup so we can
-;;     refill an existing notify popup instead of stacking a new one.
+;;   * `popup-show` is create-or-update keyed by name, so re-notify replaces
+;;     the previous popup in place instead of stacking a new one.
 
-;; Both branches end with `()` (unit) so `command-submit` / `evaluate` don't
-;; surface their return value (the popup bufno from `popup-open`, or the
-;; unit from `buf-text-set`) — that would recursively call `notify` on the
-;; return value and clobber what we just rendered.
+;; popup-show is create-or-update keyed by name, so a second notify just
+;; replaces the previous one in the same panel — no dedup logic needed,
+;; no concern about whether the existing popup-on-top is actually ours.
+;; Ends with `()` (unit) so `command-submit` / `evaluate` don't surface
+;; popup-show's return (the bufno) and recursively re-notify.
 (fn notify (msg)
   (do
     (notify-record msg)
-    (if (= (popup-mode) "popup")
-        (buf-text-set (popup-bufno) msg)
-        (popup-open
-          (w-block (w-buffer-view) {"face": "popup.default"})
-          {"modes":     ['popup]
-           "placement": {"kind": "side" "side": "bottom"}
-           "wrap-mode": 'word
-           "text":      msg}))
+    (popup-show 'notify
+      (w-block {"face": "popup.default"} (w-popup-self))
+      {"modes":     ['popup]
+       "placement": (placement-anchored 'bottom 'fit)
+       "wrap-mode": 'word
+       "text":      msg})
     ()))
 
 ;; `:messages` — open the popup with the full notification history.
@@ -847,16 +853,16 @@
   (do
     (fn _row (i line) (str-join [(to-str i) line] ". "))
     (let rows (fmapi _row (message-history)))
-    (popup-open
-      (w-block (w-buffer-view)
-        {"border":      "plain"
-         "title":       " messages — q/<esc>/<enter> to dismiss "
-         "face":        "popup.default"
-         "border-face": "popup.border"
-         "title-face":  "popup.title"})
+    (popup-show 'messages
+      (w-block {"border":      "plain"
+                "title":       " messages — q/<esc>/<enter> to dismiss "
+                "face":        "popup.default"
+                "border-face": "popup.border"
+                "title-face":  "popup.title"}
+               (w-popup-self))
       {"text":      (str-join rows "\n")
        "modes":     ['popup]
-       "placement": {"kind": "center" "w": 0.6 "h": 0.6}})
+       "placement": (placement-centered 0.6 0.6)})
     ()))
 
 
@@ -868,16 +874,16 @@
   (do
     (fn _row (i line) (str-join [(to-str (+ 1 i)) line] ". "))
     (let rows (fmapi _row (command-history)))
-    (popup-open
-      (w-block (w-buffer-view)
-        {"border":      "rounded"
-         "title":       " command history — q/<esc>/<enter> to dismiss "
-         "face":        "popup.default"
-         "title-face":  "popup.title"})
+    (popup-show 'history
+      (w-block {"border":      "rounded"
+                "title":       " command history — q/<esc>/<enter> to dismiss "
+                "face":        "popup.default"
+                "title-face":  "popup.title"}
+               (w-popup-self))
       {"text":      (str-join rows "\n")
        "modes":     ['popup 'popup-history]
        "buffer-mode": 'normal
-       "placement": {"kind": "side" "side": "bottom" }})
+       "placement": (placement-anchored 'bottom 'fit)})
     ()))
 
 ;; ============================================================================
@@ -914,7 +920,13 @@
 (map 'popup "<enter>"    '(popup-close))
 
 (fn popup-help ()
-  (popup-open
+  (popup-show 'help
+    (w-block {"border":      "rounded"
+              "title":       " help "
+              "face":        "popup.default"
+              "border-face": "popup.border"
+              "title-face":  "popup.title"}
+             (w-popup-self))
     {"text": (str-join
               ["popup cheat-sheet"
                "──────────────────────────"
@@ -925,12 +937,8 @@
                ""
                "tip: any popup defaulting to mode 'popup picks up these keys."]
               "\n")
-     "placement":   {"kind": "side" "side": "bottom" "size": 12}
-     "border":      "rounded"
-     "title":       " help "
-     "face":        "popup.default"
-     "border-face": "popup.border"
-     "title-face":  "popup.title"}))
+     "modes":     ['popup]
+     "placement": (placement-anchored 'bottom 12)}))
 
 (keymap-set 'normal "?" '(popup-help))
 
@@ -970,13 +978,13 @@
     (let dir (if (buf-path)
                  (buf-path)
                  (workdir)))
-    (popup-open
-      (w-block (w-buffer-view)
-        {"border":      "rounded"
-         "title":       (str-join [" files: " (to-str dir) " "] "")
-         "face":        "popup.default"
-         "border-face": "popup.border"
-         "title-face":  "popup.title"})
+    (popup-show 'files
+      (w-block {"border":      "rounded"
+                "title":       (str-join [" files: " (to-str dir) " "] "")
+                "face":        "popup.default"
+                "border-face": "popup.border"
+                "title-face":  "popup.title"}
+               (w-popup-self))
       {"text":        (_popup-files-render dir)
        "modes":       ['popup 'popup.files]
        "buffer-mode": 'normal
@@ -988,33 +996,33 @@
 ;; specific actions (open + parent-dir) need to be bound here.
 (keymap-set 'normal "<c-e>" '(popup-files))
 
-;; `<enter>` reads the current line out of the popup buffer (via
-;; `selected-text`/`buf-text`) and asks the editor to edit it. The popup
-;; closes first so the new buffer takes focus cleanly.
+;; `<enter>` reads the current line out of the popup buffer and either
+;; descends into a directory (popup-show updates the 'files popup in place)
+;; or opens a file in the editor (popup-hide dismisses the explorer first
+;; so the new buffer takes focus cleanly).
 (keymap-set 'popup.files "<enter>"
   '(do
      (let line (cursor-line))
      (let entries (deref _popup-files-entries))
      (let target (get entries line))
-     (popup-close)
      (if (= target ())
          ()
      (if (fs-isdir target)
-          (popup-open
-            (w-block (w-buffer-view)
-              {"border":      "rounded"
-               "title":       (str-join [" files: " target " "] "")
-               "face":        "popup.default"
-               "border-face": "popup.border"
-               "title-face":  "popup.title"})
+          (popup-show 'files
+            (w-block {"border":      "rounded"
+                      "title":       (str-join [" files: " target " "] "")
+                      "face":        "popup.default"
+                      "border-face": "popup.border"
+                      "title-face":  "popup.title"}
+                     (w-popup-self))
             {"text":        (_popup-files-render target)
              "mode":        'popup.files
              "buffer-mode": 'normal
-             "placement":   "full"
+             "placement":   'full
              "show-cursor": 1})
-     (edit target)
-     ))
-))
+     (do (popup-hide 'files)
+         (edit target))
+     ))))
 
 
 ;; `-` walks up to the parent directory — the same idea as `<enter>` but
@@ -1022,27 +1030,26 @@
 (keymap-set 'popup.files "-"
    '(do (let entries (deref _popup-files-entries))
         (let target (fs-parent (fs-parent (first entries))))
-        (popup-close)
         (if (= target ())
           ()
         (if (fs-isdir target)
-          (popup-open
-            (w-block (w-buffer-view)
-              {"border":      "rounded"
-               "title":       (str-join [" files: " target " "] "")
-               "face":        "popup.default"
-               "border-face": "popup.border"
-               "title-face":  "popup.title"})
+          (popup-show 'files
+            (w-block {"border":      "rounded"
+                      "title":       (str-join [" files: " target " "] "")
+                      "face":        "popup.default"
+                      "border-face": "popup.border"
+                      "title-face":  "popup.title"}
+                     (w-popup-self))
             {"text":        (_popup-files-render target)
              "mode":        'popup.files
              "buffer-mode": 'normal
-             "placement":   "full"
+             "placement":   'full
              "show-cursor": 1})
           ()
         ))
      ))
 
-(map 'popup.files "<c-e>" '(popup-close))
+(map 'popup.files "<c-e>" '(popup-hide 'files))
 
 ;; =============================================================================
 ;; That's the whole default config.

@@ -71,8 +71,9 @@ impl Config {
     }
 }
 
-/// Builder-style spec describing a popup to open. Built by the lisp
-/// `popup-open` builtin from a widget value plus an options map.
+/// Builder-style spec describing a popup to show. Built by the lisp
+/// `popup-show` builtin from a widget value plus an options map. The
+/// name field is filled in by the builtin from `popup-show`'s first arg.
 pub struct PopupSpec {
     /// The widget tree drawn inside the popup's placement rect.
     pub widget: Widget,
@@ -411,15 +412,40 @@ impl State {
             .and_then(|p| p.keymap_layers.last().cloned())
     }
 
-    /// Push an overlay panel onto the stack. Creates a fresh panel-backing
-    /// buffer (not in the file cycle), appends it to `self.bufs`, and
-    /// returns its `BufferId`.
+    /// Show the overlay panel named `name`. If a panel with this name is
+    /// already on the stack, update its widget / placement / options in
+    /// place (preserving its backing buffer's text unless `spec.initial_text`
+    /// is set) and re-raise it to the top. Otherwise create a fresh
+    /// panel-backing buffer, append it to `self.bufs`, and push a new
+    /// overlay panel. Returns the backing buffer's `BufferId` in both cases.
     #[instrument(skip(self, spec), fields(
         modes = ?spec.mode_layers,
         buffer_mode = ?spec.buffer_mode,
         wrap_mode = ?spec.wrap_mode,
     ))]
-    pub fn open_popup(&mut self, spec: PopupSpec) -> BufferId {
+    pub fn show_popup(&mut self, name: Rc<str>, spec: PopupSpec) -> BufferId {
+        if let Some(mut existing) = self.panels.remove_overlay_by_name(&name) {
+            let id = existing.buf;
+            let buf = &mut self.bufs[id];
+            if let Some(text) = spec.initial_text {
+                buf.clear_with(&text);
+            }
+            buf.set_mode(spec.buffer_mode);
+            buf.set_wrap_mode(spec.wrap_mode);
+            buf.set_wrap_column(spec.wrap_column);
+            buf.set_breakindent(spec.breakindent);
+            existing.keymap_layers = spec.mode_layers;
+            existing.widget = Some(spec.widget);
+            existing.kind = PanelKind::Overlay {
+                placement: spec.placement,
+                show_cursor: spec.show_cursor,
+                name,
+            };
+            self.panels.push(existing);
+            self.refresh_viewport();
+            info!(?id, "overlay panel updated");
+            return id;
+        }
         let mut buf = Buffer::new();
         if let Some(text) = spec.initial_text {
             buf.clear_with(&text);
@@ -436,6 +462,7 @@ impl State {
             kind: PanelKind::Overlay {
                 placement: spec.placement,
                 show_cursor: spec.show_cursor,
+                name,
             },
         });
         self.refresh_viewport();
@@ -443,16 +470,36 @@ impl State {
         id
     }
 
+    /// Close the named overlay panel. Returns true if such a panel was
+    /// open. Frees its backing buffer (unless that buffer is a file or the
+    /// minibuffer).
+    #[instrument(skip(self))]
+    pub fn hide_popup(&mut self, name: &str) -> bool {
+        let Some(panel) = self.panels.remove_overlay_by_name(name) else {
+            trace!(name, "no overlay with that name");
+            return false;
+        };
+        self.dispose_overlay_buf(panel.buf);
+        self.refresh_viewport();
+        true
+    }
+
     /// Close the topmost overlay panel (skipping a minibuffer panel if it
-    /// sits on top). Removes the overlay's backing buffer and redirects any
-    /// window leaves that pointed at it to the first file buffer.
+    /// sits on top). Keyed off "topmost" rather than name, so generic
+    /// dismiss bindings (`q` / `<esc>` in the `popup` keymap layer) don't
+    /// need to know which popup they're closing.
     #[instrument(skip(self))]
     pub fn close_popup(&mut self) -> bool {
         let Some(panel) = self.panels.pop_top_overlay() else {
             trace!("no overlay to close");
             return false;
         };
-        let removed = panel.buf;
+        self.dispose_overlay_buf(panel.buf);
+        self.refresh_viewport();
+        true
+    }
+
+    fn dispose_overlay_buf(&mut self, removed: BufferId) {
         info!(?removed, "closing overlay");
         // Only clean up the backing buffer if it's not a file buffer (those
         // outlive their panel — closing a popup that happened to be viewing
@@ -466,12 +513,19 @@ impl State {
                 }
             });
         }
-        self.refresh_viewport();
-        true
     }
 
     pub fn top_popup_buf(&self) -> Option<BufferId> {
         self.panels.top_overlay().map(|p| p.buf)
+    }
+
+    /// Look up a named popup's backing buffer. Returns `None` if no popup
+    /// with that name is currently on the stack.
+    pub fn popup_buf_by_name(&self, name: &str) -> Option<BufferId> {
+        self.panels.iter().find_map(|p| match &p.kind {
+            PanelKind::Overlay { name: n, .. } if n.as_ref() == name => Some(p.buf),
+            _ => None,
+        })
     }
 
     pub fn has_popup(&self) -> bool {

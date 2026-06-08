@@ -213,18 +213,18 @@ example:
         "w-block",
         2,
         |args, _| {
-            let child = args[0].clone();
-            let props = match &*args[1] {
+            let props = match &*args[0] {
                 Value::Map(m) => m.clone(),
                 Value::Unit => ImHashMap::new(),
                 _ => {
                     return Err(RuntimeError::type_mismatch(
                         "w-block.props",
                         "map | ()",
-                        &args[1],
+                        &args[0],
                     ));
                 }
             };
+            let child = args[1].clone();
             let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
             m.insert(strkey("type"), Rc::new(Value::Str("block".into())));
             m.insert(strkey("child"), child);
@@ -236,7 +236,9 @@ example:
             Ok(Rc::new(Value::Map(m)))
         },
         r#"(w-block/2)
-wrap child with a bordered/titled box. props is a map (or ()) with optional keys:
+wrap child with a bordered/titled box. props comes first, child second —
+the options-then-content shape matches (w-overlay PLACEMENT CHILD).
+props is a map (or ()) with optional keys:
   "border":      "none" | "plain" | "rounded" | "double" | "thick"  (default "plain")
   "title":       <str> shown in the top border
   "face":        face name (str|ident) for the content area
@@ -244,10 +246,10 @@ wrap child with a bordered/titled box. props is a map (or ()) with optional keys
   "title-face":  face name for the title text
 unrecognized keys are silently dropped. omit a key to use its default.
 example:
-  (w-block (w-line [(w-text "hello" ())])
-           {"border":      "rounded"
+  (w-block {"border":      "rounded"
             "title":       " Status "
-            "border-face": "vague.muted"})"#,
+            "border-face": "vague.muted"}
+           (w-line [(w-span "hello" ())]))"#,
     );
 
     b.be_doc(
@@ -287,7 +289,7 @@ terminal, while the same call nested in a panel centers in that panel.
 
 example:
   (if saving?
-      (w-overlay {"kind": "side" "side": "top" "size": 1}
+      (w-overlay (placement-anchored 'top 1)
                  (w-line [(w-span " saving… " 'header)] 'center))
       (w-empty))"#,
     );
@@ -377,43 +379,113 @@ example:
 
     b.be_doc(
         "w-buffer-view",
-        0,
+        1,
         |args, _| {
+            let bufno = as_int(&args[0], "w-buffer-view.bufno")?.max(0);
             let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
             m.insert(strkey("type"), Rc::new(Value::Str("buffer-view".into())));
-            if let Some(arg) = args.first() {
-                let bufno = as_int(arg, "w-buffer-view.bufno")?.max(0);
-                m.insert(strkey("bufno"), Rc::new(Value::Int(bufno)));
-            }
+            m.insert(strkey("bufno"), Rc::new(Value::Int(bufno)));
             Ok(Rc::new(Value::Map(m)))
         },
-        r#"(w-buffer-view/0)
-renders a single editor buffer into its allocated rect.
+        r#"(w-buffer-view/1)
+renders the buffer identified by BUFID into its allocated rect. bufid is
+the opaque integer returned by (buf-no), (popup-bufno NAME), or
+(minibuffer-bufno).
 
-two call shapes:
-
-  (w-buffer-view)         — implicit. resolves at render time to the buf of
-                            the enclosing (popup-open ...) call. this is the
-                            shape you want when constructing the widget tree
-                            passed to popup-open; the renderer fills in the
-                            correct bufid for you.
-
-  (w-buffer-view BUFID)   — explicit. renders that specific buffer. use this
-                            outside a popup, or inside a popup when you want
-                            to display a buffer other than the popup's own
-                            (e.g. (w-buffer-view (popup-bufno)) reads as
-                            "the topmost open popup's buffer" — handy for
-                            preview panes).
-
-note that the implicit form is a no-op outside a popup — there's no
-"enclosing buffer" for a w-buffer-view that appears in the main frame fn.
-prefer explicit bufids there.
+for the popup-specific "render the popup's own backing buffer" case,
+prefer (w-popup-self) — it's an explicit name for that pattern and
+doesn't need a bufid argument.
 
 example:
-  (popup-open
-    (w-block (w-buffer-view) {"face": "popup.default"})  ; implicit, ok
-    {"text": "hi"})
-  (w-buffer-view some-bufid)                              ; explicit"#,
+  (w-buffer-view (buf-no))                  ; the focused buffer
+  (w-buffer-view (popup-bufno 'messages))   ; a named popup's buf
+  (w-block {"face": "popup.default"}
+           (w-buffer-view (minibuffer-bufno)))"#,
+    );
+
+    b.be_doc(
+        "w-popup-self",
+        0,
+        |_, _| {
+            let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+            m.insert(strkey("type"), Rc::new(Value::Str("buffer-view".into())));
+            Ok(Rc::new(Value::Map(m)))
+        },
+        r#"(w-popup-self/0)
+inside a popup widget tree (the one passed to popup-show), renders the
+popup's own backing buffer — the buf that holds the popup's text content.
+no bufid argument: the renderer fills it in from the enclosing popup.
+
+useful precisely because the bufid isn't known until popup-show creates
+the panel, so the widget tree can't name it explicitly.
+
+a no-op outside a popup — there's no enclosing buffer for a (w-popup-self)
+in the main frame fn. use (w-buffer-view BUFID) there.
+
+example:
+  (popup-show 'messages
+    (w-block {"face": "popup.default"} (w-popup-self))
+    {"text": "hi"})"#,
+    );
+
+    b.be_doc(
+        "placement-centered",
+        2,
+        |args, _| {
+            let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+            m.insert(strkey("kind"), Rc::new(Value::Str("centered".into())));
+            m.insert(strkey("w"), args[0].clone());
+            m.insert(strkey("h"), args[1].clone());
+            Ok(Rc::new(Value::Map(m)))
+        },
+        r#"(placement-centered/2)
+returns a placement map suitable for (popup-show)'s "placement" option or
+(w-overlay). w / h are each an int (cells), a float in [0.0, 1.0]
+(fraction of parent), or 'fit (sized to content). defaults match the
+parser's defaults of 0.6 frac on both axes.
+example:
+  (placement-centered 0.6 0.6)
+  (placement-centered 40 'fit)"#,
+    );
+
+    b.be_doc(
+        "placement-anchored",
+        2,
+        |args, _| {
+            let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+            m.insert(strkey("kind"), Rc::new(Value::Str("side".into())));
+            m.insert(strkey("side"), args[0].clone());
+            m.insert(strkey("size"), args[1].clone());
+            Ok(Rc::new(Value::Map(m)))
+        },
+        r#"(placement-anchored/2)
+returns a placement map that pins the overlay to one side of the parent
+rect. side is 'top | 'bottom | 'left | 'right. size is an int (cells),
+a float (fraction), or 'fit (size to content).
+example:
+  (placement-anchored 'bottom 5)
+  (placement-anchored 'top 'fit)"#,
+    );
+
+    b.be_doc(
+        "placement-at",
+        4,
+        |args, _| {
+            let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+            m.insert(strkey("kind"), Rc::new(Value::Str("at".into())));
+            m.insert(strkey("x"), args[0].clone());
+            m.insert(strkey("y"), args[1].clone());
+            m.insert(strkey("w"), args[2].clone());
+            m.insert(strkey("h"), args[3].clone());
+            Ok(Rc::new(Value::Map(m)))
+        },
+        r#"(placement-at/4)
+returns a placement map anchored at (x, y) in the parent rect with the
+given width and height. x and y are int cell offsets from the parent's
+origin. w / h follow the same shape as in (placement-centered).
+example:
+  (placement-at 0 0 40 10)
+  (placement-at 10 5 'fit 'fit)"#,
     );
 }
 

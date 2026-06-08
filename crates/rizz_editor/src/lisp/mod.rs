@@ -10,7 +10,7 @@
 //! Module layout:
 //! - [`helpers`] — the [`Builtins`](helpers::Builtins) registration sink plus
 //!   shared value-conversion and mode-name parsers used by every builtin.
-//! - [`popup_parse`] — translates the `(popup-open ...)` options map into
+//! - [`popup_parse`] — translates the `(popup-show ...)` options map into
 //!   the editor's [`PopupSpec`](crate::state::PopupSpec).
 //! - [`builtins`] — per-domain registration modules (text, motion, bufs,
 //!   windows, keymap, minibuffer, popups, queries, wrap, styling, widgets,

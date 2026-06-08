@@ -326,10 +326,16 @@ pub enum PanelKind {
     Minibuffer,
     /// A floating overlay drawn at `placement`. The accompanying widget
     /// (held on the [`Panel`] itself) describes its chrome + content,
-    /// typically `(w-block (w-buffer-view))`.
+    /// typically `(w-block (w-popup-self))`.
+    ///
+    /// `name` is the symbol the lisp `(popup-show NAME …)` builtin assigned
+    /// to this popup. Names are unique within the panel stack: re-issuing
+    /// `popup-show` with the same name updates and re-raises the existing
+    /// panel instead of stacking a new one.
     Overlay {
         placement: Placement,
         show_cursor: bool,
+        name: Rc<str>,
     },
 }
 
@@ -358,10 +364,20 @@ impl Panel {
             PanelKind::Overlay {
                 placement,
                 show_cursor,
+                ..
             } => self
                 .widget
                 .as_ref()
                 .map(|w| (placement, w, *show_cursor)),
+            _ => None,
+        }
+    }
+
+    /// The name this overlay panel was registered under, or `None` for the
+    /// minibuffer.
+    pub fn overlay_name(&self) -> Option<&str> {
+        match &self.kind {
+            PanelKind::Overlay { name, .. } => Some(name),
             _ => None,
         }
     }
@@ -562,6 +578,17 @@ impl PanelStack {
     /// the popped panel, or `None` if there's no overlay on the stack.
     pub fn pop_top_overlay(&mut self) -> Option<Panel> {
         let idx = self.stack.iter().rposition(|p| p.is_overlay())?;
+        Some(self.stack.remove(idx))
+    }
+
+    /// Remove the overlay panel registered under `name` (regardless of
+    /// stack position). Used by `popup-show` to re-raise an existing popup
+    /// and by `popup-hide NAME` to dismiss a specific one.
+    pub fn remove_overlay_by_name(&mut self, name: &str) -> Option<Panel> {
+        let idx = self
+            .stack
+            .iter()
+            .position(|p| p.overlay_name() == Some(name))?;
         Some(self.stack.remove(idx))
     }
 

@@ -348,13 +348,32 @@ example:
             Ok(Rc::new(Value::Map(m)))
         },
         r#"(w-buffer-view/0)
-a widget that renders a single editor buffer into its allocated rect. declared
-arity is 0 but it accepts an optional bufno (int >= 0). when bufno is omitted,
-the renderer fills it with the enclosing popup's backing buffer — so inside
-(popup-open ...) you usually want the no-arg form.
+renders a single editor buffer into its allocated rect.
+
+two call shapes:
+
+  (w-buffer-view)         — implicit. resolves at render time to the buf of
+                            the enclosing (popup-open ...) call. this is the
+                            shape you want when constructing the widget tree
+                            passed to popup-open; the renderer fills in the
+                            correct bufid for you.
+
+  (w-buffer-view BUFID)   — explicit. renders that specific buffer. use this
+                            outside a popup, or inside a popup when you want
+                            to display a buffer other than the popup's own
+                            (e.g. (w-buffer-view (popup-bufno)) reads as
+                            "the topmost open popup's buffer" — handy for
+                            preview panes).
+
+note that the implicit form is a no-op outside a popup — there's no
+"enclosing buffer" for a w-buffer-view that appears in the main frame fn.
+prefer explicit bufids there.
+
 example:
-  (w-buffer-view)      ; defer to the popup's buffer
-  (w-buffer-view 2)    ; render buffer 2 explicitly"#,
+  (popup-open
+    (w-block (w-buffer-view) {"face": "popup.default"})  ; implicit, ok
+    {"text": "hi"})
+  (w-buffer-view some-bufid)                              ; explicit"#,
     );
 }
 

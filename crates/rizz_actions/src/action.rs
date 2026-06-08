@@ -13,7 +13,7 @@ use rizz::runtime::Value;
 use rizz_core::{EditingMode, FocusDir, Position, SplitDir};
 use rizz_input::KeyEvent;
 use rizz_registers::RegisterKind;
-use rizz_text::MoveKind;
+use rizz_text::{MoveKind, TextObject};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Action {
@@ -95,6 +95,28 @@ pub enum Action {
         name: char,
         text: Rc<str>,
         kind: RegisterKind,
+    },
+
+    /// Vim `d{i,a}<obj>` — delete the range a text object resolves to. The
+    /// captured text feeds the same register routing as `DeleteMotion`.
+    DeleteTextObject {
+        object: TextObject,
+        around: bool,
+        count: u32,
+    },
+    /// Vim `y{i,a}<obj>` — yank the range a text object resolves to.
+    YankTextObject {
+        object: TextObject,
+        around: bool,
+        count: u32,
+    },
+    /// Vim `v{i,a}<obj>` — switch into Visual mode with the text object's
+    /// range pre-selected. Anchor lands at the range's start; the cursor
+    /// lands on its last char.
+    SelectTextObject {
+        object: TextObject,
+        around: bool,
+        count: u32,
     },
 
     CommandCancel,

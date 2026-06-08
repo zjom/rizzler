@@ -14,7 +14,7 @@ use im::HashMap as ImHashMap;
 use rizz::runtime::{RuntimeError, Value};
 use rizz_actions::Action;
 use rizz_registers::{RegisterEntry, RegisterKind};
-use rizz_text::MoveKind;
+use rizz_text::{MoveKind, TextObject};
 
 use super::super::helpers::{
     Builtins, apply, as_ident, as_str, str_mismatch, unit, unknown_variant,
@@ -192,4 +192,96 @@ pub(super) fn register(b: &mut Builtins) {
         });
         Ok(unit())
     });
+
+    // ---- text objects (vim's `i<x>` / `a<x>`) ---------------------------
+    //
+    // Three operators × {around, inner}. Each takes a single object symbol
+    // (`'word`, `'big-word`, `'paren`, `'bracket`, `'brace`, `'angle`,
+    // `'double-quote`, `'single-quote`, `'backtick`, or the corresponding
+    // single-char string `"("` / `"\""` / etc.). The pending count prefix
+    // is forwarded — `2daw` deletes the second-outer word, `2di(` expands
+    // to the second-outer paren pair.
+
+    b.be("yank-inner", 1, |args, _| {
+        apply_text_object(&args[0], "yank-inner", |object, count| {
+            Action::YankTextObject {
+                object,
+                around: false,
+                count,
+            }
+        })?;
+        Ok(unit())
+    });
+
+    b.be("yank-around", 1, |args, _| {
+        apply_text_object(&args[0], "yank-around", |object, count| {
+            Action::YankTextObject {
+                object,
+                around: true,
+                count,
+            }
+        })?;
+        Ok(unit())
+    });
+
+    b.be("delete-inner", 1, |args, _| {
+        apply_text_object(&args[0], "delete-inner", |object, count| {
+            Action::DeleteTextObject {
+                object,
+                around: false,
+                count,
+            }
+        })?;
+        Ok(unit())
+    });
+
+    b.be("delete-around", 1, |args, _| {
+        apply_text_object(&args[0], "delete-around", |object, count| {
+            Action::DeleteTextObject {
+                object,
+                around: true,
+                count,
+            }
+        })?;
+        Ok(unit())
+    });
+
+    b.be("select-inner", 1, |args, _| {
+        apply_text_object(&args[0], "select-inner", |object, count| {
+            Action::SelectTextObject {
+                object,
+                around: false,
+                count,
+            }
+        })?;
+        Ok(unit())
+    });
+
+    b.be("select-around", 1, |args, _| {
+        apply_text_object(&args[0], "select-around", |object, count| {
+            Action::SelectTextObject {
+                object,
+                around: true,
+                count,
+            }
+        })?;
+        Ok(unit())
+    });
 }
+
+/// Parse the text-object arg (symbol or single-char string), grab the
+/// pending count prefix, and apply the action `build` constructs from them.
+fn apply_text_object(
+    arg: &Rc<Value>,
+    name: &'static str,
+    build: impl FnOnce(TextObject, u32) -> Action,
+) -> Result<(), RuntimeError> {
+    let sym = match &**arg {
+        Value::Ident(s) | Value::Str(s) => s.clone(),
+        _ => return Err(RuntimeError::type_mismatch(name, "ident|str", arg)),
+    };
+    let object = TextObject::from_str(&sym).map_err(|_| unknown_variant(name, &sym))?;
+    let count = with_editor_mut(|st| st.pending_count_or_one());
+    apply(build(object, count))
+}
+

@@ -408,7 +408,76 @@
 (map 'command "<left>"      '(move-cursor 'left))
 (map 'command "<right>"     '(move-cursor 'right))
 
-;; Tab completion. The matching itself lives in Rust:
+;; ============================================================================
+;; Text Objects (`i<x>` / `a<x>`)
+;; ============================================================================
+;;
+;; Text objects are named regions of structured text — a word, a quoted
+;; string, a balanced pair of delimiters.
+;; `diw` deletes the word under the cursor;
+;; `ya(` yanks the paren block including its brackets;
+;; `vi"` selects the inside of a double-quoted string. The object kinds the
+;; editor knows about: `'word`, `'big-word`, `'paren`, `'bracket`,
+;; `'brace`, `'angle`, `'double-quote`, `'single-quote`, `'backtick`.
+;;
+;; A pending count prefix expands pair-style objects outward — `2di(`
+;; deletes the second-outer paren pair.
+;;
+;; TIP: the three operators (`delete-`, `yank-`, `select-`) each pair with
+;; both `-inner` and `-around`. `select-*` is the visual-mode flavor; bind
+;; it under `'visual` so `v` puts you in visual mode and the chord lands.
+
+;; `op` is the operator symbol (`'delete-inner`, `'yank-around`, …) and
+;; `obj` is the text-object name (passed as a string — the builtin accepts
+;; both symbols and strings).
+;;
+;; The right-hand side has to be a *form* the keymap can later evaluate,
+;; not an array — so we build a cons list `(op obj)` whose head is the
+;; symbol `op` and whose only argument is `obj`. Evaluating that list at
+;; keypress time resolves `op` against the env and calls it.
+(fn _bind-text-objects (mode lhs op)
+    (do
+      (fn _form (obj) (cons op (cons obj ())))
+      (fn _bind1 (suffix obj)
+        (map mode (str-join [lhs suffix] "") (_form obj)))
+      (_bind1 "w"  "word")
+      (_bind1 "W"  "big-word")
+      (_bind1 "("  "paren")
+      (_bind1 ")"  "paren")
+      (_bind1 "b"  "paren")
+      (_bind1 "["  "bracket")
+      (_bind1 "]"  "bracket")
+      (_bind1 "{"  "brace")
+      (_bind1 "}"  "brace")
+      (_bind1 "B"  "brace")
+      (_bind1 "<lt>" "angle")
+      (_bind1 ">"    "angle")
+      (_bind1 "\"" "double-quote")
+      (_bind1 "'"  "single-quote")
+      (_bind1 "`"  "backtick")))
+
+(_bind-text-objects 'normal "di" 'delete-inner)
+(_bind-text-objects 'normal "da" 'delete-around)
+(_bind-text-objects 'normal "yi" 'yank-inner)
+(_bind-text-objects 'normal "ya" 'yank-around)
+
+;; Visual-mode text objects: pressing `i<x>` / `a<x>` while a selection is
+;; in flight re-anchors the selection to cover the object. Bind under every
+;; visual sub-mode for parity.
+(_bind-text-objects 'visual       "i" 'select-inner)
+(_bind-text-objects 'visual       "a" 'select-around)
+(_bind-text-objects 'visual-line  "i" 'select-inner)
+(_bind-text-objects 'visual-line  "a" 'select-around)
+(_bind-text-objects 'visual-block "i" 'select-inner)
+(_bind-text-objects 'visual-block "a" 'select-around)
+
+
+;; ============================================================================
+;; Command Mode Completion Suggestions
+;; ============================================================================
+;;
+;; ----- Tab completion. ----------------------------------------------------
+;; The matching itself lives in Rust:
 ;;
 ;;   (command-completions)     → array of fn-names matching the token at point
 ;;   (command-complete s)      → splice s in over that token
@@ -435,7 +504,7 @@
 
 (map 'command "<tab>" '(_command-tab))
 
-;; ----- vertical completion menu ----------------------------------------
+;; ----- Completion Menu ----------------------------------------------------
 ;; When more than one candidate is available the hint row grows into a
 ;; navigable vertical menu:
 ;;

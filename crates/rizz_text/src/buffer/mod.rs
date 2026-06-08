@@ -18,6 +18,7 @@
 mod cursor;
 mod edits;
 mod marks;
+mod text_object;
 mod yank;
 
 use std::{path::Path, rc::Rc, str::FromStr};
@@ -35,6 +36,7 @@ use crate::{
 
 pub use cursor::MoveKind;
 pub use edits::Speculation;
+pub use text_object::TextObject;
 
 slotmap::new_key_type! {
     /// Stable handle to a `Buffer` held by the editor's buffer registry.

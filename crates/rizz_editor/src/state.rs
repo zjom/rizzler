@@ -978,6 +978,55 @@ impl State {
                     self.registers
                         .write(*name, RegisterEntry::new(text.clone(), *kind));
                 }
+                Action::YankTextObject {
+                    object,
+                    around,
+                    count,
+                } => {
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, ?object, around, count, "Action::YankTextObject");
+                    if let Some((lo, hi, kind)) =
+                        self.bufs[f].text_object_range(*object, *around, *count)
+                    {
+                        let text = self.bufs[f].rope().slice(lo..hi).to_string();
+                        let name = self.pending_register.take();
+                        self.registers.record_yank(text, kind, name);
+                    } else {
+                        self.pending_register = None;
+                    }
+                }
+                Action::DeleteTextObject {
+                    object,
+                    around,
+                    count,
+                } => {
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, ?object, around, count, "Action::DeleteTextObject");
+                    if let Some((lo, hi, kind)) =
+                        self.bufs[f].text_object_range(*object, *around, *count)
+                    {
+                        let text = self.bufs[f].rope().slice(lo..hi).to_string();
+                        if self.bufs[f].delete_range(lo, hi) {
+                            let name = self.pending_register.take();
+                            self.registers.record_delete(text, kind, name);
+                        }
+                    } else {
+                        self.pending_register = None;
+                    }
+                }
+                Action::SelectTextObject {
+                    object,
+                    around,
+                    count,
+                } => {
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, ?object, around, count, "Action::SelectTextObject");
+                    if let Some((lo, hi, _)) =
+                        self.bufs[f].text_object_range(*object, *around, *count)
+                    {
+                        self.bufs[f].select_char_range(lo, hi);
+                    }
+                }
                 Action::CommandCancel => {
                     debug!("Action::CommandCancel");
                     self.exit_minibuffer();
@@ -1564,5 +1613,89 @@ mod tests {
         // paste-before so the inserted text lands at the cursor (col 0)
         s.eval_lisp("(paste-before)").unwrap();
         assert_eq!(s.bufs[b].text(), "hello hello world");
+    }
+
+    // ---- text objects -------------------------------------------------
+
+    #[test]
+    fn delete_inner_word_under_cursor() {
+        use rizz_text::TextObject;
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("hello world");
+        s.bufs[b].move_cursor_n(rizz_text::MoveKind::Relative(Position::new(2, 0)), 1);
+        s.apply(&[Rc::new(Action::DeleteTextObject {
+            object: TextObject::Word,
+            around: false,
+            count: 1,
+        })])
+        .unwrap();
+        assert_eq!(s.bufs[b].text(), " world");
+        assert_eq!(reg_text(&s, '"').as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn yank_around_paren_block_includes_brackets() {
+        use rizz_text::TextObject;
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("foo(bar)baz");
+        s.bufs[b].move_cursor_n(rizz_text::MoveKind::Relative(Position::new(5, 0)), 1);
+        s.apply(&[Rc::new(Action::YankTextObject {
+            object: TextObject::Paren,
+            around: true,
+            count: 1,
+        })])
+        .unwrap();
+        assert_eq!(reg_text(&s, '"').as_deref(), Some("(bar)"));
+        // buffer text is unchanged
+        assert_eq!(s.bufs[b].text(), "foo(bar)baz");
+    }
+
+    #[test]
+    fn select_inner_dquote_drops_into_visual() {
+        use rizz_text::TextObject;
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with(r#"x "hello" y"#);
+        s.bufs[b].move_cursor_n(rizz_text::MoveKind::Relative(Position::new(5, 0)), 1);
+        s.apply(&[Rc::new(Action::SelectTextObject {
+            object: TextObject::DoubleQuote,
+            around: false,
+            count: 1,
+        })])
+        .unwrap();
+        assert_eq!(s.bufs[b].mode(), EditingMode::Visual);
+        assert_eq!(s.bufs[b].selected_text().as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn lisp_delete_inner_word_works() {
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("hello world");
+        s.bufs[b].move_cursor_n(rizz_text::MoveKind::Relative(Position::new(2, 0)), 1);
+        s.eval_lisp(r#"(delete-inner "word")"#).unwrap();
+        assert_eq!(s.bufs[b].text(), " world");
+    }
+
+    #[test]
+    fn lisp_yank_around_paren_works() {
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("foo(bar)");
+        s.bufs[b].move_cursor_n(rizz_text::MoveKind::Relative(Position::new(5, 0)), 1);
+        s.eval_lisp(r#"(yank-around "paren")"#).unwrap();
+        assert_eq!(reg_text(&s, '"').as_deref(), Some("(bar)"));
+    }
+
+    #[test]
+    fn lisp_select_inner_paren_visual_mode() {
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("foo(bar)");
+        s.bufs[b].move_cursor_n(rizz_text::MoveKind::Relative(Position::new(5, 0)), 1);
+        s.eval_lisp(r#"(select-inner "paren")"#).unwrap();
+        assert_eq!(s.bufs[b].selected_text().as_deref(), Some("bar"));
     }
 }

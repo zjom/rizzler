@@ -39,4 +39,26 @@ impl Buffer {
         let anchor = self.selection_anchor?;
         selection::selected_text(&self.buf, self.mode, anchor, self.abs_pos())
     }
+
+    /// Set up a charwise visual selection spanning the half-open char range
+    /// `[start, end)`. Switches the buffer into Visual mode, anchors at
+    /// `start`, and lands the cursor on the last char of the range so the
+    /// selection covers exactly the requested span. No-op when `end <= start`.
+    pub fn select_char_range(&mut self, start: usize, end: usize) {
+        if end <= start {
+            return;
+        }
+        let total_chars = self.buf.len_chars();
+        let end = end.min(total_chars);
+        let start = start.min(end);
+        let start_row = self.buf.char_to_line(start);
+        let start_col = start - self.buf.line_to_char(start_row);
+        let last = end - 1;
+        let end_row = self.buf.char_to_line(last);
+        let end_col = last - self.buf.line_to_char(end_row);
+
+        self.set_mode(EditingMode::Visual);
+        self.selection_anchor = Some(Position::new(start_col, start_row));
+        self.land_cursor_at(end_row, end_col);
+    }
 }

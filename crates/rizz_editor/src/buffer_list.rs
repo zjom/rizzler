@@ -10,21 +10,24 @@ use std::ops::{Index, IndexMut};
 use std::path::Path;
 use std::rc::Rc;
 
-use rizz_text::{Buffer, BufferId, BufferKind, io as buffer_io};
+use rizz_core::EditingMode;
+use rizz_text::{Buffer, BufferId, io as buffer_io};
 use slotmap::SlotMap;
 
 pub struct BufferList {
     bufs: SlotMap<BufferId, Buffer>,
     minibuffer: BufferId,
     /// File buffers in creation order. Used by `cycle` and `first_file_buf`.
-    /// The minibuffer and popup-backing buffers are not in this list.
+    /// The minibuffer and panel-backing buffers are not in this list.
     file_order: Vec<BufferId>,
 }
 
 impl BufferList {
     pub fn new() -> Self {
         let mut bufs = SlotMap::with_key();
-        let minibuffer = bufs.insert(Buffer::minibuffer());
+        let mut minibuf = Buffer::new();
+        minibuf.set_mode(EditingMode::Command);
+        let minibuffer = bufs.insert(minibuf);
         let first = bufs.insert(Buffer::new());
         Self {
             bufs,
@@ -87,15 +90,26 @@ impl BufferList {
         &mut self.bufs[self.minibuffer]
     }
 
-    /// Append a buffer and return its `BufferId`. File buffers are added to
-    /// the cycle order; popup-backing and minibuffer-kind buffers are not.
-    pub fn push(&mut self, buf: Buffer) -> BufferId {
-        let kind = buf.kind();
+    /// Append a file buffer (one that participates in `:bn`/`:bp` cycling
+    /// and counts toward `:bd`'s last-file-buffer safeguard) and return its
+    /// `BufferId`.
+    pub fn push_file(&mut self, buf: Buffer) -> BufferId {
         let id = self.bufs.insert(buf);
-        if kind == BufferKind::File {
-            self.file_order.push(id);
-        }
+        self.file_order.push(id);
         id
+    }
+
+    /// Append a panel-backing buffer (the buffer behind an overlay panel).
+    /// Not in the file cycle, not counted toward file-buf safeguards.
+    pub fn push_panel(&mut self, buf: Buffer) -> BufferId {
+        self.bufs.insert(buf)
+    }
+
+    /// True if `id` is a file buffer (in the cycle order). Use this in
+    /// place of asking the buffer about itself — file-ness is a property of
+    /// how the buffer was registered, not of the buffer's content.
+    pub fn is_file_buf(&self, id: BufferId) -> bool {
+        self.file_order.iter().any(|&i| i == id)
     }
 
     /// Remove the buffer at `id`. Returns true if the buffer existed.

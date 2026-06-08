@@ -21,7 +21,7 @@ use rizz::runtime::{self, Value};
 
 use rizz_core::EditingMode;
 use rizz_text::{
-    Buffer, BufferId, BufferKind,
+    Buffer, BufferId,
     props::{PropEntry, PropStore},
     wrap::{WrapConfig, WrapMap, WrapMode},
 };
@@ -39,7 +39,12 @@ pub struct PrecomputeInput<'a> {
     pub windows: &'a WindowTree,
     pub frame_fn: Option<&'a Rc<Value>>,
     pub theme: &'a ThemeCell,
+    /// Stable id of the minibuffer. Used to skip decorator passes — the
+    /// minibuffer is plain text, no syntax/selection/cursor-line highlight.
     pub minibuffer: BufferId,
+    /// File buffers (the ones the user can cycle through with `:bn`/`:bp`).
+    /// Only these get a gutter; popup-backing buffers don't.
+    pub file_bufs: &'a [BufferId],
     pub lisp_env: &'a Env,
 }
 
@@ -50,6 +55,7 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
         frame_fn,
         theme,
         minibuffer,
+        file_bufs,
         lisp_env,
     } = input;
 
@@ -86,9 +92,10 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
     for (id, buf) in bufs.iter() {
         let mut rb = RenderedBuffer::default();
 
-        let is_visible_editor = id != minibuffer && buf.kind() == BufferKind::File;
+        let is_file = file_bufs.contains(&id);
+        let is_minibuffer = id == minibuffer;
 
-        if is_visible_editor && gutter_width > 0 {
+        if is_file && gutter_width > 0 {
             let g = build_gutter(buf, gutter_width, gutter_fn.as_ref(), &theme_snap, lisp_env);
             match g {
                 Ok(g) => rb.gutter = Some(g),
@@ -96,11 +103,11 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
             }
         }
 
-        if buf.kind() != BufferKind::Minibuffer {
+        if !is_minibuffer {
             push_builtin_decorators(buf, &theme_snap, &mut rb);
         }
 
-        if id != minibuffer {
+        if !is_minibuffer {
             let prop_ranges = build_prop_ranges(buf, &theme_snap);
             if !prop_ranges.ranges.is_empty() {
                 rb.decorators.push(prop_ranges);

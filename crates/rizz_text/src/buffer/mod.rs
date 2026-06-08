@@ -45,19 +45,6 @@ slotmap::new_key_type! {
     pub struct BufferId;
 }
 
-/// What sort of buffer this is. Drives default mode and gates operations like
-/// BufDelete/BufNext — the minibuffer participates in everything a file
-/// buffer does but is excluded from user-visible buffer cycling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum BufferKind {
-    #[default]
-    File,
-    Minibuffer,
-    /// Backing buffer of a popup. Excluded from user-visible buffer cycling
-    /// and from `BufDelete`.
-    Popup,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct Buffer {
     pub(crate) buf: Rope,
@@ -68,7 +55,6 @@ pub struct Buffer {
     /// movement scrolls `file_pos` to keep the cursor in view. Default zero
     /// means "no viewport" — scrolling is a no-op (useful in tests).
     pub viewport: Position<u16>,
-    pub(crate) kind: BufferKind,
     pub(crate) mode: EditingMode,
     /// Anchor (absolute file position) of the current visual selection.
     /// `Some` iff `mode` is one of the visual modes — managed by `set_mode`.
@@ -110,25 +96,6 @@ impl Buffer {
         Self::default()
     }
 
-    /// Construct the editor's minibuffer — single-line, starts in Command mode,
-    /// used as the destination for `:`-style command input.
-    pub fn minibuffer() -> Self {
-        Self {
-            kind: BufferKind::Minibuffer,
-            mode: EditingMode::Command,
-            ..Self::default()
-        }
-    }
-
-    /// Construct a popup's backing buffer. Same as a default buffer, just
-    /// tagged so cycling/deletion code can skip it.
-    pub fn popup() -> Self {
-        Self {
-            kind: BufferKind::Popup,
-            ..Self::default()
-        }
-    }
-
     pub fn fs_path(&self) -> Option<Rc<Path>> {
         self.fs_path.clone()
     }
@@ -139,10 +106,6 @@ impl Buffer {
 
     pub fn props_mut(&mut self) -> &mut PropStore {
         &mut self.props
-    }
-
-    pub fn kind(&self) -> BufferKind {
-        self.kind
     }
 
     pub fn mode(&self) -> EditingMode {

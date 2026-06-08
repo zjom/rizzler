@@ -19,7 +19,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use rizz_actions::{Action, KeymapRegistry};
 use rizz_core::{EditingMode, Position};
 use rizz_input::{CountPrefix, KeyEvent};
-use rizz_text::{Buffer, BufferId, BufferKind, WrapMode, io as buffer_io};
+use rizz_text::{Buffer, BufferId, WrapMode, io as buffer_io};
 use rizz_ts::TsRegistry;
 
 use rizz_ui::{
@@ -388,16 +388,16 @@ impl State {
             .and_then(|p| p.keymap_layers.last().cloned())
     }
 
-    /// Push an overlay panel onto the stack. Creates a backing buffer of
-    /// kind [`BufferKind::Popup`], appends it to `self.bufs`, and returns
-    /// its `BufferId`.
+    /// Push an overlay panel onto the stack. Creates a fresh panel-backing
+    /// buffer (not in the file cycle), appends it to `self.bufs`, and
+    /// returns its `BufferId`.
     #[instrument(skip(self, spec), fields(
         modes = ?spec.mode_layers,
         buffer_mode = ?spec.buffer_mode,
         wrap_mode = ?spec.wrap_mode,
     ))]
     pub fn open_popup(&mut self, spec: PopupSpec) -> BufferId {
-        let mut buf = Buffer::popup();
+        let mut buf = Buffer::new();
         if let Some(text) = spec.initial_text {
             buf.clear_with(&text);
         }
@@ -405,7 +405,7 @@ impl State {
         buf.set_wrap_mode(spec.wrap_mode);
         buf.set_wrap_column(spec.wrap_column);
         buf.set_breakindent(spec.breakindent);
-        let id = self.bufs.push(buf);
+        let id = self.bufs.push_panel(buf);
         self.panels.push(Panel {
             buf: id,
             keymap_layers: spec.mode_layers,
@@ -431,7 +431,10 @@ impl State {
         };
         let removed = panel.buf;
         info!(?removed, "closing overlay");
-        if self.bufs.get(removed).is_some_and(|b| b.kind() == BufferKind::Popup) {
+        // Only clean up the backing buffer if it's not a file buffer (those
+        // outlive their panel — closing a popup that happened to be viewing
+        // file buf 2 shouldn't delete file buf 2).
+        if !self.bufs.is_file_buf(removed) && removed != self.bufs.minibuffer_id() {
             self.bufs.remove(removed);
             let first = self.bufs.first_file_buf();
             self.windows.for_each_leaf_mut(|b| {
@@ -860,7 +863,7 @@ impl State {
             Some(p) => self.bufs.buffer_for_path(p),
             None => Buffer::new(),
         };
-        let id = self.bufs.push(buf);
+        let id = self.bufs.push_file(buf);
         self.install_highlighter(id);
         if set_active {
             self.windows.set_focused_buf(id);
@@ -877,7 +880,7 @@ impl State {
                 id
             }
             None => {
-                let pushed = self.bufs.push(buffer_io::with_path(path));
+                let pushed = self.bufs.push_file(buffer_io::with_path(path));
                 self.install_highlighter(pushed);
                 info!(buf = ?pushed, "edit_buf: created new buffer");
                 pushed
@@ -901,12 +904,12 @@ impl State {
 
     #[instrument(skip(self))]
     fn delete_buf(&mut self, buf: BufferId) {
-        let Some(b) = self.bufs.get(buf) else {
+        if !self.bufs.contains(buf) {
             warn!(?buf, "delete_buf: skipping (unknown id)");
             return;
-        };
-        if b.kind() == BufferKind::Minibuffer {
-            warn!(?buf, "delete_buf: skipping (minibuffer)");
+        }
+        if !self.bufs.is_file_buf(buf) {
+            warn!(?buf, "delete_buf: skipping (not a file buffer)");
             return;
         }
 
@@ -928,7 +931,7 @@ impl State {
     }
 
     fn window_split(&mut self, dir: SplitDir) {
-        let new_buf = self.bufs.push(Buffer::new());
+        let new_buf = self.bufs.push_file(Buffer::new());
         self.windows.split(dir, new_buf);
         info!(?dir, ?new_buf, "window split");
     }
@@ -1005,6 +1008,7 @@ impl State {
             frame_fn: self.frame_fn.as_ref(),
             theme: &self.theme,
             minibuffer: self.bufs.minibuffer_id(),
+            file_bufs: self.bufs.file_ids(),
             lisp_env: lisp.env(),
         });
 

@@ -109,7 +109,7 @@ impl BufferList {
     /// place of asking the buffer about itself — file-ness is a property of
     /// how the buffer was registered, not of the buffer's content.
     pub fn is_file_buf(&self, id: BufferId) -> bool {
-        self.file_order.iter().any(|&i| i == id)
+        self.file_order.contains(&id)
     }
 
     /// Remove the buffer at `id`. Returns true if the buffer existed.

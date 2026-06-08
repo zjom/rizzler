@@ -105,14 +105,29 @@ impl Buffer {
     }
 
     pub fn move_cursor(&mut self, m: MoveKind) {
-        self.close_insert_batch();
         use MoveKind as MK;
+        let is_pure_vertical = matches!(
+            m,
+            MK::Relative(Position { col: 0, row }) if row != 0
+        );
+        // close_insert_batch drops goal_col; capture and restore for the
+        // vertical-motion case so a `j`/`k` run keeps its anchor column.
+        let saved_goal = self.goal_col;
+        self.close_insert_batch();
+        if is_pure_vertical {
+            self.goal_col = saved_goal.or(Some(self.abs_col()));
+        }
         match m {
             MK::Relative(Position { col: dx, row: dy }) => {
                 let abs = self.abs_pos();
+                let src_col = if dy != 0 {
+                    self.goal_col.unwrap_or(abs.col)
+                } else {
+                    abs.col
+                };
 
                 let visual_target = if dy != 0 {
-                    scroll::visual_step(self.wrap_cache.as_ref(), abs.row, abs.col, dy)
+                    scroll::visual_step(self.wrap_cache.as_ref(), abs.row, src_col, dy)
                 } else {
                     None
                 };
@@ -127,8 +142,7 @@ impl Buffer {
                             .saturating_add(self.file_pos.row as isize)
                             .saturating_add(dy as isize)
                             .max(0) as usize;
-                        let c = (self.cursor_pos.col as isize)
-                            .saturating_add(self.file_pos.col as isize)
+                        let c = (src_col as isize)
                             .saturating_add(dx as isize)
                             .max(0) as usize;
                         (r, c)

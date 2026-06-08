@@ -31,6 +31,7 @@ impl Buffer {
         let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;
         let abs_before = self.abs_pos();
 
+        self.goal_col = None;
         self.buf.insert_char(cidx, c);
         self.invalidate_wrap_cache();
 
@@ -151,6 +152,7 @@ impl Buffer {
             });
         }
         let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;
+        self.goal_col = None;
         self.buf.insert_char(cidx, c);
         self.invalidate_wrap_cache();
         if c == '\n' {

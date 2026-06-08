@@ -59,6 +59,12 @@ pub struct Buffer {
     /// Anchor (absolute file position) of the current visual selection.
     /// `Some` iff `mode` is one of the visual modes — managed by `set_mode`.
     pub(crate) selection_anchor: Option<Position<usize>>,
+    /// Sticky column for vertical motion. Initialized on the first vertical
+    /// `Relative` step and preserved across subsequent ones so traversing a
+    /// short line doesn't truncate the cursor's column on later longer ones.
+    /// Cleared by anything that breaks the run — non-vertical cursor moves,
+    /// edits, mode changes — see [`Buffer::close_insert_batch`].
+    pub(crate) goal_col: Option<usize>,
     /// Text properties and overlays. Built up by lisp via
     /// `put-text-property` / `overlay-create`; consumed by the precompute
     /// pass to emit decorator ranges.
@@ -181,11 +187,14 @@ impl Buffer {
         }
     }
 
-    /// End the current insert-coalescing run so the next typed character
-    /// pushes a new changetree node. Called by anything that breaks the
-    /// run: a non-insert edit, a cursor move, a mode change, undo/redo.
+    /// End the current insert-coalescing run AND drop the vertical-motion
+    /// sticky goal column. Called by anything that breaks either run: a
+    /// non-insert edit, a cursor move, a mode change, undo/redo. Callers
+    /// that need to preserve the goal column across this call (notably
+    /// vertical `move_cursor` steps) capture and restore it themselves.
     pub(crate) fn close_insert_batch(&mut self) {
         self.insert_batch_end = None;
+        self.goal_col = None;
     }
 
     /// Most recent visual-line layout (from the last render's precompute
@@ -774,6 +783,70 @@ mod tests {
         s.move_cursor(MoveKind::HalfPageUp);
         assert_eq!(s.file_pos.row, 0);
         assert_eq!(s.cursor_pos.row, 0);
+    }
+
+    // ---- goal column (sticky col for vertical motion) ---------------
+
+    #[test]
+    fn visual_vertical_motion_preserves_goal_col_across_short_line() {
+        // Lines length 8, 2, 10 — anchor col 8 on line A, stepping through
+        // line B clamps to 2 but stepping onto line C restores col 8.
+        let mut s = mk("12345678\nab\n0123456789");
+        s.set_mode(EditingMode::Visual);
+        s.move_cursor(MoveKind::LineEnd);
+        assert_eq!(cur_col(&s), 8);
+        s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
+        assert_eq!(cur_col(&s), 2);
+        s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
+        assert_eq!(cur_col(&s), 8);
+    }
+
+    #[test]
+    fn normal_mode_vertical_motion_preserves_goal_col() {
+        let mut s = mk("12345678\nab\n0123456789");
+        s.mode = EditingMode::Normal;
+        s.cursor_pos = Position::<u16>::new(7, 0);
+        s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
+        assert_eq!(cur_col(&s), 1);
+        s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
+        assert_eq!(cur_col(&s), 7);
+    }
+
+    #[test]
+    fn insert_mode_vertical_motion_preserves_goal_col() {
+        let mut s = mk("12345678\nab\n0123456789");
+        s.mode = EditingMode::Insert;
+        s.cursor_pos = Position::<u16>::new(8, 0);
+        s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
+        assert_eq!(cur_col(&s), 2);
+        s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
+        assert_eq!(cur_col(&s), 8);
+    }
+
+    #[test]
+    fn horizontal_motion_resets_goal_col() {
+        let mut s = mk("12345678\nab\n0123456789");
+        s.set_mode(EditingMode::Visual);
+        s.move_cursor(MoveKind::LineEnd);
+        s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
+        assert_eq!(cur_col(&s), 2);
+        // LineStart re-anchors on the short line — next vertical step uses
+        // col 0, not the prior goal of 8.
+        s.move_cursor(MoveKind::LineStart);
+        s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
+        assert_eq!(cur_col(&s), 0);
+    }
+
+    #[test]
+    fn typing_resets_goal_col() {
+        let mut s = mk("12345678\nab\n0123456789");
+        s.mode = EditingMode::Insert;
+        s.cursor_pos = Position::<u16>::new(8, 0);
+        s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
+        assert_eq!(cur_col(&s), 2);
+        s.insert_char('!');
+        s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
+        assert_eq!(cur_col(&s), 3);
     }
 
     // ---- selected_text ------------------------------------------------

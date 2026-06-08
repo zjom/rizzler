@@ -846,25 +846,23 @@
     (if (= pref "")
         (w-line [(w-span "  command mode — type a form and press <enter> · <tab> to complete  "
                          "vague.muted")])
-        (do
-          (let cands (command-completions))
-          (let n (len cands))
-          (cond
-            ((= n 0)
-             (w-line [(w-span "  no completions  " "vague.muted")]))
-            ((= n 1)
-             (w-line [(w-span "  " "vague.muted")
-                      (w-span (first cands) "vague.accent")
-                      (w-span "  <tab> to insert  " "vague.muted")]))
-            (else
-             (_menu-build cands n (_menu-clamped n))))))))
+        (w-line [(w-span "  <c-n>/<c-p> to move · <c-y> to accept · <tab> to extend  "
+                         "vague.muted")]))))
 
-;; Rows the hint area should reserve. 1 cell by default; up to _menu-max-rows
-;; when the completion menu has 2+ candidates to show.
-(fn _hint-height ()
+;; Floating completion menu. Sits as an overlay anchored to the bottom
+;; of the editor area, growing upward as more candidates appear so the
+;; editor rows underneath stay visible everywhere the menu doesn't paint.
+;; Returns (w-empty) when there are no candidates to show.
+(fn _menu-overlay ()
   (do
-    (let n (len (_menu-cands)))
-    (if (< n 2) 1 (min n _menu-max-rows))))
+    (let cands (_menu-cands))
+    (let n (len cands))
+    (if (<= n 0)
+        (w-empty)
+        (do
+          (let rows (min n _menu-max-rows))
+          (w-overlay (placement-anchored 'bottom rows)
+                     (_menu-build cands n (_menu-clamped n)))))))
 
 (fn _hint-bar ()
   (do
@@ -886,9 +884,9 @@
 ;;    status line     (cells 1)
 ;;    minibuffer      (cells 1)
 ;;
-;; The hint sits *above* the status line so that when the completion menu
-;; expands it grows upward into the editor area, leaving the status line
-;; anchored just above the minibuffer.
+;; The hint is always one row; when the completion menu has 1 or more candidates
+;; it floats above the editor as a (w-overlay) (see `_menu-overlay`),
+;; which paints over editor cells without stealing layout rows from them.
 ;;
 ;; The status line is an hstack with a `fill` spacer between the left and
 ;; right groups so right-aligned segments hug the right margin.
@@ -941,8 +939,9 @@
 ;; different fn hot-swaps the layout. There can be only one frame fn.
 (fn _frame ()
   (w-vstack
-    [(w-size 'min   1 (w-editor-tree))
-     (w-size 'cells (_hint-height) (_hint-bar))
+    [(w-size 'min   1 (w-vstack [(w-editor-tree)
+                                 (_menu-overlay)]))
+     (w-size 'cells 1 (_hint-bar))
      (w-size 'cells 1 (_status-line))
      (w-size 'cells 1 (w-minibuffer))
      (_selection-badge)]))

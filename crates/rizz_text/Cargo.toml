@@ -10,4 +10,5 @@ rizz_changetree = { path = "../rizz_changetree" }
 rizz_ts = { path = "../rizz_ts" }
 ropey = "1.6.1"
 rizz = { workspace = true }
+slotmap = { workspace = true }
 tracing = { workspace = true }

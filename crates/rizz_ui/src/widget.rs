@@ -10,6 +10,8 @@ use std::rc::Rc;
 use ratatui::layout::{Alignment, Constraint};
 use ratatui::text::Span;
 use rizz::runtime::{RuntimeError, Value};
+use rizz_text::BufferId;
+use slotmap::KeyData;
 
 use crate::popup::BorderStyle;
 use crate::styling::{Theme, spans_from_value};
@@ -55,9 +57,9 @@ pub enum Widget {
     /// The minibuffer leaf. Single row.
     Minibuffer,
     /// Render a single buffer into the allocated rect via `EditorView`. When
-    /// `bufno` is `None`, the renderer fills it in with the enclosing popup's
+    /// `buf` is `None`, the renderer fills it in with the enclosing popup's
     /// backing buffer.
-    BufferView { bufno: Option<usize> },
+    BufferView { buf: Option<BufferId> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,11 +253,12 @@ fn parse_block(
 }
 
 fn parse_buffer_view(m: &im::HashMap<Rc<Value>, Rc<Value>>) -> Result<Widget, RuntimeError> {
-    let bufno = m
+    let buf = m
         .get(&key("bufno"))
         .and_then(|v| v.as_int())
-        .map(|n| n.max(0) as usize);
-    Ok(Widget::BufferView { bufno })
+        .filter(|&n| n > 0)
+        .map(|n| BufferId::from(KeyData::from_ffi(n as u64)));
+    Ok(Widget::BufferView { buf })
 }
 
 fn parse_editor_tree(m: &im::HashMap<Rc<Value>, Rc<Value>>) -> Result<Widget, RuntimeError> {

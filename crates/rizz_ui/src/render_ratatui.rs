@@ -14,6 +14,7 @@ use ratatui::{
 };
 
 use rizz_core::EditingMode;
+use rizz_text::BufferId;
 
 use crate::{
     components::{EditorView, MinibufferLine},
@@ -34,7 +35,7 @@ struct WalkCtx {
 
 #[derive(Clone, Copy)]
 struct PopupCtx {
-    bufno: usize,
+    buf: BufferId,
     is_top: bool,
     show_cursor: bool,
 }
@@ -146,8 +147,8 @@ fn walk(
                 cur.editor = Some(pos);
             }
         }
-        Widget::BufferView { bufno } => {
-            walk_buffer_view(*bufno, area, snap, fd, f, cur, ctx);
+        Widget::BufferView { buf } => {
+            walk_buffer_view(*buf, area, snap, fd, f, cur, ctx);
         }
     }
 }
@@ -219,7 +220,7 @@ fn walk_block(
 
 #[allow(clippy::too_many_arguments)]
 fn walk_buffer_view(
-    explicit_bufno: Option<usize>,
+    explicit_buf: Option<BufferId>,
     area: Rect,
     snap: &StateSnapshot<'_>,
     fd: &RenderedFrame,
@@ -227,19 +228,19 @@ fn walk_buffer_view(
     cur: &mut CursorPlacement,
     ctx: WalkCtx,
 ) {
-    let Some(bufno) = explicit_bufno.or(ctx.popup.map(|p| p.bufno)) else {
+    let Some(buf_id) = explicit_buf.or(ctx.popup.map(|p| p.buf)) else {
         return;
     };
-    let Some(buf) = snap.bufs.get(bufno) else {
+    let Some(buf) = snap.bufs.get(buf_id) else {
         return;
     };
-    let buf_frame = fd.per_buf.get(bufno);
+    let buf_frame = fd.per_buf.get(buf_id);
     EditorView::render(buf, area, buf_frame, f);
 
     if let Some(pctx) = ctx.popup
         && pctx.is_top
         && pctx.show_cursor
-        && pctx.bufno == bufno
+        && pctx.buf == buf_id
     {
         let (x, y) = match buf_frame.and_then(|bf| bf.wrap.as_ref()) {
             Some(wrap) => EditorView::cursor_wrapped(buf, area, buf_frame, wrap),
@@ -262,10 +263,10 @@ fn walk_editor_tree(
 ) {
     let focused_path = snap.windows.focused_path();
     for leaf in snap.windows.layout(area) {
-        let Some(buf) = snap.bufs.get(leaf.bufno) else {
+        let Some(buf) = snap.bufs.get(leaf.buf) else {
             continue;
         };
-        let buf_frame = fd.per_buf.get(leaf.bufno);
+        let buf_frame = fd.per_buf.get(leaf.buf);
         EditorView::render(buf, leaf.area, buf_frame, f);
         if !snap.focus_minibuffer && &leaf.path == focused_path {
             cur.editor = Some(match buf_frame.and_then(|bf| bf.wrap.as_ref()) {
@@ -285,7 +286,7 @@ fn draw_popup(
     f: &mut Frame,
     cur: &mut CursorPlacement,
 ) {
-    let buf = match snap.bufs.get(popup.bufno) {
+    let buf = match snap.bufs.get(popup.buf) {
         Some(b) => b,
         None => return,
     };
@@ -296,7 +297,7 @@ fn draw_popup(
     f.render_widget(Clear, outer);
     let ctx = WalkCtx {
         popup: Some(PopupCtx {
-            bufno: popup.bufno,
+            buf: popup.buf,
             is_top,
             show_cursor: popup.show_cursor,
         }),

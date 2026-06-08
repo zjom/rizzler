@@ -35,6 +35,16 @@ use crate::{
 pub use cursor::MoveKind;
 pub use edits::Speculation;
 
+slotmap::new_key_type! {
+    /// Stable handle to a `Buffer` held by the editor's buffer registry.
+    ///
+    /// Issued by `slotmap::SlotMap` so the value survives insertions/removals
+    /// of unrelated buffers — no manual reindex on delete. Window leaves,
+    /// popups, and the `Widget::BufferView` widget all reference buffers by
+    /// `BufferId` so they can't go stale.
+    pub struct BufferId;
+}
+
 /// What sort of buffer this is. Drives default mode and gates operations like
 /// BufDelete/BufNext — the minibuffer participates in everything a file
 /// buffer does but is excluded from user-visible buffer cycling.

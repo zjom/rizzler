@@ -1,9 +1,9 @@
 //! Editor window tree.
 //!
 //! The window tree organizes the editor area into splits and leaves; each
-//! leaf points at a buffer index in the host's `BufferList`. The minibuffer
-//! is *not* part of this tree — it's a separate single-row strip the
-//! renderer handles via [`crate::Widget::Minibuffer`].
+//! leaf points at a buffer via a stable `BufferId`. The minibuffer is *not*
+//! part of this tree — it's a separate single-row strip the renderer handles
+//! via [`crate::Widget::Minibuffer`].
 //!
 //! Direction enums ([`SplitDir`], [`FocusDir`]) live in `rizz_core` so
 //! `rizz_actions` can reference them without taking a UI dependency.
@@ -11,6 +11,7 @@
 #![allow(dead_code)]
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use rizz_text::BufferId;
 
 pub use rizz_core::{FocusDir, SplitDir};
 
@@ -49,7 +50,7 @@ impl FocusDirExt for FocusDir {
 #[derive(Debug, Clone)]
 pub enum Window {
     Leaf {
-        bufno: usize,
+        buf: BufferId,
     },
     Split {
         dir: SplitDir,
@@ -58,8 +59,8 @@ pub enum Window {
 }
 
 impl Window {
-    pub fn leaf(bufno: usize) -> Self {
-        Self::Leaf { bufno }
+    pub fn leaf(buf: BufferId) -> Self {
+        Self::Leaf { buf }
     }
 }
 
@@ -69,7 +70,7 @@ pub type LeafPath = Vec<usize>;
 #[derive(Debug, Clone)]
 pub struct LeafLayout {
     pub path: LeafPath,
-    pub bufno: usize,
+    pub buf: BufferId,
     pub area: Rect,
 }
 
@@ -80,9 +81,9 @@ pub struct WindowTree {
 }
 
 impl WindowTree {
-    pub fn new(bufno: usize) -> Self {
+    pub fn new(buf: BufferId) -> Self {
         Self {
-            root: Window::leaf(bufno),
+            root: Window::leaf(buf),
             focused: Vec::new(),
         }
     }
@@ -91,17 +92,17 @@ impl WindowTree {
         &self.focused
     }
 
-    pub fn focused_bufno(&self) -> usize {
+    pub fn focused_buf(&self) -> BufferId {
         match self.node_at(&self.focused) {
-            Some(Window::Leaf { bufno }) => *bufno,
+            Some(Window::Leaf { buf }) => *buf,
             _ => panic!("focused path must point to a leaf"),
         }
     }
 
-    pub fn set_focused_bufno(&mut self, bufno: usize) {
+    pub fn set_focused_buf(&mut self, buf: BufferId) {
         let path = self.focused.clone();
-        if let Some(Window::Leaf { bufno: b }) = self.node_at_mut(&path) {
-            *b = bufno;
+        if let Some(Window::Leaf { buf: b }) = self.node_at_mut(&path) {
+            *b = buf;
         }
     }
 
@@ -113,9 +114,9 @@ impl WindowTree {
 
     fn layout_node(node: &Window, area: Rect, path: &mut LeafPath, out: &mut Vec<LeafLayout>) {
         match node {
-            Window::Leaf { bufno } => out.push(LeafLayout {
+            Window::Leaf { buf } => out.push(LeafLayout {
                 path: path.clone(),
-                bufno: *bufno,
+                buf: *buf,
                 area,
             }),
             Window::Split { dir, children } => {
@@ -159,15 +160,15 @@ impl WindowTree {
         Some(node)
     }
 
-    pub fn split(&mut self, dir: SplitDir, new_bufno: usize) {
-        let current_bufno = self.focused_bufno();
+    pub fn split(&mut self, dir: SplitDir, new_buf: BufferId) {
+        let current_buf = self.focused_buf();
         let path = self.focused.clone();
         if let Some(leaf) = self.node_at_mut(&path) {
             *leaf = Window::Split {
                 dir,
                 children: vec![
-                    (1, Window::leaf(current_bufno)),
-                    (1, Window::leaf(new_bufno)),
+                    (1, Window::leaf(current_buf)),
+                    (1, Window::leaf(new_buf)),
                 ],
             };
         }
@@ -261,13 +262,15 @@ impl WindowTree {
         }
     }
 
-    pub fn for_each_leaf_mut(&mut self, mut f: impl FnMut(&mut usize)) {
+    /// Visit every leaf, calling `f` on its buffer id. Used when a buffer is
+    /// being removed to redirect leaves that pointed at it to a fallback id.
+    pub fn for_each_leaf_mut(&mut self, mut f: impl FnMut(&mut BufferId)) {
         Self::walk_mut(&mut self.root, &mut f);
     }
 
-    fn walk_mut(node: &mut Window, f: &mut impl FnMut(&mut usize)) {
+    fn walk_mut(node: &mut Window, f: &mut impl FnMut(&mut BufferId)) {
         match node {
-            Window::Leaf { bufno } => f(bufno),
+            Window::Leaf { buf } => f(buf),
             Window::Split { children, .. } => {
                 for (_, child) in children {
                     Self::walk_mut(child, f);
@@ -280,6 +283,11 @@ impl WindowTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slotmap::{KeyData, Key};
+
+    fn bid(n: u64) -> BufferId {
+        BufferId::from(KeyData::from_ffi(n))
+    }
 
     fn r(w: u16, h: u16) -> Rect {
         Rect::new(0, 0, w, h)
@@ -287,53 +295,71 @@ mod tests {
 
     #[test]
     fn new_tree_is_single_leaf() {
-        let t = WindowTree::new(3);
-        assert_eq!(t.focused_bufno(), 3);
+        let id = bid(3);
+        let t = WindowTree::new(id);
+        assert_eq!(t.focused_buf(), id);
         let layout = t.layout(r(80, 24));
         assert_eq!(layout.len(), 1);
-        assert_eq!(layout[0].bufno, 3);
+        assert_eq!(layout[0].buf, id);
     }
 
     #[test]
     fn split_creates_two_leaves_and_focuses_new() {
-        let mut t = WindowTree::new(1);
-        t.split(SplitDir::Horizontal, 2);
+        let a = bid(1);
+        let b = bid(2);
+        let mut t = WindowTree::new(a);
+        t.split(SplitDir::Horizontal, b);
         let layout = t.layout(r(80, 24));
         assert_eq!(layout.len(), 2);
-        assert_eq!(t.focused_bufno(), 2);
+        assert_eq!(t.focused_buf(), b);
     }
 
     #[test]
     fn focus_dir_moves_across_horizontal_split() {
-        let mut t = WindowTree::new(1);
-        t.split(SplitDir::Horizontal, 2);
+        let a = bid(1);
+        let b = bid(2);
+        let mut t = WindowTree::new(a);
+        t.split(SplitDir::Horizontal, b);
         t.focus_dir(FocusDir::Left);
-        assert_eq!(t.focused_bufno(), 1);
+        assert_eq!(t.focused_buf(), a);
         t.focus_dir(FocusDir::Right);
-        assert_eq!(t.focused_bufno(), 2);
+        assert_eq!(t.focused_buf(), b);
     }
 
     #[test]
     fn close_focused_collapses_split() {
-        let mut t = WindowTree::new(1);
-        t.split(SplitDir::Vertical, 2);
+        let a = bid(1);
+        let b = bid(2);
+        let mut t = WindowTree::new(a);
+        t.split(SplitDir::Vertical, b);
         t.close_focused();
         let layout = t.layout(r(80, 24));
         assert_eq!(layout.len(), 1);
-        assert_eq!(t.focused_bufno(), 1);
+        assert_eq!(t.focused_buf(), a);
     }
 
     #[test]
-    fn for_each_leaf_mut_reindexes() {
-        let mut t = WindowTree::new(2);
-        t.split(SplitDir::Horizontal, 3);
-        t.for_each_leaf_mut(|b| {
-            if *b > 1 {
-                *b -= 1;
+    fn for_each_leaf_mut_redirects() {
+        let a = bid(2);
+        let b = bid(3);
+        let fallback = bid(1);
+        let mut t = WindowTree::new(a);
+        t.split(SplitDir::Horizontal, b);
+        // Redirect any leaf pointing at `b` to `fallback`.
+        t.for_each_leaf_mut(|id| {
+            if *id == b {
+                *id = fallback;
             }
         });
         let layout = t.layout(r(10, 10));
-        assert_eq!(layout[0].bufno, 1);
-        assert_eq!(layout[1].bufno, 2);
+        assert!(layout.iter().any(|l| l.buf == a));
+        assert!(layout.iter().any(|l| l.buf == fallback));
+        assert!(layout.iter().all(|l| l.buf != b));
+    }
+
+    // Suppress unused-import warning when no test uses Key but the import is
+    // kept for parity with future test helpers.
+    fn _key_suppress() {
+        let _ = bid(0).is_null();
     }
 }

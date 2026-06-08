@@ -17,5 +17,6 @@ rizz_input = { path = "../rizz_input" }
 rizz_ringbuffer = { path = "../rizz_ringbuffer" }
 rizz_text = { path = "../rizz_text" }
 rizz_ui = { path = "../rizz_ui" }
+slotmap = { workspace = true }
 thiserror = "2.0.18"
 tracing = { workspace = true }

@@ -3,7 +3,7 @@ use std::rc::Rc;
 use rizz::runtime::Value;
 use rizz_ui::widget::parse_widget;
 
-use super::super::helpers::Builtins;
+use super::super::helpers::{Builtins, buf_id_to_int};
 use super::super::popup_parse::parse_popup_options;
 use super::super::with_editor_mut;
 use crate::state::PopupSpec;
@@ -18,8 +18,8 @@ pub(super) fn register(b: &mut Builtins) {
         if let Some(opts) = args.get(1) {
             parse_popup_options(opts, &mut spec)?;
         }
-        let bufno = with_editor_mut(|st| st.open_popup(spec));
-        Ok(Rc::new(Value::Int(bufno as i64)))
+        let id = with_editor_mut(|st| st.open_popup(spec));
+        Ok(Rc::new(Value::Int(buf_id_to_int(id))))
     });
     b.be("popup-close", 0, |_, _| {
         let closed = with_editor_mut(|st| st.close_popup());
@@ -27,15 +27,15 @@ pub(super) fn register(b: &mut Builtins) {
     });
     b.be("popup-bufno", 0, |_, _| {
         let v = with_editor_mut(|st| {
-            st.top_popup_bufno()
-                .map(|n| Value::Int(n as i64))
+            st.top_popup_buf()
+                .map(|id| Value::Int(buf_id_to_int(id)))
                 .unwrap_or(Value::Unit)
         });
         Ok(Rc::new(v))
     });
     b.be("minibuffer-bufno", 0, |_, _| {
-        let n = with_editor_mut(|st| st.minibuffer_bufno());
-        Ok(Rc::new(Value::Int(n as i64)))
+        let id = with_editor_mut(|st| st.minibuffer_id());
+        Ok(Rc::new(Value::Int(buf_id_to_int(id))))
     });
     b.be("popup-mode", 0, |_, _| {
         let v = with_editor_mut(|st| st.top_popup_mode().map(Value::Str).unwrap_or(Value::Unit));

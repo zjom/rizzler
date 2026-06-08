@@ -21,6 +21,6 @@ pub mod props;
 pub mod scroll;
 pub mod wrap;
 
-pub use buffer::{Buffer, BufferKind, MoveKind};
+pub use buffer::{Buffer, BufferId, BufferKind, MoveKind};
 pub use props::{OverlayId, PropEntry, PropStore};
 pub use wrap::{VisualRow, WrapConfig, WrapMap, WrapMode, WrapSettings};

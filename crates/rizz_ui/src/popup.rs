@@ -9,7 +9,7 @@
 use std::rc::Rc;
 
 use ratatui::layout::Rect;
-use rizz_text::{Buffer, WrapConfig, WrapMap, WrapMode};
+use rizz_text::{Buffer, BufferId, WrapConfig, WrapMap, WrapMode};
 
 use crate::widget::Widget;
 
@@ -160,7 +160,7 @@ impl BorderStyle {
 
 #[derive(Clone, Debug)]
 pub struct Popup {
-    pub bufno: usize,
+    pub buf: BufferId,
     pub placement: Placement,
     /// The widget tree drawn at the resolved placement rect.
     pub widget: Widget,
@@ -173,9 +173,9 @@ pub struct Popup {
 /// Walk a popup widget tree and return the rect where the
 /// `(buffer-view)` leaf will be drawn, given the popup's outer placement
 /// rect.
-pub fn buffer_view_rect(widget: &Widget, outer: Rect, popup_bufno: usize) -> Rect {
+pub fn buffer_view_rect(widget: &Widget, outer: Rect, popup_buf: BufferId) -> Rect {
     match widget {
-        Widget::BufferView { bufno } if bufno.unwrap_or(popup_bufno) == popup_bufno => outer,
+        Widget::BufferView { buf } if buf.unwrap_or(popup_buf) == popup_buf => outer,
         Widget::Block { border, child, .. } => {
             let inset = border.inset();
             let inner = Rect {
@@ -184,9 +184,9 @@ pub fn buffer_view_rect(widget: &Widget, outer: Rect, popup_bufno: usize) -> Rec
                 width: outer.width.saturating_sub(2 * inset),
                 height: outer.height.saturating_sub(2 * inset),
             };
-            buffer_view_rect(child, inner, popup_bufno)
+            buffer_view_rect(child, inner, popup_buf)
         }
-        Widget::Constrained { child, .. } => buffer_view_rect(child, outer, popup_bufno),
+        Widget::Constrained { child, .. } => buffer_view_rect(child, outer, popup_buf),
         _ => outer,
     }
 }
@@ -195,15 +195,15 @@ pub fn buffer_view_rect(widget: &Widget, outer: Rect, popup_bufno: usize) -> Rec
 /// outer placement rect and the `(buffer-view)` leaf. Used by
 /// [`resolve_popup_rect`] to translate content-fit dims into outer dims
 /// without knowing the outer size first (insets don't depend on the rect).
-pub fn buffer_view_inset(widget: &Widget, popup_bufno: usize) -> (u16, u16) {
+pub fn buffer_view_inset(widget: &Widget, popup_buf: BufferId) -> (u16, u16) {
     match widget {
-        Widget::BufferView { bufno } if bufno.unwrap_or(popup_bufno) == popup_bufno => (0, 0),
+        Widget::BufferView { buf } if buf.unwrap_or(popup_buf) == popup_buf => (0, 0),
         Widget::Block { border, child, .. } => {
             let i = border.inset();
-            let (cw, ch) = buffer_view_inset(child, popup_bufno);
+            let (cw, ch) = buffer_view_inset(child, popup_buf);
             (cw + 2 * i, ch + 2 * i)
         }
-        Widget::Constrained { child, .. } => buffer_view_inset(child, popup_bufno),
+        Widget::Constrained { child, .. } => buffer_view_inset(child, popup_buf),
         _ => (0, 0),
     }
 }
@@ -216,7 +216,7 @@ pub fn resolve_popup_rect(popup: &Popup, area: Rect, buf: &Buffer) -> Rect {
     if !placement_needs_fit(&popup.placement) {
         return popup.placement.resolve(area, 0, 0);
     }
-    let (inset_w, inset_h) = buffer_view_inset(&popup.widget, popup.bufno);
+    let (inset_w, inset_h) = buffer_view_inset(&popup.widget, popup.buf);
     // Width budget for wrapping when fitting height: full available area
     // minus chrome. `wrap_column` (if set) overrides — that's the buffer's
     // explicit wrap target, narrower than the popup might end up.
@@ -308,18 +308,8 @@ impl PopupStack {
             .and_then(|p| p.mode_layers.last().cloned())
     }
 
-    pub fn top_bufno(&self) -> Option<usize> {
-        self.stack.last().map(|p| p.bufno)
-    }
-
-    /// Re-index `bufno` references after the buffer at `removed` was deleted
-    /// from `State.bufs`. Indices past `removed` shift down by one.
-    pub fn shift_bufnos_after_removal(&mut self, removed: usize) {
-        for p in &mut self.stack {
-            if p.bufno > removed {
-                p.bufno -= 1;
-            }
-        }
+    pub fn top_buf(&self) -> Option<BufferId> {
+        self.stack.last().map(|p| p.buf)
     }
 }
 

@@ -13,3 +13,4 @@ crossterm = "0.29.0"
 unicode-width = "0.2"
 rizz = { workspace = true }
 im = "15.1.0"
+slotmap = { workspace = true }

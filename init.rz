@@ -703,12 +703,17 @@
   (w-text (str-join [(to-str (cursor-line)) ":" (to-str (cursor-col))] "")
           "vague.accent"))
 
+;; (buf-index) returns a 1-based file-order index suitable for display, or
+;; () for the minibuffer / popup-backing buffers. We fall back to "*" so
+;; the status line still has *something* in those cases.
 (fn _seg-bufno ()
   (do
     (let m (focused-mode))
+    (let i (buf-index))
+    (let label (if (= i ()) "*" (to-str i)))
     (if (= m "command")
-        (w-text (to-str (buf-no)) "vague.reverse")
-        (w-text (to-str (buf-no)) "vague.warn"))))
+        (w-text label "vague.reverse")
+        (w-text label "vague.warn"))))
 
 
 ;; The "hint bar" sits below the status line and changes based on the

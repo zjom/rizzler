@@ -21,10 +21,11 @@ use rizz::runtime::{self, Value};
 
 use rizz_core::EditingMode;
 use rizz_text::{
-    Buffer, BufferKind,
+    Buffer, BufferId, BufferKind,
     props::{PropEntry, PropStore},
     wrap::{WrapConfig, WrapMap, WrapMode},
 };
+use slotmap::{SecondaryMap, SlotMap};
 
 use crate::render::{DecoratorRanges, RenderedBuffer, RenderedFrame, RenderedGutter, StyledRange};
 use crate::styling::{Color, Style, Theme, ThemeCell, spans_from_value, style_from_value};
@@ -34,11 +35,11 @@ use crate::window::WindowTree;
 /// Inputs the precompute pass reads from `State`. All references are
 /// immutable; the only mutation it performs is on its own local builders.
 pub struct PrecomputeInput<'a> {
-    pub bufs: &'a [Buffer],
+    pub bufs: &'a SlotMap<BufferId, Buffer>,
     pub windows: &'a WindowTree,
     pub frame_fn: Option<&'a Rc<Value>>,
     pub theme: &'a ThemeCell,
-    pub minibuffer: usize,
+    pub minibuffer: BufferId,
     pub lisp_env: &'a Env,
 }
 
@@ -81,11 +82,11 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
 
     let (gutter_width, gutter_fn) = find_editor_tree_spec(&root);
 
-    let mut per_buf = Vec::with_capacity(bufs.len());
-    for (i, buf) in bufs.iter().enumerate() {
+    let mut per_buf: SecondaryMap<BufferId, RenderedBuffer> = SecondaryMap::new();
+    for (id, buf) in bufs.iter() {
         let mut rb = RenderedBuffer::default();
 
-        let is_visible_editor = i != minibuffer && buf.kind() == BufferKind::File;
+        let is_visible_editor = id != minibuffer && buf.kind() == BufferKind::File;
 
         if is_visible_editor && gutter_width > 0 {
             let g = build_gutter(buf, gutter_width, gutter_fn.as_ref(), &theme_snap, lisp_env);
@@ -99,7 +100,7 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
             push_builtin_decorators(buf, &theme_snap, &mut rb);
         }
 
-        if i != minibuffer {
+        if id != minibuffer {
             let prop_ranges = build_prop_ranges(buf, &theme_snap);
             if !prop_ranges.ranges.is_empty() {
                 rb.decorators.push(prop_ranges);
@@ -123,7 +124,7 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
             }
         }
 
-        per_buf.push(rb);
+        per_buf.insert(id, rb);
     }
 
     let _ = &mut root;

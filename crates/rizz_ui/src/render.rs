@@ -4,7 +4,8 @@ use ratatui::text::Line;
 
 use rizz_core::Display;
 use rizz_input::KeyEvent;
-use rizz_text::{Buffer, WrapMap};
+use rizz_text::{Buffer, BufferId, WrapMap};
+use slotmap::{SecondaryMap, SlotMap};
 
 use crate::{
     popup::Popup,
@@ -21,17 +22,18 @@ pub use rizz_core::Display as DisplayRe;
 /// editor's internal type, and `State` can hand out a snapshot without
 /// exposing its private fields.
 pub struct StateSnapshot<'a> {
-    /// All buffers, indexed by the window tree's leaves.
-    pub bufs: &'a [Buffer],
+    /// All buffers, keyed by stable `BufferId`. The renderer looks up the
+    /// buffer for each window leaf / popup / `BufferView` from this map.
+    pub bufs: &'a SlotMap<BufferId, Buffer>,
     /// Window tree — the renderer walks it to lay out editor windows.
     pub windows: &'a WindowTree,
     /// The minibuffer — always present, may be empty.
     pub minibuffer: &'a Buffer,
     /// Whether key input is currently routed to the minibuffer.
     pub focus_minibuffer: bool,
-    /// Index of the focused editor buffer in `bufs` — what the status line
-    /// shows as the "current" buffer.
-    pub bufno: usize,
+    /// Id of the focused editor buffer — what the status line shows as the
+    /// "current" buffer.
+    pub buf: BufferId,
     pub keyevent: Option<KeyEvent>,
     pub cursor_style: CursorStyle,
     /// Popup stack, bottom-to-top. The renderer paints them in order, so the
@@ -48,7 +50,7 @@ impl StateSnapshot<'_> {
         if self.focus_minibuffer {
             self.minibuffer
         } else {
-            &self.bufs[self.windows.focused_bufno()]
+            &self.bufs[self.windows.focused_buf()]
         }
     }
 }
@@ -77,7 +79,9 @@ pub struct RenderedFrame {
     pub root: Widget,
     /// Per-buffer precomputed data: gutter rows (built from the EditorTree's
     /// gutter fn), built-in + user decorator ranges, and the soft-wrap layout.
-    pub per_buf: Vec<RenderedBuffer>,
+    /// Keyed by `BufferId`; only buffers actually visible this frame are
+    /// populated.
+    pub per_buf: SecondaryMap<BufferId, RenderedBuffer>,
 }
 
 /// Per-buffer precomputed data — gutter rows and decorator ranges.

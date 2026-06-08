@@ -19,7 +19,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use rizz_actions::{Action, KeymapRegistry};
 use rizz_core::{EditingMode, Position};
 use rizz_input::{CountPrefix, KeyEvent};
-use rizz_text::{Buffer, BufferKind, WrapMode, io as buffer_io};
+use rizz_text::{Buffer, BufferId, BufferKind, WrapMode, io as buffer_io};
 use rizz_ts::TsRegistry;
 
 use rizz_ui::{
@@ -206,9 +206,11 @@ impl State {
             "constructing State"
         );
 
+        let bufs = BufferList::new();
+        let first_file = bufs.first_file_buf();
         let mut state = Self {
-            bufs: BufferList::new(),
-            windows: WindowTree::new(1),
+            bufs,
+            windows: WindowTree::new(first_file),
             focus_minibuffer: false,
             journal: Journal::new(),
             popups: PopupStack::new(),
@@ -228,8 +230,8 @@ impl State {
         if let Some(path) = config.edit_path
             && !path.is_dir()
         {
-            state.bufs[1] = buffer_io::with_path(Rc::<Path>::from(path));
-            state.install_highlighter(1);
+            state.bufs[first_file] = buffer_io::with_path(Rc::<Path>::from(path));
+            state.install_highlighter(first_file);
         }
         state.refresh_viewport();
 
@@ -324,13 +326,13 @@ impl State {
     }
 
     pub fn focused_buf(&self) -> &Buffer {
-        let i = self.focused_bufno();
-        &self.bufs[i]
+        let id = self.focused_buf_id();
+        &self.bufs[id]
     }
 
     pub fn focused_buf_mut(&mut self) -> &mut Buffer {
-        let i = self.focused_bufno();
-        &mut self.bufs[i]
+        let id = self.focused_buf_id();
+        &mut self.bufs[id]
     }
 
     pub fn theme(&self) -> &ThemeCell {
@@ -383,13 +385,13 @@ impl State {
 
     /// Push a popup onto the overlay stack. Creates a backing buffer of
     /// kind [`BufferKind::Popup`], appends it to `self.bufs`, and returns
-    /// its bufno.
+    /// its `BufferId`.
     #[instrument(skip(self, spec), fields(
         modes = ?spec.mode_layers,
         buffer_mode = ?spec.buffer_mode,
         wrap_mode = ?spec.wrap_mode,
     ))]
-    pub fn open_popup(&mut self, spec: PopupSpec) -> usize {
+    pub fn open_popup(&mut self, spec: PopupSpec) -> BufferId {
         let mut buf = Buffer::popup();
         if let Some(text) = spec.initial_text {
             buf.clear_with(&text);
@@ -401,18 +403,17 @@ impl State {
         for layer in &spec.mode_layers {
             buf.push_mode_layer(layer.clone());
         }
-        self.bufs.push(buf);
-        let bufno = self.bufs.len() - 1;
+        let id = self.bufs.push(buf);
         self.popups.push(Popup {
-            bufno,
+            buf: id,
             placement: spec.placement,
             widget: spec.widget,
             mode_layers: spec.mode_layers,
             show_cursor: spec.show_cursor,
         });
         self.refresh_viewport();
-        info!(bufno, "popup opened");
-        bufno
+        info!(?id, "popup opened");
+        id
     }
 
     #[instrument(skip(self))]
@@ -421,17 +422,14 @@ impl State {
             trace!("no popup to close");
             return false;
         };
-        let removed = popup.bufno;
-        info!(bufno = removed, "closing popup");
-        if removed < self.bufs.len() && self.bufs[removed].kind() == BufferKind::Popup {
+        let removed = popup.buf;
+        info!(?removed, "closing popup");
+        if self.bufs.get(removed).is_some_and(|b| b.kind() == BufferKind::Popup) {
             self.bufs.remove(removed);
-            self.popups.shift_bufnos_after_removal(removed);
             let first = self.bufs.first_file_buf();
             self.windows.for_each_leaf_mut(|b| {
                 if *b == removed {
                     *b = first;
-                } else if *b > removed {
-                    *b -= 1;
                 }
             });
         }
@@ -439,17 +437,18 @@ impl State {
         true
     }
 
-    pub fn top_popup_bufno(&self) -> Option<usize> {
-        self.popups.top_bufno()
+    pub fn top_popup_buf(&self) -> Option<BufferId> {
+        self.popups.top_buf()
     }
 
     pub fn has_popup(&self) -> bool {
         !self.popups.is_empty()
     }
 
-    pub fn set_buffer_contents(&mut self, bufno: usize, msg: &str) {
-        let b = &mut self.bufs[bufno];
-        b.clear_with(msg);
+    pub fn set_buffer_contents(&mut self, buf: BufferId, msg: &str) {
+        if let Some(b) = self.bufs.get_mut(buf) {
+            b.clear_with(msg);
+        }
     }
 
     /// Read the current minibuffer text and leave the minibuffer.
@@ -514,27 +513,28 @@ impl State {
             return Err(e);
         }
         info!(?extensions, "registered grammar");
-        for i in 0..self.bufs.len() {
-            self.install_highlighter(i);
+        let ids: Vec<BufferId> = self.bufs.iter().map(|(id, _)| id).collect();
+        for id in ids {
+            self.install_highlighter(id);
         }
         Ok(())
     }
 
-    /// If `bufno` is a file buffer whose extension matches a registered
+    /// If `buf` is a file buffer whose extension matches a registered
     /// dynamic grammar and no highlighter is currently attached, install one.
     /// A buffer that already has a (native) highlighter is left alone.
-    fn install_highlighter(&mut self, bufno: usize) {
-        if bufno >= self.bufs.len() {
+    fn install_highlighter(&mut self, buf: BufferId) {
+        if !self.bufs.contains(buf) {
             return;
         }
-        if self.bufs[bufno].highlight().is_some() {
+        if self.bufs[buf].highlight().is_some() {
             return;
         }
-        let Some(path) = self.bufs[bufno].fs_path() else {
+        let Some(path) = self.bufs[buf].fs_path() else {
             return;
         };
         if let Some(h) = self.ts_registry.highlighter_for_path(&path) {
-            self.bufs[bufno].set_highlighter(Some(h));
+            self.bufs[buf].set_highlighter(Some(h));
         }
     }
 
@@ -547,14 +547,14 @@ impl State {
     }
 
     /// The buffer currently receiving key events.
-    pub fn focused_bufno(&self) -> usize {
-        if let Some(bufno) = self.popups.top_bufno() {
-            return bufno;
+    pub fn focused_buf_id(&self) -> BufferId {
+        if let Some(buf) = self.popups.top_buf() {
+            return buf;
         }
         if self.focus_minibuffer {
-            self.bufs.minibuffer_index()
+            self.bufs.minibuffer_id()
         } else {
-            self.windows.focused_bufno()
+            self.windows.focused_buf()
         }
     }
 
@@ -562,8 +562,18 @@ impl State {
         self.bufs.len()
     }
 
-    pub fn minibuffer_bufno(&self) -> usize {
-        self.bufs.minibuffer_index()
+    pub fn minibuffer_id(&self) -> BufferId {
+        self.bufs.minibuffer_id()
+    }
+
+    pub fn buf_exists(&self, id: BufferId) -> bool {
+        self.bufs.contains(id)
+    }
+
+    /// 1-based display index of `id` among file buffers, or `None` for the
+    /// minibuffer / popup-backing buffers / unknown ids.
+    pub fn buf_display_index(&self, id: BufferId) -> Option<usize> {
+        self.bufs.file_display_index(id)
     }
 
     /// Update viewports of all buffers currently displayed in a window,
@@ -575,23 +585,23 @@ impl State {
         let editor_h = rows.saturating_sub(STATUS_LINE_ROWS + MINIBUFFER_ROWS);
         let editor_area = ratatui::layout::Rect::new(0, 0, cols, editor_h);
         for leaf in self.windows.layout(editor_area) {
-            if let Some(buf) = self.bufs.get_mut(leaf.bufno) {
+            if let Some(buf) = self.bufs.get_mut(leaf.buf) {
                 buf.viewport = Position::new(leaf.area.width, leaf.area.height);
             }
         }
         self.bufs.minibuffer_mut().viewport = Position::new(cols, MINIBUFFER_ROWS);
-        let popups: Vec<(usize, Position<u16>)> = self
+        let popups: Vec<(BufferId, Position<u16>)> = self
             .popups
             .iter()
             .map(|p| {
-                let buf = &self.bufs[p.bufno];
+                let buf = &self.bufs[p.buf];
                 let outer = rizz_ui::popup::resolve_popup_rect(p, editor_area, buf);
-                let inner = rizz_ui::popup::buffer_view_rect(&p.widget, outer, p.bufno);
-                (p.bufno, Position::new(inner.width, inner.height))
+                let inner = rizz_ui::popup::buffer_view_rect(&p.widget, outer, p.buf);
+                (p.buf, Position::new(inner.width, inner.height))
             })
             .collect();
-        for (bufno, viewport) in popups {
-            if let Some(buf) = self.bufs.get_mut(bufno) {
+        for (id, viewport) in popups {
+            if let Some(buf) = self.bufs.get_mut(id) {
                 buf.viewport = viewport;
             }
         }
@@ -617,7 +627,7 @@ impl State {
             return self.render();
         }
 
-        let modes = self.bufs[self.focused_bufno()].active_modes();
+        let modes = self.bufs[self.focused_buf_id()].active_modes();
         debug!(?ke, ?modes, timedout, "resolving key against keymap");
         if let Some(action) = self.keymap.resolve(&modes, ke, timedout) {
             debug!(
@@ -630,7 +640,7 @@ impl State {
             trace!(?ke, "no action resolved (descent or miss)");
         }
         self.refresh_viewport();
-        let focused = self.focused_bufno();
+        let focused = self.focused_buf_id();
         self.bufs[focused].clamp_cursor();
         self.render()
     }
@@ -643,7 +653,7 @@ impl State {
             return false;
         }
         matches!(
-            self.bufs[self.focused_bufno()].mode(),
+            self.bufs[self.focused_buf_id()].mode(),
             EditingMode::Normal
                 | EditingMode::Visual
                 | EditingMode::VisualLine
@@ -666,65 +676,65 @@ impl State {
                     self.set_mode(*m);
                 }
                 Action::InsertChar(c) => {
-                    let f = self.focused_bufno();
+                    let f = self.focused_buf_id();
                     self.bufs[f].insert_char(*c);
                 }
                 Action::SpeculativeInsertChar(c) => {
-                    let f = self.focused_bufno();
+                    let f = self.focused_buf_id();
                     self.bufs[f].insert_speculative_char(*c);
                 }
                 Action::CommitSpeculation => {
-                    let f = self.focused_bufno();
+                    let f = self.focused_buf_id();
                     self.bufs[f].commit_speculation();
                 }
                 Action::RollbackSpeculation => {
-                    let f = self.focused_bufno();
+                    let f = self.focused_buf_id();
                     self.bufs[f].rollback_speculation();
                 }
                 Action::InsertMany(s) => {
-                    let f = self.focused_bufno();
-                    debug!(bufno = f, len = s.len(), "Action::InsertMany");
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, len = s.len(), "Action::InsertMany");
                     self.bufs[f].insert_many(s);
                 }
                 Action::InsertNewline => {
-                    let f = self.focused_bufno();
+                    let f = self.focused_buf_id();
                     self.bufs[f].insert_char('\n');
                 }
                 Action::DeleteChar => {
-                    let f = self.focused_bufno();
+                    let f = self.focused_buf_id();
                     self.bufs[f].delete_char();
                 }
                 Action::DeleteCharAt(pos) => {
-                    let f = self.focused_bufno();
+                    let f = self.focused_buf_id();
                     self.bufs[f].delete_char_at(*pos);
                 }
                 Action::DeleteSelection => {
-                    let f = self.focused_bufno();
+                    let f = self.focused_buf_id();
                     self.bufs[f].delete_selection();
                 }
                 Action::DeleteLine { count } => {
-                    let f = self.focused_bufno();
-                    debug!(bufno = f, count, "Action::DeleteLine");
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, count, "Action::DeleteLine");
                     self.bufs[f].delete_line(*count);
                 }
                 Action::DeleteMotion { kind, count } => {
-                    let f = self.focused_bufno();
-                    debug!(bufno = f, ?kind, count, "Action::DeleteMotion");
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, ?kind, count, "Action::DeleteMotion");
                     self.bufs[f].delete_motion(*kind, *count);
                 }
                 Action::Undo => {
-                    let f = self.focused_bufno();
-                    debug!(bufno = f, "Action::Undo");
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, "Action::Undo");
                     self.bufs[f].undo();
                 }
                 Action::Redo => {
-                    let f = self.focused_bufno();
-                    debug!(bufno = f, "Action::Redo");
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, "Action::Redo");
                     self.bufs[f].redo();
                 }
                 Action::MoveCursor { kind, count } => {
-                    let f = self.focused_bufno();
-                    trace!(bufno = f, ?kind, count, "Action::MoveCursor");
+                    let f = self.focused_buf_id();
+                    trace!(buf = ?f, ?kind, count, "Action::MoveCursor");
                     self.bufs[f].move_cursor_n(*kind, *count);
                 }
                 Action::CommandCancel => {
@@ -736,8 +746,8 @@ impl State {
                     self.create_buf(*set_active, path.clone())?;
                 }
                 Action::BufDelete => {
-                    let editor = self.windows.focused_bufno();
-                    info!(bufno = editor, "Action::BufDelete");
+                    let editor = self.windows.focused_buf();
+                    info!(buf = ?editor, "Action::BufDelete");
                     self.delete_buf(editor);
                 }
                 Action::BufNext => {
@@ -798,8 +808,8 @@ impl State {
             self.bufs.minibuffer_mut().set_mode(EditingMode::Command);
             self.focus_minibuffer = true;
         } else {
-            let f = self.focused_bufno();
-            debug!(bufno = f, ?mode, "setting buffer mode");
+            let f = self.focused_buf_id();
+            debug!(buf = ?f, ?mode, "setting buffer mode");
             self.bufs[f].set_mode(mode);
         }
     }
@@ -809,87 +819,87 @@ impl State {
         self.bufs.minibuffer_mut().clear();
         self.bufs.minibuffer_mut().set_mode(EditingMode::Command);
         self.focus_minibuffer = false;
-        let editor = self.windows.focused_bufno();
+        let editor = self.windows.focused_buf();
         self.bufs[editor].set_mode(EditingMode::Normal);
     }
 
     #[instrument(skip(self))]
-    fn create_buf(&mut self, set_active: bool, path: Option<Rc<Path>>) -> io::Result<usize> {
+    fn create_buf(&mut self, set_active: bool, path: Option<Rc<Path>>) -> io::Result<BufferId> {
         let buf = match path {
             Some(p) => self.bufs.buffer_for_path(p),
             None => Buffer::new(),
         };
-        let bufno = self.bufs.push(buf);
-        self.install_highlighter(bufno);
+        let id = self.bufs.push(buf);
+        self.install_highlighter(id);
         if set_active {
-            self.windows.set_focused_bufno(bufno);
+            self.windows.set_focused_buf(id);
         }
-        info!(bufno, set_active, "created buffer");
-        Ok(bufno)
+        info!(buf = ?id, set_active, "created buffer");
+        Ok(id)
     }
 
     #[instrument(skip(self))]
-    fn edit_buf(&mut self, path: Rc<Path>) -> io::Result<usize> {
-        let idx = match self.bufs.find_by_path(&path) {
-            Some(idx) => {
-                debug!(bufno = idx, "edit_buf: reusing existing buffer");
-                idx
+    fn edit_buf(&mut self, path: Rc<Path>) -> io::Result<BufferId> {
+        let id = match self.bufs.find_by_path(&path) {
+            Some(id) => {
+                debug!(buf = ?id, "edit_buf: reusing existing buffer");
+                id
             }
             None => {
                 let pushed = self.bufs.push(buffer_io::with_path(path));
                 self.install_highlighter(pushed);
-                info!(bufno = pushed, "edit_buf: created new buffer");
+                info!(buf = ?pushed, "edit_buf: created new buffer");
                 pushed
             }
         };
-        self.windows.set_focused_bufno(idx);
-        Ok(idx)
+        self.windows.set_focused_buf(id);
+        Ok(id)
     }
 
     #[instrument(skip(self))]
     fn write_buf(&mut self, path: Option<Rc<Path>>) -> io::Result<()> {
-        let editor = self.windows.focused_bufno();
+        let editor = self.windows.focused_buf();
         let r = buffer_io::write(&mut self.bufs[editor], path);
         if let Err(e) = &r {
-            error!(bufno = editor, error = %e, "write_buf failed");
+            error!(buf = ?editor, error = %e, "write_buf failed");
         } else {
-            info!(bufno = editor, "wrote buffer");
+            info!(buf = ?editor, "wrote buffer");
         }
         r
     }
 
     #[instrument(skip(self))]
-    fn delete_buf(&mut self, bufno: usize) {
-        if bufno >= self.bufs.len() || self.bufs[bufno].kind() == BufferKind::Minibuffer {
-            warn!(bufno, "delete_buf: skipping (oob or minibuffer)");
+    fn delete_buf(&mut self, buf: BufferId) {
+        let Some(b) = self.bufs.get(buf) else {
+            warn!(?buf, "delete_buf: skipping (unknown id)");
+            return;
+        };
+        if b.kind() == BufferKind::Minibuffer {
+            warn!(?buf, "delete_buf: skipping (minibuffer)");
             return;
         }
 
         if self.bufs.file_buf_count() == 1 {
-            debug!(bufno, "delete_buf: last file buffer -> resetting");
-            self.bufs.reset(bufno);
-            self.windows.for_each_leaf_mut(|b| *b = bufno);
+            debug!(?buf, "delete_buf: last file buffer -> resetting");
+            self.bufs.reset(buf);
+            self.windows.for_each_leaf_mut(|b| *b = buf);
             return;
         }
 
-        self.bufs.remove(bufno);
+        self.bufs.remove(buf);
         let first = self.bufs.first_file_buf();
         self.windows.for_each_leaf_mut(|b| {
-            if *b == bufno {
+            if *b == buf {
                 *b = first;
-            } else if *b > bufno {
-                *b -= 1;
             }
         });
-        self.popups.shift_bufnos_after_removal(bufno);
-        info!(bufno, "deleted buffer");
+        info!(?buf, "deleted buffer");
     }
 
     fn window_split(&mut self, dir: SplitDir) {
-        self.bufs.push(Buffer::new());
-        let new_bufno = self.bufs.len() - 1;
-        self.windows.split(dir, new_bufno);
-        info!(?dir, new_bufno, "window split");
+        let new_buf = self.bufs.push(Buffer::new());
+        self.windows.split(dir, new_buf);
+        info!(?dir, ?new_buf, "window split");
     }
 
     fn window_close(&mut self) {
@@ -898,9 +908,9 @@ impl State {
     }
 
     fn cycle_buffer(&mut self, dir: CycleDir) {
-        if let Some(i) = self.bufs.cycle(self.windows.focused_bufno(), dir) {
-            debug!(?dir, bufno = i, "cycled buffer");
-            self.windows.set_focused_bufno(i);
+        if let Some(id) = self.bufs.cycle(self.windows.focused_buf(), dir) {
+            debug!(?dir, buf = ?id, "cycled buffer");
+            self.windows.set_focused_buf(id);
         } else {
             trace!(?dir, "cycle_buffer: no cycle (single file buffer)");
         }
@@ -908,19 +918,24 @@ impl State {
 
     #[instrument(skip(self))]
     pub fn render(&mut self) -> io::Result<()> {
-        let focused = self.focused_bufno();
+        let focused = self.focused_buf_id();
         let (frame, error_msg) = self.precompute_frame();
-        for (i, rb) in frame.per_buf.iter().enumerate() {
-            if i < self.bufs.len() {
-                self.bufs[i].set_wrap_cache(rb.wrap.clone());
+        let writebacks: Vec<(BufferId, Option<rizz_text::WrapMap>)> = frame
+            .per_buf
+            .iter()
+            .map(|(id, rb)| (id, rb.wrap.clone()))
+            .collect();
+        for (id, wrap) in writebacks {
+            if let Some(buf) = self.bufs.get_mut(id) {
+                buf.set_wrap_cache(wrap);
             }
         }
         let snap = StateSnapshot {
-            bufs: self.bufs.as_slice(),
+            bufs: self.bufs.raw(),
             windows: &self.windows,
             minibuffer: self.bufs.minibuffer(),
             focus_minibuffer: self.focus_minibuffer,
-            bufno: self.windows.focused_bufno(),
+            buf: self.windows.focused_buf(),
             keyevent: self.keyevents.peek_back().map(|(e, _)| e.to_owned()),
             cursor_style: match self.bufs[focused].mode() {
                 EditingMode::Insert | EditingMode::Command => CursorStyle::Bar,
@@ -946,7 +961,7 @@ impl State {
         // Bring every buffer's syntax tree up to date before precompute walks
         // them immutably. `refresh_highlight` short-circuits when no language
         // is attached or the tree is already clean.
-        for b in self.bufs.as_mut_slice() {
+        for (_, b) in self.bufs.iter_mut() {
             b.refresh_highlight();
         }
 
@@ -955,11 +970,11 @@ impl State {
         let _phase_guard = RenderPhaseGuard::enter();
 
         let result = precompute::compute(precompute::PrecomputeInput {
-            bufs: self.bufs.as_slice(),
+            bufs: self.bufs.raw(),
             windows: &self.windows,
             frame_fn: self.frame_fn.as_ref(),
             theme: &self.theme,
-            minibuffer: self.bufs.minibuffer_index(),
+            minibuffer: self.bufs.minibuffer_id(),
             lisp_env: lisp.env(),
         });
 
@@ -1007,8 +1022,14 @@ mod tests {
     }
 
     fn top_popup_text(s: &State) -> String {
-        let bufno = s.top_popup_bufno().expect("popup is visible");
-        s.bufs[bufno].text()
+        let id = s.top_popup_buf().expect("popup is visible");
+        s.bufs[id].text()
+    }
+
+    /// The first file buffer's id. Tests use it to address "the" editor
+    /// buffer the way they used to address `s.bufs[1]`.
+    fn primary(s: &State) -> BufferId {
+        s.bufs.first_file_buf()
     }
 
     #[test]
@@ -1038,14 +1059,15 @@ mod tests {
     fn count_prefix_scales_motion() {
         use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
         let mut s = test_state();
-        s.bufs[1].clear_with("a\nb\nc\nd\ne\nf\ng");
+        let b = primary(&s);
+        s.bufs[b].clear_with("a\nb\nc\nd\ne\nf\ng");
         s.handle_key_event(CT::new(KeyCode::Char('3'), KeyModifiers::NONE))
             .unwrap();
-        let abs_row = s.bufs[1].cursor_pos().row as usize + s.bufs[1].file_pos().row;
+        let abs_row = s.bufs[b].cursor_pos().row as usize + s.bufs[b].file_pos().row;
         assert_eq!(abs_row, 0);
         s.handle_key_event(CT::new(KeyCode::Char('j'), KeyModifiers::NONE))
             .unwrap();
-        let abs_row = s.bufs[1].cursor_pos().row as usize + s.bufs[1].file_pos().row;
+        let abs_row = s.bufs[b].cursor_pos().row as usize + s.bufs[b].file_pos().row;
         assert_eq!(abs_row, 3);
     }
 
@@ -1053,7 +1075,8 @@ mod tests {
     fn leading_zero_falls_through_as_line_start() {
         use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
         let mut s = test_state();
-        s.bufs[1].clear_with("hello world");
+        let b = primary(&s);
+        s.bufs[b].clear_with("hello world");
         s.handle_key_event(CT::new(KeyCode::Char('l'), KeyModifiers::NONE))
             .unwrap();
         s.handle_key_event(CT::new(KeyCode::Char('l'), KeyModifiers::NONE))
@@ -1062,7 +1085,7 @@ mod tests {
             .unwrap();
         s.handle_key_event(CT::new(KeyCode::Char('0'), KeyModifiers::NONE))
             .unwrap();
-        assert_eq!(s.bufs[1].cursor_pos().col, 0);
+        assert_eq!(s.bufs[b].cursor_pos().col, 0);
     }
 
     #[test]
@@ -1079,8 +1102,8 @@ mod tests {
         let mut s = test_state();
         let (frame, err) = s.precompute_frame();
         assert!(err.is_none(), "no frame errors expected: {err:?}");
-        let bufno = s.windows.focused_bufno();
-        let bf = &frame.per_buf[bufno];
+        let id = s.windows.focused_buf();
+        let bf = &frame.per_buf[id];
         assert!(bf.gutter.is_some(), "expected a gutter");
         assert!(bf.decorators.len() >= 3, "expected the 3 built-in passes");
     }
@@ -1104,11 +1127,12 @@ mod tests {
     fn can_insert_j() {
         use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
         let mut s = test_state();
-        s.bufs[1].clear();
+        let b = primary(&s);
+        s.bufs[b].clear();
         s.set_mode(EditingMode::Insert);
         s.handle_key_event(CT::new(KeyCode::Char('j'), KeyModifiers::NONE))
             .unwrap();
-        assert_eq!(s.bufs[1].text(), "j".to_string())
+        assert_eq!(s.bufs[b].text(), "j".to_string())
     }
 
     #[test]
@@ -1117,15 +1141,16 @@ mod tests {
         // (speculation rolled back) and switch to normal mode.
         use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
         let mut s = test_state();
-        s.bufs[1].clear();
+        let b = primary(&s);
+        s.bufs[b].clear();
         s.set_mode(EditingMode::Insert);
         s.handle_key_event(CT::new(KeyCode::Char('j'), KeyModifiers::NONE))
             .unwrap();
-        assert_eq!(s.bufs[1].text(), "j".to_string());
+        assert_eq!(s.bufs[b].text(), "j".to_string());
         s.handle_key_event(CT::new(KeyCode::Char('k'), KeyModifiers::NONE))
             .unwrap();
-        assert_eq!(s.bufs[1].text(), "".to_string());
-        assert_eq!(s.bufs[1].mode(), EditingMode::Normal);
+        assert_eq!(s.bufs[b].text(), "".to_string());
+        assert_eq!(s.bufs[b].mode(), EditingMode::Normal);
     }
 
     #[test]
@@ -1134,15 +1159,16 @@ mod tests {
         // the new key. The two should end up as one undo step.
         use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
         let mut s = test_state();
-        s.bufs[1].clear();
+        let b = primary(&s);
+        s.bufs[b].clear();
         s.set_mode(EditingMode::Insert);
         s.handle_key_event(CT::new(KeyCode::Char('j'), KeyModifiers::NONE))
             .unwrap();
         s.handle_key_event(CT::new(KeyCode::Char('x'), KeyModifiers::NONE))
             .unwrap();
-        assert_eq!(s.bufs[1].text(), "jx".to_string());
+        assert_eq!(s.bufs[b].text(), "jx".to_string());
         // Both chars belong to the same insert run.
-        s.bufs[1].undo();
-        assert_eq!(s.bufs[1].text(), "".to_string());
+        s.bufs[b].undo();
+        assert_eq!(s.bufs[b].text(), "".to_string());
     }
 }

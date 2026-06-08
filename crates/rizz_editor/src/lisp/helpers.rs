@@ -10,8 +10,23 @@ use tracing::{trace, warn};
 
 use rizz_actions::Action;
 use rizz_core::EditingMode;
+use rizz_text::BufferId;
+use slotmap::{Key, KeyData};
 
 use super::{in_render_phase, with_editor_mut};
+
+/// Encode a `BufferId` as an i64 that round-trips through lisp's int value.
+/// Uses slotmap's FFI representation (index + version packed into a u64),
+/// reinterpreted as i64. The reverse is [`buf_id_from_int`].
+pub(super) fn buf_id_to_int(id: BufferId) -> i64 {
+    id.data().as_ffi() as i64
+}
+
+/// Decode an i64 from lisp back into a `BufferId`. The caller is responsible
+/// for checking the returned id is still live (`State::buf_exists`).
+pub(super) fn buf_id_from_int(n: i64) -> BufferId {
+    BufferId::from(KeyData::from_ffi(n as u64))
+}
 
 /// Accumulates `(name, NativeFn)` entries plus deferred aliases, then folds
 /// them into a single [`Env`] via [`Builtins::build`]. Each builtin module

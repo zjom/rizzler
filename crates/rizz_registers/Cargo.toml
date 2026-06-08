@@ -1,0 +1,5 @@
+[package]
+name = "rizz_registers"
+version = "0.1.0"
+edition = "2024"
+description = "Vim-style named registers for the rizz editor: tracks the unnamed/yank/numbered/named registers and routes yank/delete/insert text into them."

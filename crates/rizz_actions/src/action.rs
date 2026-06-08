@@ -12,6 +12,7 @@ use std::rc::Rc;
 use rizz::runtime::Value;
 use rizz_core::{EditingMode, FocusDir, Position, SplitDir};
 use rizz_input::KeyEvent;
+use rizz_registers::RegisterKind;
 use rizz_text::MoveKind;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -62,6 +63,38 @@ pub enum Action {
     MoveCursor {
         kind: MoveKind,
         count: u32,
+    },
+
+    /// Vim `y<motion>` — yank the spanned text into the registers without
+    /// modifying the buffer. Linewise / charwise tagging mirrors
+    /// `DeleteMotion`.
+    YankMotion {
+        kind: MoveKind,
+        count: u32,
+    },
+    /// Vim `yy` / `Nyy` — linewise yank of `count` lines starting at the
+    /// cursor row.
+    YankLine {
+        count: u32,
+    },
+    /// Vim `y` in a visual mode — yank the selection, then drop back to
+    /// Normal mode (mirrors `DeleteSelection`'s mode handling).
+    YankSelection,
+    /// Vim `p` (`before=false`) / `P` (`before=true`) — paste from the
+    /// active register. `count` copies the entry that many times.
+    Paste {
+        before: bool,
+        count: u32,
+    },
+    /// Vim `"a` prefix — stage `name` as the register the next yank, delete,
+    /// or paste should target. Cleared after the next consuming action.
+    RegisterSelect(char),
+    /// Write `text` into register `name` directly (used by lisp + tests).
+    /// `A`-`Z` follows the usual append semantics.
+    RegisterSet {
+        name: char,
+        text: Rc<str>,
+        kind: RegisterKind,
     },
 
     CommandCancel,

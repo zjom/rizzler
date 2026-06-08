@@ -18,6 +18,7 @@
 mod cursor;
 mod edits;
 mod marks;
+mod yank;
 
 use std::{path::Path, rc::Rc, str::FromStr};
 

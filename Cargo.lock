@@ -672,6 +672,7 @@ dependencies = [
  "rizz",
  "rizz_core",
  "rizz_input",
+ "rizz_registers",
  "rizz_text",
  "tracing",
 ]
@@ -699,6 +700,7 @@ dependencies = [
  "rizz_actions",
  "rizz_core",
  "rizz_input",
+ "rizz_registers",
  "rizz_ringbuffer",
  "rizz_text",
  "rizz_ts",
@@ -717,6 +719,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rizz_registers"
+version = "0.1.0"
+
+[[package]]
 name = "rizz_ringbuffer"
 version = "0.1.0"
 
@@ -727,6 +733,7 @@ dependencies = [
  "rizz",
  "rizz_changetree",
  "rizz_core",
+ "rizz_registers",
  "rizz_ts",
  "ropey",
  "slotmap",

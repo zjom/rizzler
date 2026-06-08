@@ -5,7 +5,7 @@ edition = "2024"
 description = "Tree-sitter integration for the rizz editor: language detection, parser/query cache, viewport-clipped capture iteration, and a runtime registry for user-supplied grammars loaded from shared libraries (.so/.dylib/.dll)."
 
 [dependencies]
+libloading = "0.8"
+thiserror = { workspace = true }
 tree-sitter = "0.25"
 tree-sitter-language = "0.1"
-libloading = "0.8"
-thiserror = "2.0.18"

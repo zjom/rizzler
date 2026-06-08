@@ -19,6 +19,7 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use rizz_actions::{Action, KeymapRegistry};
 use rizz_core::{EditingMode, Position};
 use rizz_input::{CountPrefix, KeyEvent};
+use rizz_registers::{RegisterEntry, Registers};
 use rizz_text::{Buffer, BufferId, WrapMode, io as buffer_io};
 use rizz_ts::TsRegistry;
 
@@ -140,6 +141,13 @@ pub struct State {
     /// builtin; consulted by [`Self::install_dynamic_highlighter`] when a
     /// buffer with a matching extension is opened.
     ts_registry: TsRegistry,
+    /// Vim-style named registers — fed by yank/delete/paste actions and the
+    /// lisp `(register-*)` builtins. See [`rizz_registers`].
+    registers: Registers,
+    /// Vim's `"a` prefix: when set, the next yank/delete/paste targets this
+    /// register name instead of the unnamed one. Cleared after the next
+    /// consuming action so the next operation falls back to the defaults.
+    pending_register: Option<char>,
 }
 
 fn resolve_workdir(path: Option<&Path>, cwd: &Path) -> PathBuf {
@@ -235,6 +243,8 @@ impl State {
             workdir: workdir.into(),
             config_dir: config_dir.into(),
             ts_registry: TsRegistry::new(),
+            registers: Registers::new(),
+            pending_register: None,
         };
         if let Some(path) = config.edit_path
             && !path.is_dir()
@@ -388,6 +398,7 @@ impl State {
     pub fn record_cmd(&mut self, msg: &str) {
         info!(target: "rizz::journal", cmd = msg, "journal: command");
         self.journal.record_command(msg);
+        self.registers.record_command(msg);
     }
     pub fn cmd_history(&self) -> impl Iterator<Item = &Rc<str>> {
         self.journal.commands()
@@ -629,6 +640,33 @@ impl State {
         self.count_prefix.or_one()
     }
 
+    /// Read-only handle to the editor's vim-style registers. Lisp builtins
+    /// use this to expose `(register-read ...)` / `(registers)` without
+    /// owning a `&mut State`.
+    pub fn registers(&self) -> &Registers {
+        &self.registers
+    }
+
+    /// Mutable handle to the editor's vim-style registers. Used by the lisp
+    /// `(register-write ...)` builtin and by tests.
+    pub fn registers_mut(&mut self) -> &mut Registers {
+        &mut self.registers
+    }
+
+    /// Register name the next yank/delete/paste should target — vim's `"a`
+    /// prefix. `None` falls back to the unnamed register on the next
+    /// consuming action.
+    pub fn pending_register(&self) -> Option<char> {
+        self.pending_register
+    }
+
+    /// Stage `name` as the next register to target. Cleared automatically by
+    /// the next consuming action, but callers can also reset it explicitly by
+    /// passing `None`.
+    pub fn set_pending_register(&mut self, name: Option<char>) {
+        self.pending_register = name;
+    }
+
     pub fn keymap_registry(&self) -> &KeymapRegistry {
         &self.keymap
     }
@@ -831,17 +869,35 @@ impl State {
                 }
                 Action::DeleteSelection => {
                     let f = self.focused_buf_id();
-                    self.bufs[f].delete_selection();
+                    let yanked = self.bufs[f].yank_selection();
+                    if self.bufs[f].delete_selection()
+                        && let Some((text, kind)) = yanked
+                    {
+                        let name = self.pending_register.take();
+                        self.registers.record_delete(text, kind, name);
+                    }
                 }
                 Action::DeleteLine { count } => {
                     let f = self.focused_buf_id();
                     debug!(buf = ?f, count, "Action::DeleteLine");
-                    self.bufs[f].delete_line(*count);
+                    let yanked = self.bufs[f].yank_line(*count);
+                    if self.bufs[f].delete_line(*count)
+                        && let Some((text, kind)) = yanked
+                    {
+                        let name = self.pending_register.take();
+                        self.registers.record_delete(text, kind, name);
+                    }
                 }
                 Action::DeleteMotion { kind, count } => {
                     let f = self.focused_buf_id();
                     debug!(buf = ?f, ?kind, count, "Action::DeleteMotion");
-                    self.bufs[f].delete_motion(*kind, *count);
+                    let yanked = self.bufs[f].yank_motion(*kind, *count);
+                    if self.bufs[f].delete_motion(*kind, *count)
+                        && let Some((text, kind)) = yanked
+                    {
+                        let name = self.pending_register.take();
+                        self.registers.record_delete(text, kind, name);
+                    }
                 }
                 Action::Undo => {
                     let f = self.focused_buf_id();
@@ -857,6 +913,70 @@ impl State {
                     let f = self.focused_buf_id();
                     trace!(buf = ?f, ?kind, count, "Action::MoveCursor");
                     self.bufs[f].move_cursor_n(*kind, *count);
+                }
+                Action::YankMotion { kind, count } => {
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, ?kind, count, "Action::YankMotion");
+                    if let Some((text, k)) = self.bufs[f].yank_motion(*kind, *count) {
+                        let name = self.pending_register.take();
+                        self.registers.record_yank(text, k, name);
+                    } else {
+                        self.pending_register = None;
+                    }
+                }
+                Action::YankLine { count } => {
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, count, "Action::YankLine");
+                    if let Some((text, k)) = self.bufs[f].yank_line(*count) {
+                        let name = self.pending_register.take();
+                        self.registers.record_yank(text, k, name);
+                    } else {
+                        self.pending_register = None;
+                    }
+                }
+                Action::YankSelection => {
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, "Action::YankSelection");
+                    if let Some((text, k)) = self.bufs[f].yank_selection() {
+                        let name = self.pending_register.take();
+                        self.registers.record_yank(text, k, name);
+                    } else {
+                        self.pending_register = None;
+                    }
+                    self.bufs[f].set_mode(EditingMode::Normal);
+                }
+                Action::Paste { before, count } => {
+                    let name = self.pending_register.take().unwrap_or('"');
+                    let entry = self.registers.read(name).cloned();
+                    let Some(entry) = entry else {
+                        trace!(?name, "Action::Paste: empty register");
+                        continue;
+                    };
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, ?name, before, count, "Action::Paste");
+                    // `count > 1` multiplies the text in one shot — matches
+                    // vim's `Np`, where the inserted text is N copies of the
+                    // register's payload (not N successive paste positions).
+                    let n = (*count).max(1) as usize;
+                    let entry = if n > 1 {
+                        let mut joined = String::with_capacity(entry.text.len() * n);
+                        for _ in 0..n {
+                            joined.push_str(&entry.text);
+                        }
+                        RegisterEntry::new(joined, entry.kind)
+                    } else {
+                        entry
+                    };
+                    self.bufs[f].paste(&entry, *before);
+                }
+                Action::RegisterSelect(name) => {
+                    debug!(name = ?name, "Action::RegisterSelect");
+                    self.pending_register = Some(*name);
+                }
+                Action::RegisterSet { name, text, kind } => {
+                    debug!(name = ?name, kind = ?kind, "Action::RegisterSet");
+                    self.registers
+                        .write(*name, RegisterEntry::new(text.clone(), *kind));
                 }
                 Action::CommandCancel => {
                     debug!("Action::CommandCancel");
@@ -1298,5 +1418,151 @@ mod tests {
         // Both chars belong to the same insert run.
         s.bufs[b].undo();
         assert_eq!(s.bufs[b].text(), "".to_string());
+    }
+
+    // ---- registers ----------------------------------------------------
+
+    fn reg_text(s: &State, name: char) -> Option<String> {
+        s.registers().read(name).map(|e| e.text.to_string())
+    }
+
+    #[test]
+    fn yank_line_fills_unnamed_and_zero() {
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("hello\nworld\n");
+        s.apply(&[Rc::new(Action::YankLine { count: 1 })]).unwrap();
+        assert_eq!(reg_text(&s, '"').as_deref(), Some("hello\n"));
+        assert_eq!(reg_text(&s, '0').as_deref(), Some("hello\n"));
+        // numbered 1-9 stay untouched on yank
+        assert!(s.registers().read('1').is_none());
+    }
+
+    #[test]
+    fn delete_line_rotates_numbered_register() {
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("a\nb\nc\nd\n");
+        s.apply(&[Rc::new(Action::DeleteLine { count: 1 })])
+            .unwrap();
+        assert_eq!(reg_text(&s, '1').as_deref(), Some("a\n"));
+        s.apply(&[Rc::new(Action::DeleteLine { count: 1 })])
+            .unwrap();
+        assert_eq!(reg_text(&s, '1').as_deref(), Some("b\n"));
+        assert_eq!(reg_text(&s, '2').as_deref(), Some("a\n"));
+        // delete never fills the yank register
+        assert!(s.registers().read('0').is_none());
+    }
+
+    #[test]
+    fn yank_then_paste_after_inserts_below() {
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("hello\nworld\n");
+        s.apply(&[Rc::new(Action::YankLine { count: 1 })]).unwrap();
+        // move to second line
+        s.bufs[b].move_cursor_n(rizz_text::MoveKind::Relative(Position::new(0, 1)), 1);
+        s.apply(&[Rc::new(Action::Paste {
+            before: false,
+            count: 1,
+        })])
+        .unwrap();
+        assert_eq!(s.bufs[b].text(), "hello\nworld\nhello\n");
+    }
+
+    #[test]
+    fn paste_count_repeats_entry() {
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("abc");
+        // seed the unnamed register without going through delete/yank
+        s.registers_mut().write('"', RegisterEntry::charwise("X"));
+        s.apply(&[Rc::new(Action::Paste {
+            before: false,
+            count: 3,
+        })])
+        .unwrap();
+        assert_eq!(s.bufs[b].text(), "aXXXbc");
+    }
+
+    #[test]
+    fn register_select_targets_named_register() {
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("alpha\nbeta\n");
+        s.apply(&[
+            Rc::new(Action::RegisterSelect('a')),
+            Rc::new(Action::YankLine { count: 1 }),
+        ])
+        .unwrap();
+        assert_eq!(reg_text(&s, 'a').as_deref(), Some("alpha\n"));
+        // pending register is cleared after a consuming action
+        assert!(s.pending_register().is_none());
+        // and the unnamed register also got the same text
+        assert_eq!(reg_text(&s, '"').as_deref(), Some("alpha\n"));
+    }
+
+    #[test]
+    fn paste_from_named_register() {
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("abc");
+        s.registers_mut().write('a', RegisterEntry::charwise("ZZ"));
+        s.apply(&[
+            Rc::new(Action::RegisterSelect('a')),
+            Rc::new(Action::Paste {
+                before: false,
+                count: 1,
+            }),
+        ])
+        .unwrap();
+        assert_eq!(s.bufs[b].text(), "aZZbc");
+    }
+
+    #[test]
+    fn delete_selection_fills_unnamed() {
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("hello");
+        s.bufs[b].set_mode(EditingMode::Visual);
+        s.bufs[b].move_cursor_n(rizz_text::MoveKind::Relative(Position::new(2, 0)), 1);
+        s.apply(&[Rc::new(Action::DeleteSelection)]).unwrap();
+        assert_eq!(s.bufs[b].text(), "lo");
+        assert_eq!(reg_text(&s, '"').as_deref(), Some("hel"));
+        assert_eq!(reg_text(&s, '-').as_deref(), Some("hel"));
+    }
+
+    #[test]
+    fn yank_selection_returns_to_normal() {
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("hello");
+        s.bufs[b].set_mode(EditingMode::Visual);
+        s.bufs[b].move_cursor_n(rizz_text::MoveKind::Relative(Position::new(2, 0)), 1);
+        s.apply(&[Rc::new(Action::YankSelection)]).unwrap();
+        assert_eq!(reg_text(&s, '"').as_deref(), Some("hel"));
+        assert_eq!(s.bufs[b].mode(), EditingMode::Normal);
+        // buffer text is unchanged by yank
+        assert_eq!(s.bufs[b].text(), "hello");
+    }
+
+    #[test]
+    fn lisp_register_read_and_write_round_trip() {
+        let mut s = test_state();
+        s.eval_lisp(r#"(register-write "a" "hello")"#).unwrap();
+        let v = s.eval_lisp(r#"(register-read "a")"#).unwrap();
+        assert_eq!(v.display().to_string(), "hello");
+    }
+
+    #[test]
+    fn lisp_yank_then_paste_charwise() {
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("hello world");
+        s.eval_lisp("(yank-motion 'word-forward)").unwrap();
+        assert_eq!(reg_text(&s, '"').as_deref(), Some("hello "));
+        // paste-before so the inserted text lands at the cursor (col 0)
+        s.eval_lisp("(paste-before)").unwrap();
+        assert_eq!(s.bufs[b].text(), "hello hello world");
     }
 }

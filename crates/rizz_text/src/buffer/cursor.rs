@@ -49,6 +49,21 @@ pub enum MoveKind {
     Center,
 }
 
+impl MoveKind {
+    pub fn is_linewise_motion(&self) -> bool {
+        use MoveKind as MK;
+        match self {
+            MK::FileStart | MK::FileEnd | MK::LineNum(_) => true,
+            MK::Relative(p) if p.row != 0 => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_inclusive_motion(&self) -> bool {
+        matches!(self, MoveKind::WordEnd | MoveKind::BigWordEnd)
+    }
+}
+
 impl FromStr for MoveKind {
     type Err = &'static str;
     fn from_str(sym: &str) -> Result<Self, Self::Err> {
@@ -142,9 +157,7 @@ impl Buffer {
                             .saturating_add(self.file_pos.row as isize)
                             .saturating_add(dy as isize)
                             .max(0) as usize;
-                        let c = (src_col as isize)
-                            .saturating_add(dx as isize)
-                            .max(0) as usize;
+                        let c = (src_col as isize).saturating_add(dx as isize).max(0) as usize;
                         (r, c)
                     }
                 };

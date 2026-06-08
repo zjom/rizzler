@@ -17,6 +17,7 @@ mod misc;
 mod motion;
 mod popups;
 mod queries;
+mod registers;
 mod styling;
 mod text;
 mod textprops;
@@ -36,6 +37,7 @@ pub(super) fn register_all(b: &mut Builtins) {
     minibuffer::register(b);
     popups::register(b);
     queries::register(b);
+    registers::register(b);
     wrap::register(b);
     styling::register(b);
     widgets::register(b);

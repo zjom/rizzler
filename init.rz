@@ -235,6 +235,39 @@
 (map 'normal "u"      '(undo))
 (map 'normal "<c-r>"  '(redo))
 
+;; ----- yank / paste / registers ---------------------------------------
+;;
+;; Yank is the read-only twin of delete: `y<motion>` peeks at the same range
+;; `d<motion>` would have cut, but only routes the text into the registers.
+;; `p` / `P` paste from the unnamed register; linewise content lands on a
+;; fresh row below / above, charwise lands inline.
+;;
+;; The named-register prefix is omitted by default — once you've got the
+;; muscle memory for `yy` and `p`, drop `(register-select "a")` calls (or
+;; chord them) to target `"a` / `"b` / etc. `(registers)` returns a map for
+;; building a `:reg`-style popup.
+(map 'normal "yy"     '(yank-line))
+(map 'normal "yh"     '(yank-motion 'left))
+(map 'normal "yl"     '(yank-motion 'right))
+(map 'normal "yj"     '(yank-motion 'down))
+(map 'normal "yk"     '(yank-motion 'up))
+(map 'normal "y0"     '(yank-motion 'line-start))
+(map 'normal "y^"     '(yank-motion 'line-first-non-blank))
+(map 'normal "y$"     '(yank-motion 'line-end))
+(map 'normal "yw"     '(yank-motion 'word-forward))
+(map 'normal "yW"     '(yank-motion 'big-word-forward))
+(map 'normal "yb"     '(yank-motion 'word-start))
+(map 'normal "yB"     '(yank-motion 'big-word-start))
+(map 'normal "ye"     '(yank-motion 'word-end))
+(map 'normal "yE"     '(yank-motion 'big-word-end))
+(map 'normal "yge"    '(yank-motion 'word-back-end))
+(map 'normal "ygE"    '(yank-motion 'big-word-back-end))
+(map 'normal "ygg"    '(yank-motion 'file-start))
+(map 'normal "yG"     '(yank-motion 'file-end))
+(map 'normal "y%"     '(yank-motion 'match-bracket))
+(map 'normal "p"      '(paste))
+(map 'normal "P"      '(paste-before))
+
 ;; Cardinal motions: hjkl are the classic vi keys; arrows are bound to the
 ;; same actions for users who prefer them. Everything is just a `move-cursor`
 ;; with a different symbol.
@@ -332,7 +365,10 @@
       (map mode "<c-u>"    '(move-cursor 'half-page-up))
       (map mode "zz"       '(move-cursor 'center))
       (map mode "x"        '(delete-selection))
-      (map mode "d"        '(delete-selection))))
+      (map mode "d"        '(delete-selection))
+      (map mode "y"        '(yank))
+      (map mode "p"        '(paste))
+      (map mode "P"        '(paste-before))))
 
 (bind-visual-motions 'visual)
 (bind-visual-motions 'visual-block)

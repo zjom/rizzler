@@ -14,6 +14,7 @@ rizz_actions = { path = "../rizz_actions" }
 rizz_core = { path = "../rizz_core" }
 rizz_ts = { path = "../rizz_ts" }
 rizz_input = { path = "../rizz_input" }
+rizz_registers = { path = "../rizz_registers" }
 rizz_ringbuffer = { path = "../rizz_ringbuffer" }
 rizz_text = { path = "../rizz_text" }
 rizz_ui = { path = "../rizz_ui" }

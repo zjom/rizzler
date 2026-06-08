@@ -289,13 +289,19 @@ the overlay is a child of (w-vstack) or (w-hstack), it floats over the
 siblings still share the entire area, and the overlay's placement
 resolves against that same full area. nest it deeper to scope it.
 
+overlays are transparent by default: only the cells the child actually
+draws are touched, and what was painted underneath stays visible
+everywhere else. wrap the child in (w-block {"face": "popup.default"}
+…) to get an opaque backdrop popup-style.
+
 example:
   (w-vstack
     [(w-size 'min 1 (w-editor-tree))
      (w-size 'cells 1 (_status-line))
-     ;; floats over the whole vstack, doesn't steal a row from anyone
+     ;; floats over the whole vstack, doesn't steal a row from anyone,
+     ;; doesn't erase what's behind it.
      (w-overlay (placement-anchored 'top 1)
-                (w-line [(w-span " saving… " 'header)] 'center))])"#,
+                (w-line [(w-span " saving… " 'header)] 'right))])"#,
     );
 
     b.be_doc(

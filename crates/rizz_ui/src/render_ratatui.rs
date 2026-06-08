@@ -88,12 +88,15 @@ impl Renderer for RatatuiRenderer {
                 WalkCtx::default(),
             );
 
+            // (w-overlay)s paint over the cells their child draws and
+            // nothing else — no Clear, so the editor underneath stays
+            // visible around the floated content. Users who want an opaque
+            // backdrop wrap their content in (w-block {"face": ...} …).
             for o in overlays {
                 let rect = o.placement.resolve(o.area, 0, 0);
                 if rect.width == 0 || rect.height == 0 {
                     continue;
                 }
-                f.render_widget(Clear, rect);
                 let mut sink: Vec<DeferredOverlay<'_>> = Vec::new();
                 walk(
                     o.child,

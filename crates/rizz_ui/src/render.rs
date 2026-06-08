@@ -8,7 +8,7 @@ use rizz_text::{Buffer, BufferId, WrapMap};
 use slotmap::{SecondaryMap, SlotMap};
 
 use crate::{
-    popup::Popup,
+    panel::PanelStack,
     styling::{Style, Theme},
     widget::Widget,
     window::WindowTree,
@@ -23,35 +23,38 @@ pub use rizz_core::Display as DisplayRe;
 /// exposing its private fields.
 pub struct StateSnapshot<'a> {
     /// All buffers, keyed by stable `BufferId`. The renderer looks up the
-    /// buffer for each window leaf / popup / `BufferView` from this map.
+    /// buffer for each window leaf / panel / `BufferView` from this map.
     pub bufs: &'a SlotMap<BufferId, Buffer>,
     /// Window tree — the renderer walks it to lay out editor windows.
     pub windows: &'a WindowTree,
     /// The minibuffer — always present, may be empty.
     pub minibuffer: &'a Buffer,
-    /// Whether key input is currently routed to the minibuffer.
-    pub focus_minibuffer: bool,
     /// Id of the focused editor buffer — what the status line shows as the
     /// "current" buffer.
     pub buf: BufferId,
     pub keyevent: Option<KeyEvent>,
     pub cursor_style: CursorStyle,
-    /// Popup stack, bottom-to-top. The renderer paints them in order, so the
-    /// last entry ends up on top. The cursor of the focused editor window
-    /// is hidden while this slice is non-empty; the topmost popup may opt
-    /// into showing its own cursor via `Popup::show_cursor`.
-    pub popups: &'a [Popup],
+    /// Panel stack — minibuffer (when command mode is active) plus any
+    /// overlay panels. Bottom-to-top order; the topmost entry has focus.
+    /// The renderer iterates `panels.overlays()` to paint floating panels,
+    /// and asks `panels.minibuffer_focused()` to know whether the cursor
+    /// belongs to the minibuffer.
+    pub panels: &'a PanelStack,
 }
 
 impl StateSnapshot<'_> {
     /// The buffer that currently receives keystrokes — used for things like
     /// the mode glyph in the status line.
     pub fn focused(&self) -> &Buffer {
-        if self.focus_minibuffer {
-            self.minibuffer
-        } else {
-            &self.bufs[self.windows.focused_buf()]
+        match self.panels.top_buf() {
+            Some(id) => &self.bufs[id],
+            None => &self.bufs[self.windows.focused_buf()],
         }
+    }
+
+    /// Convenience: whether the minibuffer panel currently owns focus.
+    pub fn focus_minibuffer(&self) -> bool {
+        self.panels.minibuffer_focused()
     }
 }
 

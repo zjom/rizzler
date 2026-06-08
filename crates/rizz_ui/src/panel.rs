@@ -1,10 +1,22 @@
-//! Popup overlay primitive.
+//! Panel — the unified input/overlay container.
 //!
-//! A popup is just a [`crate::Widget`] with extras: a [`Placement`] that
-//! re-resolves against the editor area each frame, a stack of keymap modes
-//! that capture input while the popup is on top, and a backing buffer that
-//! input routes to. All chrome (border + title + faces) lives in the widget
-//! tree itself.
+//! A panel is any container that can receive keys: an editor window leaf, the
+//! minibuffer when command-mode is active, or a popup overlay. They differ
+//! only in *how* they get drawn, captured by [`PanelKind`]:
+//!
+//! - [`PanelKind::Minibuffer`] — drawn by the frame fn's `(w-minibuffer)`
+//!   leaf at whatever rect it claims. No chrome.
+//! - [`PanelKind::Overlay`] — a floating panel with explicit [`Placement`]
+//!   and its own widget tree.
+//!
+//! Editor windows are *not* in the panel stack — they're a separate concept
+//! (the [`crate::WindowTree`] still owns split layout + per-leaf BufferId).
+//! The "is this an editor window?" focus is implicit: it's where focus goes
+//! when no panel is on the stack.
+//!
+//! The [`PanelStack`] is the single source of truth for "where do keys go."
+//! Top of stack wins; bottom of stack falls through to the focused editor
+//! window leaf.
 
 use std::rc::Rc;
 
@@ -17,9 +29,9 @@ use crate::widget::Widget;
 pub enum Dim {
     Cells(u16),
     Frac(f32),
-    /// Resolve to the minimum size required to contain the popup's content
-    /// at the popup's configured wrap mode. The actual fit value is computed
-    /// per-frame by [`resolve_popup_rect`] from the backing buffer.
+    /// Resolve to the minimum size required to contain the panel's content
+    /// at its configured wrap mode. The actual fit value is computed
+    /// per-frame by [`resolve_overlay_rect`] from the backing buffer.
     Fit,
 }
 
@@ -158,24 +170,72 @@ impl BorderStyle {
     }
 }
 
+/// One entry on the editor's input/overlay stack.
 #[derive(Clone, Debug)]
-pub struct Popup {
+pub struct Panel {
+    /// Backing buffer for this panel. Keys routed to this panel mutate this
+    /// buffer; the precompute pass treats it like any other buffer.
     pub buf: BufferId,
-    pub placement: Placement,
-    /// The widget tree drawn at the resolved placement rect.
-    pub widget: Widget,
-    /// Keymap mode layers pushed onto the popup's buffer when it opens.
-    pub mode_layers: Vec<Rc<str>>,
-    /// Whether to display the popup buffer's cursor inside the popup.
-    pub show_cursor: bool,
+    /// Keymap mode layers active while this panel has focus, most-recent
+    /// first. The keymap resolver consults `panel.keymap_layers + [buf.mode]`
+    /// when this panel is on top.
+    pub keymap_layers: Vec<Rc<str>>,
+    /// What sort of panel this is — drives how the renderer places it.
+    pub kind: PanelKind,
 }
 
-/// Walk a popup widget tree and return the rect where the
-/// `(buffer-view)` leaf will be drawn, given the popup's outer placement
+#[derive(Clone, Debug)]
+pub enum PanelKind {
+    /// Pinned to the rect claimed by the frame fn's `(w-minibuffer)` leaf.
+    /// No chrome; the only way it differs from an editor window leaf is that
+    /// it's never inside the [`crate::WindowTree`] split layout.
+    Minibuffer,
+    /// A floating overlay drawn at `placement`. The widget tree describes
+    /// its chrome + content (typically `(w-block (w-buffer-view))`).
+    Overlay {
+        placement: Placement,
+        widget: Widget,
+        show_cursor: bool,
+    },
+}
+
+impl Panel {
+    pub fn minibuffer(buf: BufferId) -> Self {
+        Self {
+            buf,
+            keymap_layers: Vec::new(),
+            kind: PanelKind::Minibuffer,
+        }
+    }
+
+    pub fn is_overlay(&self) -> bool {
+        matches!(self.kind, PanelKind::Overlay { .. })
+    }
+
+    pub fn is_minibuffer(&self) -> bool {
+        matches!(self.kind, PanelKind::Minibuffer)
+    }
+
+    /// Get the overlay-specific fields, panicking if `self` isn't an overlay.
+    /// Used by the renderer in code paths that only run on overlay branches.
+    pub fn as_overlay(&self) -> Option<(&Placement, &Widget, bool)> {
+        match &self.kind {
+            PanelKind::Overlay {
+                placement,
+                widget,
+                show_cursor,
+            } => Some((placement, widget, *show_cursor)),
+            _ => None,
+        }
+    }
+}
+
+/// Walk an overlay panel's widget tree and return the rect where the
+/// `(buffer-view)` leaf will be drawn, given the panel's outer placement
 /// rect.
-pub fn buffer_view_rect(widget: &Widget, outer: Rect, popup_buf: BufferId) -> Rect {
+pub fn buffer_view_rect(widget: &Widget, outer: Rect, panel_buf: BufferId) -> Rect {
     match widget {
-        Widget::BufferView { buf } if buf.unwrap_or(popup_buf) == popup_buf => outer,
+        Widget::BufferView { buf } if buf.unwrap_or(panel_buf) == panel_buf => outer,
         Widget::Block { border, child, .. } => {
             let inset = border.inset();
             let inner = Rect {
@@ -184,42 +244,48 @@ pub fn buffer_view_rect(widget: &Widget, outer: Rect, popup_buf: BufferId) -> Re
                 width: outer.width.saturating_sub(2 * inset),
                 height: outer.height.saturating_sub(2 * inset),
             };
-            buffer_view_rect(child, inner, popup_buf)
+            buffer_view_rect(child, inner, panel_buf)
         }
-        Widget::Constrained { child, .. } => buffer_view_rect(child, outer, popup_buf),
+        Widget::Constrained { child, .. } => buffer_view_rect(child, outer, panel_buf),
         _ => outer,
     }
 }
 
-/// Total `(horizontal, vertical)` cells the popup's chrome adds between the
+/// Total `(horizontal, vertical)` cells the panel's chrome adds between the
 /// outer placement rect and the `(buffer-view)` leaf. Used by
-/// [`resolve_popup_rect`] to translate content-fit dims into outer dims
+/// [`resolve_overlay_rect`] to translate content-fit dims into outer dims
 /// without knowing the outer size first (insets don't depend on the rect).
-pub fn buffer_view_inset(widget: &Widget, popup_buf: BufferId) -> (u16, u16) {
+pub fn buffer_view_inset(widget: &Widget, panel_buf: BufferId) -> (u16, u16) {
     match widget {
-        Widget::BufferView { buf } if buf.unwrap_or(popup_buf) == popup_buf => (0, 0),
+        Widget::BufferView { buf } if buf.unwrap_or(panel_buf) == panel_buf => (0, 0),
         Widget::Block { border, child, .. } => {
             let i = border.inset();
-            let (cw, ch) = buffer_view_inset(child, popup_buf);
+            let (cw, ch) = buffer_view_inset(child, panel_buf);
             (cw + 2 * i, ch + 2 * i)
         }
-        Widget::Constrained { child, .. } => buffer_view_inset(child, popup_buf),
+        Widget::Constrained { child, .. } => buffer_view_inset(child, panel_buf),
         _ => (0, 0),
     }
 }
 
-/// Resolve a popup's outer rect within `area`, honouring [`Dim::Fit`] by
-/// computing the minimum rows/cols needed to contain `buf`'s text under its
-/// configured wrap mode. Called per-frame so size tracks text edits and
+/// Resolve an overlay panel's outer rect within `area`, honouring [`Dim::Fit`]
+/// by computing the minimum rows/cols needed to contain `buf`'s text under
+/// its configured wrap mode. Called per-frame so size tracks text edits and
 /// terminal resizes.
-pub fn resolve_popup_rect(popup: &Popup, area: Rect, buf: &Buffer) -> Rect {
-    if !placement_needs_fit(&popup.placement) {
-        return popup.placement.resolve(area, 0, 0);
+///
+/// Panics if `panel` is not an [`PanelKind::Overlay`] — only overlay panels
+/// have a placement to resolve.
+pub fn resolve_overlay_rect(panel: &Panel, area: Rect, buf: &Buffer) -> Rect {
+    let (placement, widget, _) = panel
+        .as_overlay()
+        .expect("resolve_overlay_rect: panel must be an Overlay");
+    if !placement_needs_fit(placement) {
+        return placement.resolve(area, 0, 0);
     }
-    let (inset_w, inset_h) = buffer_view_inset(&popup.widget, popup.buf);
+    let (inset_w, inset_h) = buffer_view_inset(widget, panel.buf);
     // Width budget for wrapping when fitting height: full available area
     // minus chrome. `wrap_column` (if set) overrides — that's the buffer's
-    // explicit wrap target, narrower than the popup might end up.
+    // explicit wrap target, narrower than the panel might end up.
     let inner_w = match buf.wrap_column() {
         Some(c) => c,
         None => area.width.saturating_sub(inset_w),
@@ -240,7 +306,7 @@ pub fn resolve_popup_rect(popup: &Popup, area: Rect, buf: &Buffer) -> Rect {
     };
     let fit_w = fit_inner_w.saturating_add(inset_w);
     let fit_h = fit_inner_h.saturating_add(inset_h);
-    popup.placement.resolve(area, fit_w, fit_h)
+    placement.resolve(area, fit_w, fit_h)
 }
 
 fn placement_needs_fit(p: &Placement) -> bool {
@@ -271,22 +337,28 @@ fn longest_line_chars(buf: &Buffer, max_rows: usize) -> u16 {
     longest
 }
 
-/// Overlay stack, bottom-to-top.
+/// Stack of panels above the editor window tree. Bottom-to-top order: the
+/// renderer paints overlays in slice order so the last entry ends up on top,
+/// and the keymap resolver picks the topmost panel for input routing.
+///
+/// The minibuffer enters the stack only when command mode is active (push on
+/// `set-mode 'command`, pop on `command-cancel`/`command-submit`). When the
+/// stack is empty, focus falls through to the editor window leaf.
 #[derive(Default)]
-pub struct PopupStack {
-    stack: Vec<Popup>,
+pub struct PanelStack {
+    stack: Vec<Panel>,
 }
 
-impl PopupStack {
+impl PanelStack {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn push(&mut self, popup: Popup) {
-        self.stack.push(popup);
+    pub fn push(&mut self, panel: Panel) {
+        self.stack.push(panel);
     }
 
-    pub fn pop(&mut self) -> Option<Popup> {
+    pub fn pop(&mut self) -> Option<Panel> {
         self.stack.pop()
     }
 
@@ -294,22 +366,71 @@ impl PopupStack {
         self.stack.is_empty()
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, Popup> {
+    pub fn iter(&self) -> std::slice::Iter<'_, Panel> {
         self.stack.iter()
     }
 
-    pub fn as_slice(&self) -> &[Popup] {
+    pub fn as_slice(&self) -> &[Panel] {
         &self.stack
     }
 
-    pub fn top_mode(&self) -> Option<Rc<str>> {
-        self.stack
-            .last()
-            .and_then(|p| p.mode_layers.last().cloned())
+    pub fn top(&self) -> Option<&Panel> {
+        self.stack.last()
     }
 
     pub fn top_buf(&self) -> Option<BufferId> {
         self.stack.last().map(|p| p.buf)
+    }
+
+    pub fn top_keymap_layer(&self) -> Option<Rc<str>> {
+        self.stack
+            .last()
+            .and_then(|p| p.keymap_layers.last().cloned())
+    }
+
+    /// Keymap layers from the focused panel, most-recent first. Empty when
+    /// no panel is on the stack (editor windows have no layered modes of
+    /// their own — they just use the buffer's `EditingMode`).
+    pub fn top_keymap_layers(&self) -> &[Rc<str>] {
+        self.stack
+            .last()
+            .map(|p| p.keymap_layers.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// True if the topmost panel is the minibuffer.
+    pub fn minibuffer_focused(&self) -> bool {
+        self.stack.last().is_some_and(|p| p.is_minibuffer())
+    }
+
+    /// Topmost overlay panel, if any. Skips a minibuffer panel that may be
+    /// sitting on top of overlays. Used by the renderer's "overlay cursor"
+    /// path and by `popup-close`/`popup-mode` lisp builtins.
+    pub fn top_overlay(&self) -> Option<&Panel> {
+        self.stack.iter().rev().find(|p| p.is_overlay())
+    }
+
+    /// Pop the topmost overlay (skipping a minibuffer if present). Returns
+    /// the popped panel, or `None` if there's no overlay on the stack.
+    pub fn pop_top_overlay(&mut self) -> Option<Panel> {
+        let idx = self.stack.iter().rposition(|p| p.is_overlay())?;
+        Some(self.stack.remove(idx))
+    }
+
+    /// Pop the topmost minibuffer panel (skipping overlays). Used when
+    /// exiting command mode while overlays may still be open.
+    pub fn pop_minibuffer(&mut self) -> Option<Panel> {
+        let idx = self.stack.iter().rposition(|p| p.is_minibuffer())?;
+        Some(self.stack.remove(idx))
+    }
+
+    /// Iterate just the overlay panels, bottom-to-top.
+    pub fn overlays(&self) -> impl Iterator<Item = &Panel> {
+        self.stack.iter().filter(|p| p.is_overlay())
+    }
+
+    pub fn any_overlay(&self) -> bool {
+        self.stack.iter().any(|p| p.is_overlay())
     }
 }
 

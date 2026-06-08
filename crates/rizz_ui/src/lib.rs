@@ -1,11 +1,12 @@
 //! UI for the rizz editor. Two halves:
 //!
 //! - **Renderer-agnostic primitives** — [`styling`] (Style/Color/Theme),
-//!   [`widget`] (declarative widget tree built from lisp), [`popup`]
-//!   (overlay placement + stack), [`window`] (window tree), [`render`]
-//!   (Renderer trait + RenderedFrame data), [`scroll`] (re-export from
-//!   rizz_text), [`precompute`] (frame assembly: gutter rows, decorator
-//!   ranges, soft-wrap maps).
+//!   [`widget`] (declarative widget tree built from lisp), [`panel`]
+//!   (unified input/overlay container + placement vocabulary),
+//!   [`window`] (editor split tree), [`render`] (Renderer trait +
+//!   RenderedFrame data), [`scroll`] (re-export from rizz_text),
+//!   [`precompute`] (frame assembly: gutter rows, decorator ranges,
+//!   soft-wrap maps).
 //! - **Concrete ratatui renderer + components** — [`render_ratatui`] walks
 //!   a `RenderedFrame` into ratatui draws; [`components`] (`EditorView`,
 //!   `MinibufferLine`) are the per-widget paint routines.
@@ -13,7 +14,7 @@
 //!   alt screen and restores them on drop (or panic).
 
 pub mod components;
-pub mod popup;
+pub mod panel;
 pub mod precompute;
 pub mod render;
 pub mod render_ratatui;

@@ -24,7 +24,7 @@ use rizz_ts::TsRegistry;
 
 use rizz_ui::{
     RatatuiRenderer, Renderer, StateSnapshot, ThemeCell, Widget, WindowTree,
-    popup::{Placement, Popup, PopupStack},
+    panel::{Panel, PanelKind, PanelStack, Placement},
     precompute,
     render::{CursorStyle, RenderedFrame},
 };
@@ -106,9 +106,11 @@ impl PopupSpec {
 pub struct State {
     bufs: BufferList,
     windows: WindowTree,
-    focus_minibuffer: bool,
     journal: Journal,
-    popups: PopupStack,
+    /// Stack of input/overlay panels above the window tree. Includes the
+    /// minibuffer (pushed on `set-mode 'command`) and any open popups.
+    /// When empty, focus falls through to the focused window leaf.
+    panels: PanelStack,
     quit: bool,
     keymap: KeymapRegistry,
     keyevents: RingBuffer<(KeyEvent, Instant), 100>,
@@ -211,9 +213,8 @@ impl State {
         let mut state = Self {
             bufs,
             windows: WindowTree::new(first_file),
-            focus_minibuffer: false,
             journal: Journal::new(),
-            popups: PopupStack::new(),
+            panels: PanelStack::new(),
             quit: false,
             keymap: KeymapRegistry::new(),
             keyevents: RingBuffer::new(),
@@ -379,11 +380,15 @@ impl State {
         }
     }
 
+    /// Topmost keymap layer of the topmost *overlay* panel, if any. Used by
+    /// the `popup-mode` lisp builtin to detect "am I inside a popup of kind X?"
     pub fn top_popup_mode(&self) -> Option<Rc<str>> {
-        self.popups.top_mode()
+        self.panels
+            .top_overlay()
+            .and_then(|p| p.keymap_layers.last().cloned())
     }
 
-    /// Push a popup onto the overlay stack. Creates a backing buffer of
+    /// Push an overlay panel onto the stack. Creates a backing buffer of
     /// kind [`BufferKind::Popup`], appends it to `self.bufs`, and returns
     /// its `BufferId`.
     #[instrument(skip(self, spec), fields(
@@ -400,30 +405,32 @@ impl State {
         buf.set_wrap_mode(spec.wrap_mode);
         buf.set_wrap_column(spec.wrap_column);
         buf.set_breakindent(spec.breakindent);
-        for layer in &spec.mode_layers {
-            buf.push_mode_layer(layer.clone());
-        }
         let id = self.bufs.push(buf);
-        self.popups.push(Popup {
+        self.panels.push(Panel {
             buf: id,
-            placement: spec.placement,
-            widget: spec.widget,
-            mode_layers: spec.mode_layers,
-            show_cursor: spec.show_cursor,
+            keymap_layers: spec.mode_layers,
+            kind: PanelKind::Overlay {
+                placement: spec.placement,
+                widget: spec.widget,
+                show_cursor: spec.show_cursor,
+            },
         });
         self.refresh_viewport();
-        info!(?id, "popup opened");
+        info!(?id, "overlay panel opened");
         id
     }
 
+    /// Close the topmost overlay panel (skipping a minibuffer panel if it
+    /// sits on top). Removes the overlay's backing buffer and redirects any
+    /// window leaves that pointed at it to the first file buffer.
     #[instrument(skip(self))]
     pub fn close_popup(&mut self) -> bool {
-        let Some(popup) = self.popups.pop() else {
-            trace!("no popup to close");
+        let Some(panel) = self.panels.pop_top_overlay() else {
+            trace!("no overlay to close");
             return false;
         };
-        let removed = popup.buf;
-        info!(?removed, "closing popup");
+        let removed = panel.buf;
+        info!(?removed, "closing overlay");
         if self.bufs.get(removed).is_some_and(|b| b.kind() == BufferKind::Popup) {
             self.bufs.remove(removed);
             let first = self.bufs.first_file_buf();
@@ -438,11 +445,11 @@ impl State {
     }
 
     pub fn top_popup_buf(&self) -> Option<BufferId> {
-        self.popups.top_buf()
+        self.panels.top_overlay().map(|p| p.buf)
     }
 
     pub fn has_popup(&self) -> bool {
-        !self.popups.is_empty()
+        self.panels.any_overlay()
     }
 
     pub fn set_buffer_contents(&mut self, buf: BufferId, msg: &str) {
@@ -546,16 +553,31 @@ impl State {
         &self.keymap
     }
 
-    /// The buffer currently receiving key events.
+    /// The buffer currently receiving key events. Reads from the panel
+    /// stack (popups + minibuffer-when-focused) before falling through to
+    /// the focused editor window leaf.
     pub fn focused_buf_id(&self) -> BufferId {
-        if let Some(buf) = self.popups.top_buf() {
-            return buf;
+        match self.panels.top_buf() {
+            Some(id) => id,
+            None => self.windows.focused_buf(),
         }
-        if self.focus_minibuffer {
-            self.bufs.minibuffer_id()
-        } else {
-            self.windows.focused_buf()
-        }
+    }
+
+    /// Active keymap modes for the focused input context, most-specific first.
+    /// The top panel's named layers (e.g. `"popup"`, `"popup.files"`) precede
+    /// the focused buffer's [`EditingMode`]. When no panel is on the stack,
+    /// this is just `[buf.mode]`.
+    fn active_modes(&self) -> Vec<Rc<str>> {
+        let mut v: Vec<Rc<str>> = self
+            .panels
+            .top_keymap_layers()
+            .iter()
+            .rev()
+            .cloned()
+            .collect();
+        let mode = self.bufs[self.focused_buf_id()].mode();
+        v.push(mode.as_str().into());
+        v
     }
 
     pub fn nbufs(&self) -> usize {
@@ -577,7 +599,7 @@ impl State {
     }
 
     /// Update viewports of all buffers currently displayed in a window,
-    /// the minibuffer, and every popup.
+    /// the minibuffer, and every overlay panel.
     fn refresh_viewport(&mut self) {
         let Ok((cols, rows)) = crossterm::terminal::size() else {
             return;
@@ -590,17 +612,18 @@ impl State {
             }
         }
         self.bufs.minibuffer_mut().viewport = Position::new(cols, MINIBUFFER_ROWS);
-        let popups: Vec<(BufferId, Position<u16>)> = self
-            .popups
-            .iter()
-            .map(|p| {
+        let overlay_viewports: Vec<(BufferId, Position<u16>)> = self
+            .panels
+            .overlays()
+            .filter_map(|p| {
+                let (_, widget, _) = p.as_overlay()?;
                 let buf = &self.bufs[p.buf];
-                let outer = rizz_ui::popup::resolve_popup_rect(p, editor_area, buf);
-                let inner = rizz_ui::popup::buffer_view_rect(&p.widget, outer, p.buf);
-                (p.buf, Position::new(inner.width, inner.height))
+                let outer = rizz_ui::panel::resolve_overlay_rect(p, editor_area, buf);
+                let inner = rizz_ui::panel::buffer_view_rect(widget, outer, p.buf);
+                Some((p.buf, Position::new(inner.width, inner.height)))
             })
             .collect();
-        for (id, viewport) in popups {
+        for (id, viewport) in overlay_viewports {
             if let Some(buf) = self.bufs.get_mut(id) {
                 buf.viewport = viewport;
             }
@@ -627,7 +650,7 @@ impl State {
             return self.render();
         }
 
-        let modes = self.bufs[self.focused_buf_id()].active_modes();
+        let modes = self.active_modes();
         debug!(?ke, ?modes, timedout, "resolving key against keymap");
         if let Some(action) = self.keymap.resolve(&modes, ke, timedout) {
             debug!(
@@ -646,7 +669,10 @@ impl State {
     }
 
     fn count_eligible(&self) -> bool {
-        if self.has_popup() || self.focus_minibuffer {
+        // Count prefix is only honoured for editor windows in a non-visual
+        // editing mode — any panel on the stack means input is going somewhere
+        // else (popup, minibuffer) and digits should pass through verbatim.
+        if !self.panels.is_empty() {
             return false;
         }
         if !self.keymap.is_idle() {
@@ -806,7 +832,12 @@ impl State {
             debug!("entering command mode (focusing minibuffer)");
             self.bufs.minibuffer_mut().clear();
             self.bufs.minibuffer_mut().set_mode(EditingMode::Command);
-            self.focus_minibuffer = true;
+            // Only push a fresh minibuffer panel if one isn't already on the
+            // stack — re-entering command mode while already there is a no-op.
+            if !self.panels.iter().any(|p| p.is_minibuffer()) {
+                let mb = self.bufs.minibuffer_id();
+                self.panels.push(Panel::minibuffer(mb));
+            }
         } else {
             let f = self.focused_buf_id();
             debug!(buf = ?f, ?mode, "setting buffer mode");
@@ -818,7 +849,7 @@ impl State {
         debug!("exiting minibuffer");
         self.bufs.minibuffer_mut().clear();
         self.bufs.minibuffer_mut().set_mode(EditingMode::Command);
-        self.focus_minibuffer = false;
+        self.panels.pop_minibuffer();
         let editor = self.windows.focused_buf();
         self.bufs[editor].set_mode(EditingMode::Normal);
     }
@@ -934,14 +965,13 @@ impl State {
             bufs: self.bufs.raw(),
             windows: &self.windows,
             minibuffer: self.bufs.minibuffer(),
-            focus_minibuffer: self.focus_minibuffer,
             buf: self.windows.focused_buf(),
             keyevent: self.keyevents.peek_back().map(|(e, _)| e.to_owned()),
             cursor_style: match self.bufs[focused].mode() {
                 EditingMode::Insert | EditingMode::Command => CursorStyle::Bar,
                 _ => CursorStyle::Block,
             },
-            popups: self.popups.as_slice(),
+            panels: &self.panels,
         };
         let result = self.renderer.render(snap, &frame);
         if let Err(e) = &result {

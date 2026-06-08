@@ -70,12 +70,6 @@ pub struct Buffer {
     pub viewport: Position<u16>,
     pub(crate) kind: BufferKind,
     pub(crate) mode: EditingMode,
-    /// Stack of additional keymap modes layered on top of `mode`. Used to
-    /// give a buffer extra named modes (e.g. a popup buffer activating
-    /// `"popup"` and `"popup.files"`) without losing its base editing mode.
-    /// Last element is the most recently pushed and shadows earlier layers
-    /// during keymap resolution.
-    pub(crate) mode_layers: Vec<Rc<str>>,
     /// Anchor (absolute file position) of the current visual selection.
     /// `Some` iff `mode` is one of the visual modes — managed by `set_mode`.
     pub(crate) selection_anchor: Option<Position<usize>>,

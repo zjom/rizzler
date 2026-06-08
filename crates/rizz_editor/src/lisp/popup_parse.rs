@@ -7,7 +7,7 @@ use std::rc::Rc;
 use rizz::runtime::{RuntimeError, Value};
 
 use rizz_text::wrap::WrapMode;
-use rizz_ui::popup::{Dim, Placement, Side};
+use rizz_ui::panel::{Dim, Placement, Side};
 
 use super::helpers::{
     as_ident_or_str, as_int, as_str, parse_mode_ident, parse_mode_layers, parse_mode_name,

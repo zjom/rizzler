@@ -18,23 +18,23 @@ use rizz_text::BufferId;
 
 use crate::{
     components::{EditorView, MinibufferLine},
-    popup::{BorderStyle, Popup},
+    panel::{BorderStyle, Panel},
     render::{CursorStyle, RenderedFrame, Renderer, StateSnapshot},
     styling::{Style, Theme, style_to_ratatui},
     widget::{StackDir, Widget},
 };
 
-/// Per-walk context. `popup` is `Some` when the walk is inside a popup's
-/// widget tree — that's what resolves `Widget::BufferView { None }` to the
-/// enclosing popup's backing buffer and what lets the walker place the
-/// cursor inside the popup when it's on top.
+/// Per-walk context. `overlay` is `Some` when the walk is inside an overlay
+/// panel's widget tree — that's what resolves `Widget::BufferView { None }`
+/// to the enclosing panel's backing buffer and what lets the walker place
+/// the cursor inside the panel when it's on top.
 #[derive(Clone, Copy, Default)]
 struct WalkCtx {
-    popup: Option<PopupCtx>,
+    overlay: Option<OverlayCtx>,
 }
 
 #[derive(Clone, Copy)]
-struct PopupCtx {
+struct OverlayCtx {
     buf: BufferId,
     is_top: bool,
     show_cursor: bool,
@@ -56,7 +56,7 @@ impl RatatuiRenderer {
 #[derive(Default)]
 struct CursorPlacement {
     editor: Option<(u16, u16)>,
-    popup: Option<(u16, u16, CursorStyle)>,
+    overlay: Option<(u16, u16, CursorStyle)>,
 }
 
 impl Renderer for RatatuiRenderer {
@@ -78,15 +78,17 @@ impl Renderer for RatatuiRenderer {
                 WalkCtx::default(),
             );
 
-            for (i, popup) in snap.popups.iter().enumerate() {
-                let is_top = i + 1 == snap.popups.len();
-                draw_popup(popup, f.area(), &snap, frame_data, is_top, f, &mut cur);
+            let overlays: Vec<&Panel> = snap.panels.overlays().collect();
+            let last = overlays.len().saturating_sub(1);
+            for (i, panel) in overlays.iter().enumerate() {
+                let is_top = i == last;
+                draw_overlay(panel, f.area(), &snap, frame_data, is_top, f, &mut cur);
             }
 
-            if let Some((x, y, cs)) = cur.popup {
+            if let Some((x, y, cs)) = cur.overlay {
                 let _ = execute!(io::stdout(), set_cursor_style(cs));
                 f.set_cursor_position((x, y));
-            } else if snap.popups.is_empty()
+            } else if !snap.panels.any_overlay()
                 && let Some((x, y)) = cur.editor
             {
                 f.set_cursor_position((x, y));
@@ -228,7 +230,7 @@ fn walk_buffer_view(
     cur: &mut CursorPlacement,
     ctx: WalkCtx,
 ) {
-    let Some(buf_id) = explicit_buf.or(ctx.popup.map(|p| p.buf)) else {
+    let Some(buf_id) = explicit_buf.or(ctx.overlay.map(|p| p.buf)) else {
         return;
     };
     let Some(buf) = snap.bufs.get(buf_id) else {
@@ -237,10 +239,10 @@ fn walk_buffer_view(
     let buf_frame = fd.per_buf.get(buf_id);
     EditorView::render(buf, area, buf_frame, f);
 
-    if let Some(pctx) = ctx.popup
-        && pctx.is_top
-        && pctx.show_cursor
-        && pctx.buf == buf_id
+    if let Some(octx) = ctx.overlay
+        && octx.is_top
+        && octx.show_cursor
+        && octx.buf == buf_id
     {
         let (x, y) = match buf_frame.and_then(|bf| bf.wrap.as_ref()) {
             Some(wrap) => EditorView::cursor_wrapped(buf, area, buf_frame, wrap),
@@ -250,7 +252,7 @@ fn walk_buffer_view(
             EditingMode::Insert | EditingMode::Command => CursorStyle::Bar,
             _ => CursorStyle::Block,
         };
-        cur.popup = Some((x, y, cs));
+        cur.overlay = Some((x, y, cs));
     }
 }
 
@@ -262,13 +264,14 @@ fn walk_editor_tree(
     cur: &mut CursorPlacement,
 ) {
     let focused_path = snap.windows.focused_path();
+    let editor_focused = snap.panels.is_empty();
     for leaf in snap.windows.layout(area) {
         let Some(buf) = snap.bufs.get(leaf.buf) else {
             continue;
         };
         let buf_frame = fd.per_buf.get(leaf.buf);
         EditorView::render(buf, leaf.area, buf_frame, f);
-        if !snap.focus_minibuffer && &leaf.path == focused_path {
+        if editor_focused && &leaf.path == focused_path {
             cur.editor = Some(match buf_frame.and_then(|bf| bf.wrap.as_ref()) {
                 Some(wrap) => EditorView::cursor_wrapped(buf, leaf.area, buf_frame, wrap),
                 None => EditorView::cursor(buf, leaf.area, buf_frame),
@@ -277,8 +280,8 @@ fn walk_editor_tree(
     }
 }
 
-fn draw_popup(
-    popup: &Popup,
+fn draw_overlay(
+    panel: &Panel,
     area: Rect,
     snap: &StateSnapshot<'_>,
     fd: &RenderedFrame,
@@ -286,23 +289,26 @@ fn draw_popup(
     f: &mut Frame,
     cur: &mut CursorPlacement,
 ) {
-    let buf = match snap.bufs.get(popup.buf) {
+    let buf = match snap.bufs.get(panel.buf) {
         Some(b) => b,
         None => return,
     };
-    let outer = crate::popup::resolve_popup_rect(popup, area, buf);
+    let Some((_, widget, show_cursor)) = panel.as_overlay() else {
+        return;
+    };
+    let outer = crate::panel::resolve_overlay_rect(panel, area, buf);
     if outer.width == 0 || outer.height == 0 {
         return;
     }
     f.render_widget(Clear, outer);
     let ctx = WalkCtx {
-        popup: Some(PopupCtx {
-            buf: popup.buf,
+        overlay: Some(OverlayCtx {
+            buf: panel.buf,
             is_top,
-            show_cursor: popup.show_cursor,
+            show_cursor,
         }),
     };
-    walk(&popup.widget, outer, snap, fd, f, cur, ctx);
+    walk(widget, outer, snap, fd, f, cur, ctx);
 }
 
 fn set_cursor_style(cs: CursorStyle) -> SetCursorStyle {

@@ -1,39 +1,18 @@
-//! Selection anchor + keymap mode-layer stack. The selection model is
+//! Selection anchor + buffer editing mode. The selection model is
 //! deliberately thin: the anchor is set when entering a visual mode and
 //! cleared on the way out; per-mode slicing lives in `rizz_core::selection`.
-
-use std::rc::Rc;
+//!
+//! Buffers carry only their primary [`EditingMode`]. The stack of named
+//! keymap layers a popup or minibuffer panel layers on top lives on the
+//! panel itself ([`rizz_ui::panel::Panel::keymap_layers`]) so that one
+//! buffer can serve as the backing buffer of multiple panels without
+//! their input contexts bleeding into each other.
 
 use rizz_core::{EditingMode, Position, selection};
 
 use super::Buffer;
 
 impl Buffer {
-    /// Push `name` to the top of the keymap mode stack. Idempotent: if
-    /// already present, the existing entry is removed first so the layer
-    /// ends up at the top.
-    pub fn push_mode_layer(&mut self, name: Rc<str>) {
-        self.mode_layers.retain(|m| m.as_ref() != name.as_ref());
-        self.mode_layers.push(name);
-    }
-
-    /// Remove `name` from the mode stack. No-op when absent.
-    pub fn remove_mode_layer(&mut self, name: &str) {
-        self.mode_layers.retain(|m| m.as_ref() != name);
-    }
-
-    pub fn mode_layers(&self) -> &[Rc<str>] {
-        &self.mode_layers
-    }
-
-    /// Active modes for keymap resolution, most-specific first. Stacked
-    /// layers (most recent first) precede the buffer's base editing mode.
-    pub fn active_modes(&self) -> Vec<Rc<str>> {
-        let mut v: Vec<Rc<str>> = self.mode_layers.iter().rev().cloned().collect();
-        v.push(self.mode.as_str().into());
-        v
-    }
-
     pub fn set_mode(&mut self, mode: EditingMode) {
         if self.mode != mode {
             self.close_insert_batch();

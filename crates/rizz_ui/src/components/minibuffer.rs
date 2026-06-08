@@ -17,7 +17,7 @@ impl MinibufferLine {
     }
 
     pub fn cursor(area: Rect, snap: &StateSnapshot<'_>) -> Option<(u16, u16)> {
-        if !snap.focus_minibuffer {
+        if !snap.focus_minibuffer() {
             return None;
         }
         let cur = snap.minibuffer.cursor_pos();

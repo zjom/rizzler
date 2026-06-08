@@ -13,7 +13,7 @@ use rizz::runtime::{RuntimeError, Value};
 use rizz_text::BufferId;
 use slotmap::KeyData;
 
-use crate::popup::BorderStyle;
+use crate::panel::BorderStyle;
 use crate::styling::{Theme, spans_from_value};
 
 #[derive(Clone, Debug)]

@@ -4,7 +4,7 @@ use im::{HashMap as ImHashMap, Vector};
 use rizz::runtime::{RuntimeError, Value};
 use rizz_ui::styling::normalize_style_value;
 
-use super::super::helpers::{Builtins, as_int, as_str, unit};
+use super::super::helpers::{Builtins, as_ident_or_str, as_int, as_str, unit};
 use super::super::with_editor_mut;
 
 pub(super) fn register(b: &mut Builtins) {
@@ -78,70 +78,46 @@ returns the currently active per-frame render callback fn if set. returns () oth
     );
 
     b.be_doc(
-        "w-text",
-        2,
-        |args, _| {
-            let text = as_str(&args[0], "w-text")?;
-            let style_val = with_editor_mut(|st| {
-                let theme = st.theme().borrow();
-                normalize_style_value(&args[1], &theme)
-            })?;
-            let mut span: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
-            span.insert(strkey("text"), Rc::new(Value::Str(text)));
-            if !style_val.is_unit() {
-                span.insert(strkey("style"), style_val);
-            }
-            Ok(Rc::new(Value::Map(span)))
-        },
-        r#"(w-text/2)
-alias of (w-span ...): identical shape and semantics. by convention use w-text
-when emitting a standalone span widget and w-span when embedding inside
-(w-line [...]). see (show w-span) for the full style grammar.
-example:
-  (w-text "★" ())
-  (w-text " mode " "vague.mode.normal")"#,
-    );
-
-    b.be_doc(
         "w-line",
         1,
         |args, _| {
             let spans: Vec<Rc<Value>> = value_iter(&args[0]).collect();
-            Ok(widget_line(spans))
+            let line = widget_line(spans);
+            // Optional second arg is the alignment ident: 'left | 'center | 'right.
+            if let Some(align_v) = args.get(1) {
+                if align_v.is_unit() {
+                    return Ok(line);
+                }
+                let s = match &**align_v {
+                    Value::Ident(s) | Value::Str(s) => s.clone(),
+                    _ => {
+                        return Err(RuntimeError::type_mismatch(
+                            "w-line.align",
+                            "ident|str ('left|'center|'right)",
+                            align_v,
+                        ));
+                    }
+                };
+                if !matches!(s.as_ref(), "left" | "center" | "right") {
+                    return Err(RuntimeError::type_mismatch(
+                        "w-line.align",
+                        "'left | 'center | 'right",
+                        align_v,
+                    ));
+                }
+                return Ok(widget_set_align(line, &s));
+            }
+            Ok(line)
         },
         r#"(w-line/1)
-build a single-row line widget from a sequence of spans. returns
-{"type": "line", "spans": [...] "align"?: "left"|"center"|"right"}.
-spans is an array of span maps — typically results of (w-span ...) or
-(w-text ...). pair with (w-right-align ...) / (w-center-align ...) to control
-horizontal alignment within the allocated rect.
+build a single-row line widget from a sequence of spans. accepts an optional
+2nd arg — the alignment ident 'left | 'center | 'right (defaults to 'left).
+spans is an array of span maps — typically results of (w-span ...).
 example:
-  (w-line [(w-text "left" ())
-           (w-text " · " "vague.muted")
-           (w-text "right" 'header)])"#,
-    );
-
-    b.be_doc(
-        "w-right-align",
-        1,
-        |args, _| Ok(widget_set_align(args[0].clone(), "right")),
-        r#"(w-right-align/1)
-set "align" to "right" on a widget map (e.g. one returned by (w-line ...)).
-non-map widgets pass through unchanged. alignment only takes effect on widgets
-that respect it (currently w-line).
-example:
-  (w-right-align (w-line [(w-text "10:42" 'header)]))"#,
-    );
-
-    b.be_doc(
-        "w-center-align",
-        1,
-        |args, _| Ok(widget_set_align(args[0].clone(), "center")),
-        r#"(w-center-align/1)
-set "align" to "center" on a widget map (e.g. one returned by (w-line ...)).
-non-map widgets pass through unchanged.
-example:
-  (w-center-align (w-line [(w-text "title" 'header)]))"#,
+  (w-line [(w-span "left" ())
+           (w-span " · " "vague.muted")
+           (w-span "right" 'header)])
+  (w-line [(w-span "10:42" 'header)] 'right)"#,
     );
 
     b.be_doc(
@@ -150,14 +126,14 @@ example:
         |args, _| Ok(widget_stack("vertical", &args[0])),
         r#"(w-vstack/1)
 build a vertical stack widget. children are laid out top-to-bottom and honour
-their outer constraint (w-cells/w-min-cells/w-fill/w-frac); unconstrained
-children default to Min(1).
+their outer constraint (see (w-size ...)); unconstrained children default
+to Min(1).
 children is an array of widgets.
 example:
   (w-vstack
-    [(w-min-cells 1 (w-editor-tree))
-     (w-cells 1 (_status-line))
-     (w-cells 1 (w-minibuffer))])"#,
+    [(w-size 'min   1 (w-editor-tree))
+     (w-size 'cells 1 (_status-line))
+     (w-size 'cells 1 (w-minibuffer))])"#,
     );
 
     b.be_doc(
@@ -166,75 +142,73 @@ example:
         |args, _| Ok(widget_stack("horizontal", &args[0])),
         r#"(w-hstack/1)
 build a horizontal stack widget. children are laid out left-to-right and honour
-their outer constraint (w-cells/w-min-cells/w-fill/w-frac); unconstrained
-children default to Min(1).
+their outer constraint (see (w-size ...)); unconstrained children default
+to Min(1).
 children is an array of widgets.
 example:
   (w-hstack
-    [(w-min-cells 1 (w-line [(w-text "left" ())]))
-     (w-fill 1 (w-right-align (w-line [(w-text "right" ())])))])"#,
+    [(w-size 'min  1 (w-line [(w-span "left" ())]))
+     (w-size 'fill 1 (w-line [(w-span "right" ())] 'right))])"#,
     );
 
     b.be_doc(
-        "w-cells",
-        2,
-        |args, _| {
-            let n = as_int(&args[0], "w-cells")?.max(0).min(u16::MAX as i64);
-            Ok(widget_constrained("cells", n, 1, args[1].clone()))
-        },
-        r#"(w-cells/2)
-wrap child with a fixed-length constraint of N cells (ratatui Constraint::Length).
-N is clamped to [0, u16::MAX]. the constraint only matters when child sits
-inside an (w-vstack ...) or (w-hstack ...); outside a stack it is ignored.
-example:
-  (w-vstack [(w-cells 1 (_status-line))
-             (w-min-cells 1 (w-editor-tree))])"#,
-    );
-    b.be_doc(
-        "w-min-cells",
-        2,
-        |args, _| {
-            let n = as_int(&args[0], "w-min-cells")?.max(0).min(u16::MAX as i64);
-            Ok(widget_constrained("min", n, 1, args[1].clone()))
-        },
-        r#"(w-min-cells/2)
-wrap child with a minimum-length constraint of N cells (ratatui Constraint::Min).
-N is clamped to [0, u16::MAX]. use this for a region that should grow to fill
-leftover space after fixed-size siblings claim theirs.
-example:
-  (w-vstack [(w-min-cells 1 (w-editor-tree))
-             (w-cells 1 (w-minibuffer))])"#,
-    );
-    b.be_doc(
-        "w-fill",
-        2,
-        |args, _| {
-            let n = as_int(&args[0], "w-fill")?.max(0).min(u16::MAX as i64);
-            Ok(widget_constrained("fill", n, 1, args[1].clone()))
-        },
-        r#"(w-fill/2)
-wrap child with a fill constraint of weight N (ratatui Constraint::Fill). when
-several fill children sit in the same stack, the remaining space is split
-proportionally to their weights. N is clamped to [0, u16::MAX].
-example:
-  (w-hstack [(w-fill 1 left)
-             (w-fill 2 right-twice-as-wide)])"#,
-    );
-    b.be_doc(
-        "w-frac",
+        "w-size",
         3,
         |args, _| {
-            let n = as_int(&args[0], "w-frac")?.max(0).min(u16::MAX as i64);
-            let m = as_int(&args[1], "w-frac")?.max(1).min(u16::MAX as i64);
-            Ok(widget_constrained("frac", n, m, args[2].clone()))
+            let kind = as_ident_or_str(&args[0], "w-size.kind")?;
+            let kind_str = kind.as_ref();
+            // For frac, the call shape is (w-size 'frac n m child) — 4 args
+            // total, with m being the denominator. For everything else,
+            // (w-size kind n child) — 3 args.
+            let (n_raw, m_raw, child) = if kind_str == "frac" {
+                let n = as_int(&args[1], "w-size.n")?;
+                let Some(m_v) = args.get(2) else {
+                    return Err(RuntimeError::type_mismatch(
+                        "w-size",
+                        "(w-size 'frac n m child) — missing denominator",
+                        &args[1],
+                    ));
+                };
+                let m = as_int(m_v, "w-size.m")?;
+                let Some(child_v) = args.get(3) else {
+                    return Err(RuntimeError::type_mismatch(
+                        "w-size",
+                        "(w-size 'frac n m child) — missing child",
+                        m_v,
+                    ));
+                };
+                (n, m, child_v.clone())
+            } else {
+                let n = as_int(&args[1], "w-size.n")?;
+                (n, 1, args[2].clone())
+            };
+            let n = n_raw.max(0).min(u16::MAX as i64);
+            let m = m_raw.max(1).min(u16::MAX as i64);
+            match kind_str {
+                "cells" | "min" | "fill" | "frac" => {
+                    Ok(widget_constrained(kind_str, n, m, child))
+                }
+                other => Err(RuntimeError::TypeMismatch {
+                    name: "w-size.kind".into(),
+                    expected: "'cells | 'min | 'fill | 'frac".into(),
+                    got: other.into(),
+                }),
+            }
         },
-        r#"(w-frac/3)
-wrap child with a ratio constraint of N/M (ratatui Constraint::Ratio). takes
-N/M of the parent stack's space along the stack axis. N is clamped to
-[0, u16::MAX], M to [1, u16::MAX].
+        r#"(w-size/3 | /4)
+wrap child with a ratatui Constraint. kind picks the constraint flavour:
+  'cells    — fixed length of N cells (Constraint::Length)
+  'min      — minimum length of N cells, grows to fill leftover (Constraint::Min)
+  'fill     — weight N share of the remaining space (Constraint::Fill)
+  'frac     — exactly N/M of the parent stack's space (Constraint::Ratio).
+              takes one extra arg: (w-size 'frac N M child)
+constraints only matter inside (w-vstack ...) / (w-hstack ...); outside a
+stack they're ignored. N is clamped to [0, u16::MAX]; M to [1, u16::MAX].
 example:
-  (w-hstack [(w-frac 1 3 left)
-             (w-frac 2 3 right)])"#,
+  (w-vstack [(w-size 'cells 1 (_status-line))
+             (w-size 'min   1 (w-editor-tree))])
+  (w-hstack [(w-size 'frac 1 3 left)
+             (w-size 'frac 2 3 right)])"#,
     );
 
     b.be_doc(

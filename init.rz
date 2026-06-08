@@ -452,7 +452,7 @@
           cands)))
 
 (fn _menu-row (cand i sel)
-  (w-line [(w-text cand
+  (w-line [(w-span cand
                    (if (= i sel) "vague.menu-selected" "vague.menu"))]))
 
 ;; Build the vstack widget. Caller passes the already-clamped selected
@@ -467,7 +467,7 @@
     (let visible (_menu-padded (slice cands scroll (+ scroll max-rows))))
     (let local-sel (- sel scroll))
     (w-vstack
-      (fmapi (fn _row (j c) (w-cells 1 (_menu-row c j local-sel)))
+      (fmapi (fn _row (j c) (w-size 'cells 1 (_menu-row c j local-sel)))
              visible))))
 
 (fn _menu-next ()
@@ -514,10 +514,12 @@
 ;;  passed to `(set-frame ...)`. The tree primitives are:
 ;;
 ;;    (w-vstack [...]) / (w-hstack [...])      — stack children with constraints
-;;    (w-cells N child) / (w-min-cells N child) — child constraint inside a stack
-;;    (w-fill N child) / (w-frac N M child)
+;;    (w-size kind N child)               — child constraint inside a stack
+;;                                          kind is 'cells / 'min / 'fill /
+;;                                          'frac (frac takes one extra arg
+;;                                          for the denominator)
 ;;    (w-line [span ...])                — single screen row
-;;    (w-text "..." 'face)               — shorthand for one span
+;;    (w-span "..." 'face)               — shorthand for one span
 ;;    (w-block child {...})              — bordered/titled box
 ;;    (w-editor-tree)                    — the editor window tree leaf
 ;;    (w-minibuffer)                     — the minibuffer leaf
@@ -668,11 +670,11 @@
 
 (fn _gutter (n)
   (if (= n ())
-      (w-text "     " "vague.gutter")
+      (w-span "     " "vague.gutter")
       (if (= n (cursor-line))
-          (w-text (_pad-right (str-join ["▎ " (to-str n)] "") 5)
+          (w-span (_pad-right (str-join ["▎ " (to-str n)] "") 5)
                   "vague.gutter-current")
-          (w-text (_pad-right (str-join ["│ " (to-str n)] "") 5)
+          (w-span (_pad-right (str-join ["│ " (to-str n)] "") 5)
                   "vague.gutter"))))
 
 ;; Each segment is a fn returning a span. They get spliced into the status
@@ -681,26 +683,26 @@
 (fn _seg-mode ()
   (do
     (let m (focused-mode))
-    (w-text (str-join [" " (_mode-glyph m) " "] "")
+    (w-span (str-join [" " (_mode-glyph m) " "] "")
             (_mode-face m))))
 
 (fn _seg-buf-path ()
   (do
     (let path (buf-path))
     (if (= path ())
-        (w-text "  rizz  " "vague.signature")
-        (w-text path "vague.signature"))))
+        (w-span "  rizz  " "vague.signature")
+        (w-span path "vague.signature"))))
 
 (fn _seg-selection-hint ()
   (do
     (let sel (selected-text))
     (if (= sel ())
-        (w-text "" "vague.muted")
-        (w-text (str-join [" " (to-str (len sel)) " chars selected "] "")
+        (w-span "" "vague.muted")
+        (w-span (str-join [" " (to-str (len sel)) " chars selected "] "")
                 "vague.accent"))))
 
 (fn _seg-cursor ()
-  (w-text (str-join [(to-str (cursor-line)) ":" (to-str (cursor-col))] "")
+  (w-span (str-join [(to-str (cursor-line)) ":" (to-str (cursor-col))] "")
           "vague.accent"))
 
 ;; (buf-index) returns a 1-based file-order index suitable for display, or
@@ -712,8 +714,8 @@
     (let i (buf-index))
     (let label (if (= i ()) "*" (to-str i)))
     (if (= m "command")
-        (w-text label "vague.reverse")
-        (w-text label "vague.warn"))))
+        (w-span label "vague.reverse")
+        (w-span label "vague.warn"))))
 
 
 ;; The "hint bar" sits below the status line and changes based on the
@@ -730,18 +732,18 @@
   (do
     (let pref (command-prefix))
     (if (= pref "")
-        (w-line [(w-text "  command mode — type a form and press <enter> · <tab> to complete  "
+        (w-line [(w-span "  command mode — type a form and press <enter> · <tab> to complete  "
                          "vague.muted")])
         (do
           (let cands (command-completions))
           (let n (len cands))
           (cond
             ((= n 0)
-             (w-line [(w-text "  no completions  " "vague.muted")]))
+             (w-line [(w-span "  no completions  " "vague.muted")]))
             ((= n 1)
-             (w-line [(w-text "  " "vague.muted")
-                      (w-text (first cands) "vague.accent")
-                      (w-text "  <tab> to insert  " "vague.muted")]))
+             (w-line [(w-span "  " "vague.muted")
+                      (w-span (first cands) "vague.accent")
+                      (w-span "  <tab> to insert  " "vague.muted")]))
             (else
              (_menu-build cands n (_menu-clamped n))))))))
 
@@ -756,13 +758,13 @@
   (do
     (let m (focused-mode))
     (if (= m "normal")
-        (w-line [(w-text "  press : for commands · i to insert · v to select  "
+        (w-line [(w-span "  press : for commands · i to insert · v to select  "
                          "vague.muted")])
     (if (= m "insert")
-        (w-line [(w-text "  press <esc> to leave insert mode  " "vague.muted")])
+        (w-line [(w-span "  press <esc> to leave insert mode  " "vague.muted")])
     (if (= m "command")
         (_command-hint)
-        (w-line [(w-text "  visual: y to yank · d to delete · <esc> to cancel  "
+        (w-line [(w-span "  visual: y to yank · d to delete · <esc> to cancel  "
                          "vague.muted")]))))))
 
 ;; Vertical stack, top-to-bottom:
@@ -781,27 +783,27 @@
 
 (fn _status-line ()
   (w-hstack
-    [(w-min-cells 1
+    [(w-size 'min 1
       (w-line [(_seg-mode)
                (_seg-buf-path)
                (_seg-selection-hint)]))
-     (w-fill 1
-      (w-right-align
-        (w-line [(_seg-cursor)
-                 (w-text " • " "vague.muted")
-                 (w-text (last-key) "vague.muted")
-                 (w-text "  " "vague.muted")
-                 (_seg-bufno)])))]))
+     (w-size 'fill 1
+      (w-line [(_seg-cursor)
+               (w-span " • " "vague.muted")
+               (w-span (last-key) "vague.muted")
+               (w-span "  " "vague.muted")
+               (_seg-bufno)]
+              'right))]))
 
 ;; `_frame` is the single function the renderer calls per frame to assemble
 ;; the whole UI. `set-frame` installs it; calling `set-frame` again with a
 ;; different fn hot-swaps the layout. There can be only one frame fn.
 (fn _frame ()
   (w-vstack
-    [(w-min-cells 1 (w-editor-tree))
-     (w-cells (_hint-height) (_hint-bar))
-     (w-cells 1 (_status-line))
-     (w-cells 1 (w-minibuffer))]))
+    [(w-size 'min   1 (w-editor-tree))
+     (w-size 'cells (_hint-height) (_hint-bar))
+     (w-size 'cells 1 (_status-line))
+     (w-size 'cells 1 (w-minibuffer))]))
 
 (set-frame _frame)
 (set-gutter _gutter 5)

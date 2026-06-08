@@ -367,7 +367,7 @@ mod tests {
     #[test]
     fn set_frame_installs_user_layout() {
         let mut s = test_state();
-        s.eval_lisp(r#"(fn _star () (w-text "★" ()))"#).unwrap();
+        s.eval_lisp(r#"(fn _star () (w-span "★" ()))"#).unwrap();
         s.eval_lisp(r#"(set-frame _star)"#).unwrap();
         let (_, err) = s.precompute_frame();
         assert!(err.is_none(), "no frame errors: {err:?}");

@@ -763,9 +763,13 @@
 ;; Vertical stack, top-to-bottom:
 ;;
 ;;    editor windows  (min-cells 1)   ← grows to fill
-;;    status line     (cells 1)
 ;;    bottom hint     (cells 1)
+;;    status line     (cells 1)
 ;;    minibuffer      (cells 1)
+;;
+;; The hint sits *above* the status line so that when the completion menu
+;; expands it grows upward into the editor area, leaving the status line
+;; anchored just above the minibuffer.
 ;;
 ;; The status line is an hstack with a `fill` spacer between the left and
 ;; right groups so right-aligned segments hug the right margin.
@@ -793,8 +797,8 @@
       (w-editor-tree
         {"gutter":       _gutter
          "gutter-width": 5}))
-     (w-cells 1 (_status-line))
      (w-cells (_hint-height) (_hint-bar))
+     (w-cells 1 (_status-line))
      (w-cells 1 (w-minibuffer))]))
 
 (set-frame _frame)

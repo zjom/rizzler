@@ -64,6 +64,20 @@ example:
     );
 
     b.be_doc(
+        "get-frame",
+        0,
+        |_, _| {
+            let f = with_editor_mut(|st| st.get_frame_fn().map(Rc::clone));
+            match f {
+                Some(f) => Ok(f),
+                None => Ok(unit()),
+            }
+        },
+        r#"(get-frame/0)
+returns the currently active per-frame render callback fn if set. returns () otherwise."#,
+    );
+
+    b.be_doc(
         "w-text",
         2,
         |args, _| {

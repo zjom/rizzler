@@ -341,6 +341,10 @@ impl State {
         self.frame_fn = f;
     }
 
+    pub fn get_frame_fn(&self) -> Option<&Rc<Value>> {
+        self.frame_fn.as_ref()
+    }
+
     pub fn last_key(&self) -> Option<KeyEvent> {
         self.keyevents.peek_back().map(|(e, _)| e.to_owned())
     }
@@ -616,7 +620,10 @@ impl State {
         let modes = self.bufs[self.focused_bufno()].active_modes();
         debug!(?ke, ?modes, timedout, "resolving key against keymap");
         if let Some(action) = self.keymap.resolve(&modes, ke, timedout) {
-            debug!(actions = action.len(), "keymap resolved -> applying actions");
+            debug!(
+                actions = action.len(),
+                "keymap resolved -> applying actions"
+            );
             self.apply(&action)?;
             self.count_prefix.clear();
         } else {

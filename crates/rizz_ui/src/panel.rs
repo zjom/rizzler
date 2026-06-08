@@ -21,6 +21,7 @@
 use std::rc::Rc;
 
 use ratatui::layout::Rect;
+use rizz::runtime::{RuntimeError, Value};
 use rizz_text::{Buffer, BufferId, WrapConfig, WrapMap, WrapMode};
 
 use crate::widget::Widget;
@@ -151,6 +152,135 @@ impl Placement {
     }
 }
 
+/// Parse a [`Placement`] from a lisp value. Accepts the shorthand idents
+/// `'centered` / `'full`, or a map shape `{kind: ... w: ... h: ...}`. Used
+/// by both `(popup-show ...)` and `(w-overlay ...)`.
+pub fn parse_placement(v: &Rc<Value>) -> Result<Placement, RuntimeError> {
+    match &**v {
+        Value::Ident(s) | Value::Str(s) => match s.as_ref() {
+            "center" | "centered" => Ok(Placement::default()),
+            "full" => Ok(Placement::Full),
+            other => Err(unknown_variant("placement", other)),
+        },
+        Value::Map(m) => {
+            let kind = m
+                .get(&strkey("kind"))
+                .map(|k| as_ident_or_str(k, "placement.kind"))
+                .transpose()?
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "center".to_string());
+            match kind.as_str() {
+                "center" | "centered" => {
+                    let width = m
+                        .get(&strkey("w"))
+                        .or_else(|| m.get(&strkey("width")))
+                        .map(parse_dim)
+                        .transpose()?
+                        .unwrap_or(Dim::Frac(0.6));
+                    let height = m
+                        .get(&strkey("h"))
+                        .or_else(|| m.get(&strkey("height")))
+                        .map(parse_dim)
+                        .transpose()?
+                        .unwrap_or(Dim::Frac(0.6));
+                    Ok(Placement::Centered { width, height })
+                }
+                "at" => {
+                    let x = m
+                        .get(&strkey("x"))
+                        .map(|v| as_int(v, "placement.x"))
+                        .transpose()?
+                        .unwrap_or(0)
+                        .max(0) as u16;
+                    let y = m
+                        .get(&strkey("y"))
+                        .map(|v| as_int(v, "placement.y"))
+                        .transpose()?
+                        .unwrap_or(0)
+                        .max(0) as u16;
+                    let width = m
+                        .get(&strkey("w"))
+                        .or_else(|| m.get(&strkey("width")))
+                        .map(parse_dim)
+                        .transpose()?
+                        .unwrap_or(Dim::Cells(40));
+                    let height = m
+                        .get(&strkey("h"))
+                        .or_else(|| m.get(&strkey("height")))
+                        .map(parse_dim)
+                        .transpose()?
+                        .unwrap_or(Dim::Cells(10));
+                    Ok(Placement::At {
+                        x,
+                        y,
+                        width,
+                        height,
+                    })
+                }
+                "side" => {
+                    let side = m.get(&strkey("side")).ok_or_else(|| {
+                        RuntimeError::type_mismatch("placement.side", "ident|str", v)
+                    })?;
+                    let side = parse_side(side)?;
+                    let size = m
+                        .get(&strkey("size"))
+                        .map(parse_dim)
+                        .transpose()?
+                        .unwrap_or(Dim::Fit);
+                    Ok(Placement::Anchored { side, size })
+                }
+                "full" => Ok(Placement::Full),
+                other => Err(unknown_variant("placement.kind", other)),
+            }
+        }
+        _ => Err(RuntimeError::type_mismatch("placement", "ident|str|map", v)),
+    }
+}
+
+pub fn parse_dim(v: &Rc<Value>) -> Result<Dim, RuntimeError> {
+    match &**v {
+        Value::Int(n) => Ok(Dim::Cells((*n).max(0) as u16)),
+        Value::Float(f) => Ok(Dim::Frac(f.into_inner() as f32)),
+        Value::Ident(s) | Value::Str(s) if s.as_ref() == "fit" => Ok(Dim::Fit),
+        _ => Err(RuntimeError::type_mismatch("dim", "int|float|'fit", v)),
+    }
+}
+
+pub fn parse_side(v: &Rc<Value>) -> Result<Side, RuntimeError> {
+    let s = as_ident_or_str(v, "side")?;
+    match s.as_ref() {
+        "top" => Ok(Side::Top),
+        "bottom" => Ok(Side::Bottom),
+        "left" => Ok(Side::Left),
+        "right" => Ok(Side::Right),
+        other => Err(unknown_variant("side", other)),
+    }
+}
+
+fn as_int(v: &Rc<Value>, name: &str) -> Result<i64, RuntimeError> {
+    v.as_int()
+        .ok_or_else(|| RuntimeError::type_mismatch(name, "int", v))
+}
+
+fn as_ident_or_str(v: &Rc<Value>, name: &str) -> Result<Rc<str>, RuntimeError> {
+    match &**v {
+        Value::Ident(s) | Value::Str(s) => Ok(s.clone()),
+        _ => Err(RuntimeError::type_mismatch(name, "ident|str", v)),
+    }
+}
+
+fn unknown_variant(name: &str, got: &str) -> RuntimeError {
+    RuntimeError::TypeMismatch {
+        name: name.into(),
+        expected: "known symbol".into(),
+        got: got.into(),
+    }
+}
+
+fn strkey(s: &str) -> Rc<Value> {
+    Rc::new(Value::Str(s.into()))
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BorderStyle {
     None,
@@ -180,6 +310,10 @@ pub struct Panel {
     /// first. The keymap resolver consults `panel.keymap_layers + [buf.mode]`
     /// when this panel is on top.
     pub keymap_layers: Vec<Rc<str>>,
+    /// Widget tree drawn inside this panel's outer rect. `None` for a
+    /// minibuffer panel — that one's rect comes from the frame fn's
+    /// `(w-minibuffer)` leaf and renders without chrome.
+    pub widget: Option<Widget>,
     /// What sort of panel this is — drives how the renderer places it.
     pub kind: PanelKind,
 }
@@ -190,11 +324,11 @@ pub enum PanelKind {
     /// No chrome; the only way it differs from an editor window leaf is that
     /// it's never inside the [`crate::WindowTree`] split layout.
     Minibuffer,
-    /// A floating overlay drawn at `placement`. The widget tree describes
-    /// its chrome + content (typically `(w-block (w-buffer-view))`).
+    /// A floating overlay drawn at `placement`. The accompanying widget
+    /// (held on the [`Panel`] itself) describes its chrome + content,
+    /// typically `(w-block (w-buffer-view))`.
     Overlay {
         placement: Placement,
-        widget: Widget,
         show_cursor: bool,
     },
 }
@@ -204,6 +338,7 @@ impl Panel {
         Self {
             buf,
             keymap_layers: Vec::new(),
+            widget: None,
             kind: PanelKind::Minibuffer,
         }
     }
@@ -216,15 +351,17 @@ impl Panel {
         matches!(self.kind, PanelKind::Minibuffer)
     }
 
-    /// Get the overlay-specific fields, panicking if `self` isn't an overlay.
-    /// Used by the renderer in code paths that only run on overlay branches.
+    /// Get the overlay-specific fields. Returns `None` for non-overlay
+    /// panels.
     pub fn as_overlay(&self) -> Option<(&Placement, &Widget, bool)> {
         match &self.kind {
             PanelKind::Overlay {
                 placement,
-                widget,
                 show_cursor,
-            } => Some((placement, widget, *show_cursor)),
+            } => self
+                .widget
+                .as_ref()
+                .map(|w| (placement, w, *show_cursor)),
             _ => None,
         }
     }
@@ -232,22 +369,21 @@ impl Panel {
 
 /// Walk an overlay panel's widget tree and return the rect where the
 /// `(buffer-view)` leaf will be drawn, given the panel's outer placement
-/// rect.
+/// rect. Recognizes [`Widget::Block`] as a chrome wrapper that insets the
+/// rect; for every other wrapper it descends through
+/// [`Widget::children`], so new transparent wrappers don't have to be
+/// registered here.
 pub fn buffer_view_rect(widget: &Widget, outer: Rect, panel_buf: BufferId) -> Rect {
     match widget {
         Widget::BufferView { buf } if buf.unwrap_or(panel_buf) == panel_buf => outer,
         Widget::Block { border, child, .. } => {
-            let inset = border.inset();
-            let inner = Rect {
-                x: outer.x + inset,
-                y: outer.y + inset,
-                width: outer.width.saturating_sub(2 * inset),
-                height: outer.height.saturating_sub(2 * inset),
-            };
-            buffer_view_rect(child, inner, panel_buf)
+            buffer_view_rect(child, inset_rect(outer, border.inset()), panel_buf)
         }
-        Widget::Constrained { child, .. } => buffer_view_rect(child, outer, panel_buf),
-        _ => outer,
+        _ => widget
+            .children()
+            .next()
+            .map(|c| buffer_view_rect(c, outer, panel_buf))
+            .unwrap_or(outer),
     }
 }
 
@@ -263,8 +399,20 @@ pub fn buffer_view_inset(widget: &Widget, panel_buf: BufferId) -> (u16, u16) {
             let (cw, ch) = buffer_view_inset(child, panel_buf);
             (cw + 2 * i, ch + 2 * i)
         }
-        Widget::Constrained { child, .. } => buffer_view_inset(child, panel_buf),
-        _ => (0, 0),
+        _ => widget
+            .children()
+            .next()
+            .map(|c| buffer_view_inset(c, panel_buf))
+            .unwrap_or((0, 0)),
+    }
+}
+
+fn inset_rect(outer: Rect, i: u16) -> Rect {
+    Rect {
+        x: outer.x + i,
+        y: outer.y + i,
+        width: outer.width.saturating_sub(2 * i),
+        height: outer.height.saturating_sub(2 * i),
     }
 }
 

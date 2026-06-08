@@ -13,7 +13,7 @@ use rizz::runtime::{RuntimeError, Value};
 use rizz_text::BufferId;
 use slotmap::KeyData;
 
-use crate::panel::BorderStyle;
+use crate::panel::{BorderStyle, Placement, parse_placement};
 use crate::styling::{Theme, spans_from_value};
 
 #[derive(Clone, Debug)]
@@ -60,6 +60,14 @@ pub enum Widget {
     /// `buf` is `None`, the renderer fills it in with the enclosing popup's
     /// backing buffer.
     BufferView { buf: Option<BufferId> },
+    /// Non-focusable floating overlay: paints `child` at `placement` on top
+    /// of the rest of the frame. Has no backing buffer and never receives
+    /// keys — it's pure decoration. The renderer collects overlays during
+    /// the main walk and paints them in a post-pass.
+    Overlay {
+        placement: Placement,
+        child: Box<Widget>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +106,39 @@ impl Widget {
             _ => self,
         }
     }
+
+    /// Direct subwidgets of this node. Tree walkers should prefer this over
+    /// hand-rolling per-variant recursion so a new variant only requires
+    /// adding one match arm here.
+    pub fn children(&self) -> WidgetChildren<'_> {
+        match self {
+            Widget::Stack { children, .. } => WidgetChildren::Many(children.iter()),
+            Widget::Constrained { child, .. }
+            | Widget::Block { child, .. }
+            | Widget::Overlay { child, .. } => WidgetChildren::One(Some(child)),
+            _ => WidgetChildren::Empty,
+        }
+    }
+}
+
+/// Iterator over a widget's direct children. Variant-specific so callers
+/// don't need to allocate.
+pub enum WidgetChildren<'a> {
+    Empty,
+    One(Option<&'a Widget>),
+    Many(std::slice::Iter<'a, Widget>),
+}
+
+impl<'a> Iterator for WidgetChildren<'a> {
+    type Item = &'a Widget;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            WidgetChildren::Empty => None,
+            WidgetChildren::One(slot) => slot.take(),
+            WidgetChildren::Many(it) => it.next(),
+        }
+    }
 }
 
 /// Parse a widget [`Value`] (the shape returned by `vstack`, `text`, etc.)
@@ -127,6 +168,7 @@ pub fn parse_widget(v: &Rc<Value>, theme: &Theme) -> Result<Widget, RuntimeError
                 "editor-tree" => Ok(Widget::EditorTree),
                 "minibuffer" => Ok(Widget::Minibuffer),
                 "buffer-view" => parse_buffer_view(m),
+                "overlay" => parse_overlay(m, theme),
                 "empty" => Ok(Widget::Empty),
                 _ if m.contains_key(&key("text")) => Ok(Widget::Line {
                     spans: spans_from_value(v, theme)?,
@@ -250,6 +292,21 @@ fn parse_block(
         title_face,
         child,
     })
+}
+
+fn parse_overlay(
+    m: &im::HashMap<Rc<Value>, Rc<Value>>,
+    theme: &Theme,
+) -> Result<Widget, RuntimeError> {
+    let placement = match m.get(&key("placement")) {
+        Some(v) => parse_placement(v)?,
+        None => Placement::default(),
+    };
+    let child = match m.get(&key("child")) {
+        Some(c) => Box::new(parse_widget(c, theme)?),
+        None => Box::new(Widget::Empty),
+    };
+    Ok(Widget::Overlay { placement, child })
 }
 
 fn parse_buffer_view(m: &im::HashMap<Rc<Value>, Rc<Value>>) -> Result<Widget, RuntimeError> {

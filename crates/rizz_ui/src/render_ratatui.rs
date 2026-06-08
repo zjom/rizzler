@@ -18,7 +18,7 @@ use rizz_text::BufferId;
 
 use crate::{
     components::{EditorView, MinibufferLine},
-    panel::{BorderStyle, Panel},
+    panel::{BorderStyle, Panel, Placement},
     render::{CursorStyle, RenderedFrame, Renderer, StateSnapshot},
     styling::{Style, Theme, style_to_ratatui},
     widget::{StackDir, Widget},
@@ -59,6 +59,14 @@ struct CursorPlacement {
     overlay: Option<(u16, u16, CursorStyle)>,
 }
 
+/// One non-focusable `Widget::Overlay` encountered during the main walk,
+/// stashed so it can be painted in a post-pass after the rest of the frame.
+struct DeferredOverlay<'a> {
+    placement: Placement,
+    child: &'a Widget,
+    area: Rect,
+}
+
 impl Renderer for RatatuiRenderer {
     fn render(&mut self, snap: StateSnapshot<'_>, frame_data: &RenderedFrame) -> io::Result<()> {
         execute!(io::stdout(), set_cursor_style(snap.cursor_style))?;
@@ -68,6 +76,7 @@ impl Renderer for RatatuiRenderer {
             f.render_widget(Block::default().style(base_style), f.area());
 
             let mut cur = CursorPlacement::default();
+            let mut overlays: Vec<DeferredOverlay<'_>> = Vec::new();
             walk(
                 &frame_data.root,
                 f.area(),
@@ -75,12 +84,32 @@ impl Renderer for RatatuiRenderer {
                 frame_data,
                 f,
                 &mut cur,
+                &mut overlays,
                 WalkCtx::default(),
             );
 
-            let overlays: Vec<&Panel> = snap.panels.overlays().collect();
-            let last = overlays.len().saturating_sub(1);
-            for (i, panel) in overlays.iter().enumerate() {
+            for o in overlays {
+                let rect = o.placement.resolve(o.area, 0, 0);
+                if rect.width == 0 || rect.height == 0 {
+                    continue;
+                }
+                f.render_widget(Clear, rect);
+                let mut sink: Vec<DeferredOverlay<'_>> = Vec::new();
+                walk(
+                    o.child,
+                    rect,
+                    &snap,
+                    frame_data,
+                    f,
+                    &mut cur,
+                    &mut sink,
+                    WalkCtx::default(),
+                );
+            }
+
+            let panel_overlays: Vec<&Panel> = snap.panels.overlays().collect();
+            let last = panel_overlays.len().saturating_sub(1);
+            for (i, panel) in panel_overlays.iter().enumerate() {
                 let is_top = i == last;
                 draw_overlay(panel, f.area(), &snap, frame_data, is_top, f, &mut cur);
             }
@@ -99,13 +128,14 @@ impl Renderer for RatatuiRenderer {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn walk(
-    w: &Widget,
+fn walk<'fr>(
+    w: &'fr Widget,
     area: Rect,
     snap: &StateSnapshot<'_>,
-    fd: &RenderedFrame,
+    fd: &'fr RenderedFrame,
     f: &mut Frame,
     cur: &mut CursorPlacement,
+    overlays: &mut Vec<DeferredOverlay<'fr>>,
     ctx: WalkCtx,
 ) {
     if area.width == 0 || area.height == 0 {
@@ -119,8 +149,10 @@ fn walk(
                 area,
             );
         }
-        Widget::Stack { dir, children } => walk_stack(*dir, children, area, snap, fd, f, cur, ctx),
-        Widget::Constrained { child, .. } => walk(child, area, snap, fd, f, cur, ctx),
+        Widget::Stack { dir, children } => {
+            walk_stack(*dir, children, area, snap, fd, f, cur, overlays, ctx)
+        }
+        Widget::Constrained { child, .. } => walk(child, area, snap, fd, f, cur, overlays, ctx),
         Widget::Block {
             border,
             title,
@@ -140,6 +172,7 @@ fn walk(
             fd,
             f,
             cur,
+            overlays,
             ctx,
         ),
         Widget::EditorTree => walk_editor_tree(area, snap, fd, f, cur),
@@ -152,18 +185,26 @@ fn walk(
         Widget::BufferView { buf } => {
             walk_buffer_view(*buf, area, snap, fd, f, cur, ctx);
         }
+        Widget::Overlay { placement, child } => {
+            overlays.push(DeferredOverlay {
+                placement: placement.clone(),
+                child,
+                area,
+            });
+        }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn walk_stack(
+fn walk_stack<'fr>(
     dir: StackDir,
-    children: &[Widget],
+    children: &'fr [Widget],
     area: Rect,
     snap: &StateSnapshot<'_>,
-    fd: &RenderedFrame,
+    fd: &'fr RenderedFrame,
     f: &mut Frame,
     cur: &mut CursorPlacement,
+    overlays: &mut Vec<DeferredOverlay<'fr>>,
     ctx: WalkCtx,
 ) {
     if children.is_empty() {
@@ -179,23 +220,33 @@ fn walk_stack(
         .constraints(constraints)
         .split(area);
     for (child, rect) in children.iter().zip(rects.iter()) {
-        walk(child.unwrap_constraint(), *rect, snap, fd, f, cur, ctx);
+        walk(
+            child.unwrap_constraint(),
+            *rect,
+            snap,
+            fd,
+            f,
+            cur,
+            overlays,
+            ctx,
+        );
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn walk_block(
+fn walk_block<'fr>(
     border: BorderStyle,
     title: Option<&str>,
     face: Option<&str>,
     border_face: Option<&str>,
     title_face: Option<&str>,
-    child: &Widget,
+    child: &'fr Widget,
     area: Rect,
     snap: &StateSnapshot<'_>,
-    fd: &RenderedFrame,
+    fd: &'fr RenderedFrame,
     f: &mut Frame,
     cur: &mut CursorPlacement,
+    overlays: &mut Vec<DeferredOverlay<'fr>>,
     ctx: WalkCtx,
 ) {
     let bg = resolve_face(&fd.theme, face).unwrap_or_else(|| fd.default_style.clone());
@@ -217,7 +268,7 @@ fn walk_block(
     }
     let inner = block.inner(area);
     f.render_widget(block, area);
-    walk(child, inner, snap, fd, f, cur, ctx);
+    walk(child, inner, snap, fd, f, cur, overlays, ctx);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -280,11 +331,11 @@ fn walk_editor_tree(
     }
 }
 
-fn draw_overlay(
-    panel: &Panel,
+fn draw_overlay<'fr>(
+    panel: &'fr Panel,
     area: Rect,
     snap: &StateSnapshot<'_>,
-    fd: &RenderedFrame,
+    fd: &'fr RenderedFrame,
     is_top: bool,
     f: &mut Frame,
     cur: &mut CursorPlacement,
@@ -308,7 +359,8 @@ fn draw_overlay(
             show_cursor,
         }),
     };
-    walk(widget, outer, snap, fd, f, cur, ctx);
+    let mut sink: Vec<DeferredOverlay<'_>> = Vec::new();
+    walk(widget, outer, snap, fd, f, cur, &mut sink, ctx);
 }
 
 fn set_cursor_style(cs: CursorStyle) -> SetCursorStyle {

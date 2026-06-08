@@ -432,9 +432,9 @@ impl State {
         self.panels.push(Panel {
             buf: id,
             keymap_layers: spec.mode_layers,
+            widget: Some(spec.widget),
             kind: PanelKind::Overlay {
                 placement: spec.placement,
-                widget: spec.widget,
                 show_cursor: spec.show_cursor,
             },
         });

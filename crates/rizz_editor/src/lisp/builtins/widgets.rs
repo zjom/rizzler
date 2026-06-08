@@ -251,6 +251,48 @@ example:
     );
 
     b.be_doc(
+        "w-overlay",
+        2,
+        |args, _| {
+            let placement = args[0].clone();
+            let child = args[1].clone();
+            let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+            m.insert(strkey("type"), Rc::new(Value::Str("overlay".into())));
+            m.insert(strkey("placement"), placement);
+            m.insert(strkey("child"), child);
+            Ok(Rc::new(Value::Map(m)))
+        },
+        r#"(w-overlay/2)
+paint child on top of the rest of the frame at placement. an overlay has
+no backing buffer and never receives keys — it is pure decoration. use it
+for floating status indicators, toast notifications, hover hints, or any
+chrome that should sit above the editor without stealing focus.
+
+placement is the same shape as the "placement" key in (popup-show ...):
+  'centered | 'full
+  {"kind": "centered" "w": <dim> "h": <dim>}
+  {"kind": "at"       "x": N "y": N "w": <dim> "h": <dim>}
+  {"kind": "side"     "side": 'top|'bottom|'left|'right "size": <dim>}
+  {"kind": "full"}
+<dim> is an int (cells), a float (fraction of parent), or 'fit (sized to
+the child's natural area — for overlay this falls back to the available
+area since there's no backing buffer to measure).
+
+child is any widget — the entire vocabulary of (w-block), (w-vstack),
+(w-line), (w-buffer-view BUFID), … is available.
+
+placement is resolved against the rect the overlay sits inside, so
+(w-overlay 'centered ...) at the top of the frame fn centers on the
+terminal, while the same call nested in a panel centers in that panel.
+
+example:
+  (if saving?
+      (w-overlay {"kind": "side" "side": "top" "size": 1}
+                 (w-line [(w-span " saving… " 'header)] 'center))
+      (w-empty))"#,
+    );
+
+    b.be_doc(
         "w-editor-tree",
         0,
         |_, _| {

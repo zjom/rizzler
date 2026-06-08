@@ -10,8 +10,9 @@ use std::{
 
 use crossterm::{
     event::{
-        DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
-        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+        EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{
@@ -32,6 +33,7 @@ fn restore_terminal() {
         LeaveAlternateScreen,
         DisableFocusChange,
         DisableMouseCapture,
+        DisableBracketedPaste,
     );
 }
 
@@ -57,6 +59,7 @@ impl TerminalGuard {
             EnterAlternateScreen,
             EnableFocusChange,
             EnableMouseCapture,
+            EnableBracketedPaste,
         )?;
         enable_raw_mode()?;
 

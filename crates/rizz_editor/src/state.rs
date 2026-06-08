@@ -748,6 +748,21 @@ impl State {
         self.render()
     }
 
+    /// Insert pasted text as a single edit. The terminal sends OS-level
+    /// pastes as one `Event::Paste` (bracketed paste must be enabled on the
+    /// terminal); we bypass the keymap entirely so embedded newlines stay as
+    /// newlines instead of being parsed as `Ctrl+J` keystrokes.
+    #[instrument(skip(self, text), fields(len = text.len()))]
+    pub fn handle_paste(&mut self, text: String) -> io::Result<()> {
+        if !text.is_empty() {
+            self.apply(&[Rc::new(Action::InsertMany(Rc::from(text)))])?;
+        }
+        self.refresh_viewport();
+        let focused = self.focused_buf_id();
+        self.bufs[focused].clamp_cursor();
+        self.render()
+    }
+
     fn count_eligible(&self) -> bool {
         // Count prefix is only honoured for editor windows in a non-visual
         // editing mode — any panel on the stack means input is going somewhere

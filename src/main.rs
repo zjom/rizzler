@@ -30,14 +30,25 @@ fn main() -> anyhow::Result<()> {
             break;
         }
 
-        if event::poll(Duration::from_millis(500))?
-            && let Event::Key(key_event) = event::read()?
-        {
-            let _span =
-                info_span!("key", code = ?key_event.code, mods = ?key_event.modifiers).entered();
-            if let Err(e) = state.handle_key_event(key_event) {
-                error!(error = %e, "handle_key_event failed");
-                return Err(e.into());
+        if event::poll(Duration::from_millis(500))? {
+            match event::read()? {
+                Event::Key(key_event) => {
+                    let _span =
+                        info_span!("key", code = ?key_event.code, mods = ?key_event.modifiers)
+                            .entered();
+                    if let Err(e) = state.handle_key_event(key_event) {
+                        error!(error = %e, "handle_key_event failed");
+                        return Err(e.into());
+                    }
+                }
+                Event::Paste(text) => {
+                    let _span = info_span!("paste", len = text.len()).entered();
+                    if let Err(e) = state.handle_paste(text) {
+                        error!(error = %e, "handle_paste failed");
+                        return Err(e.into());
+                    }
+                }
+                _ => {}
             }
         }
     }

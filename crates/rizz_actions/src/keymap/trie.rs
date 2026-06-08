@@ -108,6 +108,29 @@ pub fn walk(trie: &Trie, key: KeyEvent) -> WalkOutcome {
     }
 }
 
+/// Like [`walk`], but used when flushing a chord prefix that can't complete.
+/// Returns an action only if `key` resolves to a `Leaf` directly or to the
+/// node's `on_char` wildcard — a would-be `Descend` is reported as `None`.
+/// Starting a fresh chord on a flushed key would re-stage the same prefix
+/// and risk a loop; flushing only produces terminal actions.
+pub fn walk_flush(trie: &Trie, key: KeyEvent) -> Option<Rc<Action>> {
+    match trie {
+        Trie::Leaf(a) => Some(a.clone()),
+        Trie::Node { children, on_char } => {
+            if let Some(next) = children.get(&key)
+                && let Trie::Leaf(a) = next.as_ref()
+            {
+                return Some(a.clone());
+            }
+            if let (Some(f), KeyCode::Char(c)) = (on_char, key.code) {
+                Some(f(c).into())
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// Depth-first iterator over every discrete binding in a [`Trie`].
 ///
 /// Each item is the full key-path to a `Leaf` and a reference to its action.

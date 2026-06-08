@@ -669,6 +669,18 @@ impl State {
                     let f = self.focused_bufno();
                     self.bufs[f].insert_char(*c);
                 }
+                Action::SpeculativeInsertChar(c) => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].insert_speculative_char(*c);
+                }
+                Action::CommitSpeculation => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].commit_speculation();
+                }
+                Action::RollbackSpeculation => {
+                    let f = self.focused_bufno();
+                    self.bufs[f].rollback_speculation();
+                }
                 Action::InsertMany(s) => {
                     let f = self.focused_bufno();
                     debug!(bufno = f, len = s.len(), "Action::InsertMany");
@@ -1086,5 +1098,51 @@ mod tests {
         );
         assert!(err.is_err(), "expected library load failure, got Ok");
         assert!(s.ts_registry.is_empty(), "registry must stay empty");
+    }
+
+    #[test]
+    fn can_insert_j() {
+        use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+        let mut s = test_state();
+        s.bufs[1].clear();
+        s.set_mode(EditingMode::Insert);
+        s.handle_key_event(CT::new(KeyCode::Char('j'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(s.bufs[1].text(), "j".to_string())
+    }
+
+    #[test]
+    fn jk_chord_rolls_back_speculative_j() {
+        // Typing the full `jk` escape chord must leave the buffer empty
+        // (speculation rolled back) and switch to normal mode.
+        use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+        let mut s = test_state();
+        s.bufs[1].clear();
+        s.set_mode(EditingMode::Insert);
+        s.handle_key_event(CT::new(KeyCode::Char('j'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(s.bufs[1].text(), "j".to_string());
+        s.handle_key_event(CT::new(KeyCode::Char('k'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(s.bufs[1].text(), "".to_string());
+        assert_eq!(s.bufs[1].mode(), EditingMode::Normal);
+    }
+
+    #[test]
+    fn aborted_jk_chord_commits_speculative_j() {
+        // Typing `j` then a non-`k` key commits the speculation and inserts
+        // the new key. The two should end up as one undo step.
+        use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+        let mut s = test_state();
+        s.bufs[1].clear();
+        s.set_mode(EditingMode::Insert);
+        s.handle_key_event(CT::new(KeyCode::Char('j'), KeyModifiers::NONE))
+            .unwrap();
+        s.handle_key_event(CT::new(KeyCode::Char('x'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(s.bufs[1].text(), "jx".to_string());
+        // Both chars belong to the same insert run.
+        s.bufs[1].undo();
+        assert_eq!(s.bufs[1].text(), "".to_string());
     }
 }

@@ -33,6 +33,7 @@ use crate::{
 };
 
 pub use cursor::MoveKind;
+pub use edits::Speculation;
 
 /// What sort of buffer this is. Drives default mode and gates operations like
 /// BufDelete/BufNext — the minibuffer participates in everything a file
@@ -87,6 +88,12 @@ pub struct Buffer {
     /// Cleared by anything that breaks the run — a non-insert edit, a
     /// cursor move, a mode change, undo/redo.
     pub(crate) insert_batch_end: Option<usize>,
+    /// Active speculative insertion staged by the keymap during a chord
+    /// prefix. `insert_speculative_char` writes to the rope but defers
+    /// tracking until `commit_speculation` (chord aborts → text stays,
+    /// recorded as one delta) or `rollback_speculation` (chord completes →
+    /// chars are unwound, leaving no trace in undo history).
+    pub(crate) speculation: Option<Speculation>,
     /// Optional syntax-highlighter. Installed by `State` after consulting
     /// the `TsRegistry` for a grammar matching the file extension. Edits
     /// flip its dirty flag via [`Buffer::invalidate_highlight`]; the

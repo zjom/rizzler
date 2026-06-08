@@ -11,6 +11,21 @@ use rizz_core::{EditingMode, Position};
 
 use super::{Buffer, MoveKind};
 
+/// In-flight speculative insertion. The chars have already been written to
+/// the rope and the cursor has been advanced, but the changetree has *not*
+/// been touched — `commit_speculation` promotes the run to a single tracked
+/// delta, `rollback_speculation` unwinds the rope and restores the cursor.
+#[derive(Debug, Clone)]
+pub struct Speculation {
+    /// Rope char index where the first speculative char was written.
+    pub(crate) start_cidx: usize,
+    /// Cursor absolute position immediately before speculation began.
+    pub(crate) cursor_before: Position<usize>,
+    /// Speculative chars in insertion order. Length equals the number of
+    /// rope chars to unwind on rollback / track on commit.
+    pub(crate) inserted: String,
+}
+
 impl Buffer {
     pub fn insert_char(&mut self, c: char) {
         let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;
@@ -115,6 +130,82 @@ impl Buffer {
             cursor_before: (abs_before.row, abs_before.col),
             cursor_after: (abs_after.row, abs_after.col),
         });
+    }
+
+    /// Insert `c` speculatively: write to the rope and advance the cursor
+    /// the same way [`Buffer::insert_char`] does, but defer the changetree
+    /// entry. The caller (the keymap, on chord descent) commits or rolls
+    /// back the staged run via [`Buffer::commit_speculation`] /
+    /// [`Buffer::rollback_speculation`] once the chord resolves.
+    pub fn insert_speculative_char(&mut self, c: char) {
+        if self.speculation.is_none() {
+            // A tracked insert batch can't coalesce across a speculation
+            // boundary — close it so the eventual commit / rollback can
+            // own the batch state cleanly.
+            self.close_insert_batch();
+            let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;
+            self.speculation = Some(Speculation {
+                start_cidx: cidx,
+                cursor_before: self.abs_pos(),
+                inserted: String::new(),
+            });
+        }
+        let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;
+        self.buf.insert_char(cidx, c);
+        self.invalidate_wrap_cache();
+        if c == '\n' {
+            self.cursor_pos.row = self.cursor_pos.row.saturating_add(1);
+            self.cursor_pos.col = 0;
+        } else {
+            self.cursor_pos.col = self.cursor_pos.col.saturating_add(1);
+        }
+        if let Some(spec) = self.speculation.as_mut() {
+            spec.inserted.push(c);
+        }
+    }
+
+    /// Promote the in-flight speculation into a single tracked delta and
+    /// open a fresh insert batch at its tail, so a subsequent `insert_char`
+    /// at the cursor extends the same undo step (e.g. the user pressed
+    /// `j` then `x` with a `jk` chord — the `jx` ends up as one delta).
+    /// No-op when no speculation is active.
+    pub fn commit_speculation(&mut self) {
+        let Some(spec) = self.speculation.take() else {
+            return;
+        };
+        if spec.inserted.is_empty() {
+            return;
+        }
+        let nchars = spec.inserted.chars().count();
+        let end_cidx = spec.start_cidx + nchars;
+        let abs_after = self.abs_pos();
+        self.changetree.track_change(Delta {
+            at: spec.start_cidx,
+            removed: Rc::from(""),
+            inserted: Rc::from(spec.inserted),
+            cursor_before: (spec.cursor_before.row, spec.cursor_before.col),
+            cursor_after: (abs_after.row, abs_after.col),
+        });
+        self.insert_batch_end = Some(end_cidx);
+    }
+
+    /// Unwind the in-flight speculation: remove the staged chars from the
+    /// rope and restore the cursor to its pre-speculation position. Nothing
+    /// is recorded in the changetree, so undo history is unaffected.
+    /// No-op when no speculation is active.
+    pub fn rollback_speculation(&mut self) {
+        let Some(spec) = self.speculation.take() else {
+            return;
+        };
+        if spec.inserted.is_empty() {
+            return;
+        }
+        let nchars = spec.inserted.chars().count();
+        let end_cidx = spec.start_cidx + nchars;
+        _ = self.buf.try_remove(spec.start_cidx..end_cidx);
+        self.invalidate_wrap_cache();
+        self.land_cursor_at(spec.cursor_before.row, spec.cursor_before.col);
+        self.insert_batch_end = None;
     }
 
     /// Remove the char range `[start..end)` from the rope and track the

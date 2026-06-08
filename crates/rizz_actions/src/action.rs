@@ -21,6 +21,20 @@ pub enum Action {
     SetMode(EditingMode),
 
     InsertChar(char),
+    /// Insert `char` speculatively while a chord prefix is in flight. The
+    /// keymap emits this on `Descend` when the descending mode's `on_char`
+    /// would have produced an `InsertChar`, so the user sees their typing
+    /// immediately. Resolves to either `CommitSpeculation` (chord aborts)
+    /// or `RollbackSpeculation` (chord completes).
+    SpeculativeInsertChar(char),
+    /// Promote the focused buffer's pending speculative inserts to a single
+    /// tracked delta. Emitted by the keymap on chord abort.
+    CommitSpeculation,
+    /// Discard the focused buffer's pending speculative inserts (rope and
+    /// cursor unwind; no entry in undo history). Emitted by the keymap on
+    /// chord completion so the staged text disappears before the chord's
+    /// own action runs.
+    RollbackSpeculation,
     /// Insert a whole string at the cursor as a single undo step.
     InsertMany(Rc<str>),
     InsertNewline,

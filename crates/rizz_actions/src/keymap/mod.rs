@@ -7,4 +7,4 @@ mod trie;
 
 pub use default::default_keymaps;
 pub use registry::{KeymapRegistry, KeymapRegistryIter};
-pub use trie::{Trie, TrieIter, WalkOutcome, walk};
+pub use trie::{Trie, TrieIter, WalkOutcome, walk, walk_flush};

@@ -96,7 +96,10 @@ pub(super) fn unit() -> Rc<Value> {
 /// render-phase callback.
 pub(super) fn apply(action: Action) -> Result<(), RuntimeError> {
     if in_render_phase() {
-        warn!(?action, "lisp builtin attempted to mutate during render phase");
+        warn!(
+            ?action,
+            "lisp builtin attempted to mutate during render phase"
+        );
         return Err(RuntimeError::TypeMismatch {
             name: "editor-action".into(),
             expected: "non-mutating call".into(),

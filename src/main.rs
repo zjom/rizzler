@@ -33,8 +33,8 @@ fn main() -> anyhow::Result<()> {
         if event::poll(Duration::from_millis(500))?
             && let Event::Key(key_event) = event::read()?
         {
-            let _span = info_span!("key", code = ?key_event.code, mods = ?key_event.modifiers)
-                .entered();
+            let _span =
+                info_span!("key", code = ?key_event.code, mods = ?key_event.modifiers).entered();
             if let Err(e) = state.handle_key_event(key_event) {
                 error!(error = %e, "handle_key_event failed");
                 return Err(e.into());
@@ -93,6 +93,9 @@ fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
         .with_thread_ids(false)
         .with_file(true)
         .with_line_number(true);
-    tracing_subscriber::registry().with(filter).with(layer).init();
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(layer)
+        .init();
     Some(guard)
 }

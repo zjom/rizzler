@@ -11,6 +11,10 @@ pub struct ChangeTree {
     largest_assigned_id: usize,
     /// parent_id -> child_id to redo into (the branch we last undid from)
     redo_target: HashMap<usize, usize>,
+    /// Next leaf id `walk_back_edit` will visit. `None` means start fresh
+    /// from `cur`. Reset on every new tracked edit so a fresh `g;` lands on
+    /// the edit you just made.
+    walk_id: Option<usize>,
 }
 
 impl ChangeTree {
@@ -25,6 +29,7 @@ impl ChangeTree {
             cur: id,
             largest_assigned_id: id,
             redo_target: HashMap::new(),
+            walk_id: None,
         }
     }
 
@@ -50,6 +55,7 @@ impl ChangeTree {
         // a new change becomes the canonical redo target for this parent
         self.redo_target.insert(self.cur, newnode_id);
         self.cur = newnode_id;
+        self.walk_id = None;
     }
 
     /// Mutate the current leaf's delta in place. Used to coalesce a run of
@@ -121,6 +127,24 @@ impl ChangeTree {
 
         self.cur = child_id;
         Some(delta)
+    }
+
+    /// Vim `g;` — walk `n` steps back along the parent chain from the change
+    /// list cursor and return the `cursor_after` of the leaf we land on. The
+    /// walk position advances by one step on each call, so repeated `g;`
+    /// presses keep moving backward through the history. Returns `None` when
+    /// the walk has reached the root (no further edits to visit).
+    pub fn walk_back_edit(&mut self, n: u32) -> Option<(usize, usize)> {
+        let mut id = self.walk_id.unwrap_or(self.cur);
+        let steps = n.max(1);
+        for _ in 1..steps {
+            let leaf = self.nodes.get(&id)?.as_leaf()?;
+            id = leaf.parent;
+        }
+        let leaf = self.nodes.get(&id)?.as_leaf()?;
+        let cursor = leaf.delta.cursor_after;
+        self.walk_id = Some(leaf.parent);
+        Some(cursor)
     }
 
     fn gen_id(&mut self) -> usize {

@@ -632,6 +632,18 @@ impl Buffer {
         });
     }
 
+    /// Vim `g;` — jump to the position of the last edit. Repeated calls walk
+    /// further back through the change tree (per-leaf parent chain). `count`
+    /// takes `count` steps back in one go. Returns whether the cursor moved.
+    pub fn goto_last_edit(&mut self, count: u32) -> bool {
+        self.close_insert_batch();
+        let Some((row, col)) = self.changetree.walk_back_edit(count) else {
+            return false;
+        };
+        self.land_cursor_at(row, col);
+        true
+    }
+
     /// Reverse the most recent tracked edit and return whether anything
     /// happened. Cursor lands where it was just before that edit.
     pub fn undo(&mut self) -> bool {

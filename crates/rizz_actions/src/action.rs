@@ -74,6 +74,12 @@ pub enum Action {
     Undo,
     /// Re-apply the most recently undone edit on the focused buffer.
     Redo,
+    /// Vim `g;` — jump to the position of the last edit. Repeated calls walk
+    /// further back through the buffer's change tree. `count` takes that
+    /// many steps in one go.
+    GotoLastEdit {
+        count: u32,
+    },
     /// Move the cursor by `kind`, repeated `count` times (0/1 == once).
     MoveCursor {
         kind: MoveKind,

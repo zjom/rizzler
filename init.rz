@@ -299,6 +299,7 @@
 
 (map 'normal "u"      '(undo))
 (map 'normal "<c-r>"  '(redo))
+(map 'normal "g;"     '(goto-last-edit))
 
 ;; ----- yank / paste / registers ---------------------------------------
 ;;

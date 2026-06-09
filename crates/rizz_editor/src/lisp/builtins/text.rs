@@ -67,4 +67,9 @@ pub(super) fn register(b: &mut Builtins) {
         apply(Action::Redo)?;
         Ok(unit())
     });
+    b.be("goto-last-edit", 0, |_, _| {
+        let count = with_editor_mut(|st| st.pending_count_or_one());
+        apply(Action::GotoLastEdit { count })?;
+        Ok(unit())
+    });
 }

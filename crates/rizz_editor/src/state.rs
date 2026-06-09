@@ -1156,6 +1156,11 @@ impl State {
                     debug!(buf = ?f, "Action::Redo");
                     self.bufs[f].redo();
                 }
+                Action::GotoLastEdit { count } => {
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, count, "Action::GotoLastEdit");
+                    self.bufs[f].goto_last_edit(*count);
+                }
                 Action::MoveCursor { kind, count } => {
                     let f = self.focused_buf_id();
                     trace!(buf = ?f, ?kind, count, "Action::MoveCursor");

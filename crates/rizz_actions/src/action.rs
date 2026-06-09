@@ -5,6 +5,9 @@
 //! adding new behaviour means adding a variant here and a match arm in
 //! `apply`. Resist the urge to grow new entry points; the single-funnel
 //! invariant is load-bearing for undo, scripting, and tests.
+//!
+//! See `docs/ARCHITECTURE.md` at the repo root for the full subsystem
+//! layout and a keystroke-to-buffer-mutation trace.
 
 use std::path::Path;
 use std::rc::Rc;

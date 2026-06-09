@@ -23,12 +23,17 @@
 ;;      redefine faces, replace the status line, rip out a popup — anything
 ;;      below can be changed, removed, or rewritten.
 ;;
-;; You're encouraged to read it top to bottom. The order is deliberate:
+;; You're encouraged to read it top to bottom. The order is deliberate, with
+;; each section building only on what came before:
 ;;
-;;   keymaps  → the smallest building block, what you'll touch most often
-;;   theme    → introduces the color palette and named faces
-;;   widgets  → builds the gutter, status line, and frame layout
-;;   popups   → ties it all together: buffers + widgets + their own keymaps
+;;   keymaps    smallest building block — wire keys to quoted actions
+;;   theme      palette + named faces (the visual styles widgets reference)
+;;   widgets    the tree primitives the renderer turns into screen cells;
+;;              status line, gutter, and frame are built from these
+;;   overlays   non-flowing widgets that float on top of their parent;
+;;              this is where the completion menu lives
+;;   popups     focusable floating buffers with their own keymap and chrome;
+;;              `notify`, the messages log, the file explorer
 ;;
 ;; Lines marked  NOTE  explain a rizz or editor concept.
 ;; Lines marked  TIP   are workflow suggestions.
@@ -113,13 +118,18 @@
 ;; ── Mutation ──
 ;;
 ;; Almost everything is immutable. The one exception is the *ref* — a heap
-;; cell whose contents can be replaced with `set!`. The popup-files explorer
-;; at the bottom of this file uses one to remember the current directory
-;; between keypresses.
+;; cell whose contents can be replaced with `set!`. The completion menu in
+;; the overlays section and the file explorer at the bottom of this file
+;; both use one to thread state between keypresses.
 ;;
 ;;     (let counter (ref 0))
 ;;     (set! counter (+ (deref counter) 1))
 ;;     (deref counter)     ;; => 1
+;;
+;; `let!` is sugar: `(let! foo X)` expands to `(let foo (ref X))`. The
+;; frame's root widget list `F` (see the frame assembly section) is
+;; declared this way so you can mutate it live with `set!` / `push!` /
+;; `pop!` and watch the screen update.
 ;;
 ;; ── Forms you'll see often in this file ──
 ;;
@@ -166,7 +176,7 @@
 ;;   'visual-line   linewise selection
 ;;   'visual-block  blockwise selection
 ;;   'command       minibuffer; evaluates a rizz form on <enter>
-;;   'popup         keymap a popup buffer uses (see the bottom of this file)
+;;   'popup         keymap a popup buffer uses (see the popups section)
 ;;
 ;; NOTE: every binding wires a key (or chord) to an action. The builtin
 ;; behind every binding is `keymap-set`; we alias it to `map` to cut visual
@@ -472,10 +482,9 @@
 
 
 ;; ============================================================================
-;; Command Mode Completion Suggestions
+;; Command-mode tab completion
 ;; ============================================================================
 ;;
-;; ----- Tab completion. ----------------------------------------------------
 ;; The matching itself lives in Rust:
 ;;
 ;;   (command-completions)     → array of fn-names matching the token at point
@@ -485,6 +494,9 @@
 ;; The lisp side just decides what to do with that data: one match → insert
 ;; it; many matches → advance to the longest shared prefix so the next tab
 ;; (or keystroke) narrows things further.
+;;
+;; A richer navigable menu is built later, in the overlays section — once
+;; the widget primitives it needs have been introduced.
 (fn _command-tab ()
   (do
     (let cands (command-completions))
@@ -501,14 +513,338 @@
 
 (map 'command "<tab>" '(_command-tab))
 
-;; ----- Completion Menu ----------------------------------------------------
-;; When more than one candidate is available the hint row grows into a
-;; navigable vertical menu:
+
+;; ============================================================================
+;;  Theme — palette and faces (ported from [vague.nvim])
+;; ============================================================================
 ;;
-;;   <c-d>   move highlight down (wraps)
-;;   <c-u>   move highlight up   (wraps)
+;;  A *face* is a named visual style: foreground/background colors plus
+;;  attributes like bold/italic/underline. Widgets in the next section
+;;  reference faces by name, so changing a face here updates everywhere
+;;  the name appears.
+;;
+;;  The theme is just rizz code: a palette (let-bindings of named colors)
+;;  followed by `face-define` calls. Nothing here is privileged — replace
+;;  any of it and the editor will pick up your version on the next render.
+;;
+;; [vague.nvim]: (https://github.com/vague-theme/vague.nvim)
+;; ============================================================================
+
+;; Port of the Vague palette.
+;;
+;; NOTE: `rgb` is just a builtin returning a packed color value. `let`
+;; bindings here are plain names — shadow any of them from your own config
+;; (or just edit the numbers in place) to retheme the editor.
+(let pal-bg          (rgb  20  20  21))    ;; #141415
+(let pal-inactive-bg (rgb  28  28  36))    ;; #1c1c24
+(let pal-fg          (rgb 205 205 205))    ;; #cdcdcd
+(let pal-border      (rgb 135 135 135))    ;; #878787
+(let pal-line        (rgb  37  37  48))    ;; #252530
+(let pal-comment     (rgb  96  96 121))    ;; #606079
+(let pal-builtin     (rgb 180 212 207))    ;; #b4d4cf
+(let pal-func        (rgb 196 130 130))    ;; #c48282
+(let pal-string      (rgb 232 181 137))    ;; #e8b589
+(let pal-number      (rgb 224 163  99))    ;; #e0a363
+(let pal-property    (rgb 195 195 213))    ;; #c3c3d5
+(let pal-constant    (rgb 174 174 209))    ;; #aeaed1
+(let pal-parameter   (rgb 187 157 189))    ;; #bb9dbd
+(let pal-visual      (rgb  51  55  56))    ;; #333738
+(let pal-error       (rgb 216 100 126))    ;; #d8647e
+(let pal-warning     (rgb 243 190 124))    ;; #f3be7c
+(let pal-hint        (rgb 126 152 232))    ;; #7e98e8
+(let pal-operator    (rgb 144 160 181))    ;; #90a0b5
+(let pal-keyword     (rgb 110 148 178))    ;; #6e94b2
+(let pal-type        (rgb 155 180 188))    ;; #9bb4bc
+(let pal-search      (rgb  64  80 101))    ;; #405065
+(let pal-plus        (rgb 127 165  99))    ;; #7fa563
+(let pal-delta       (rgb 243 190 124))    ;; #f3be7c
+
+;; The renderer looks up `default`, `selection`, `cursor-line` directly —
+;; redefining these here drives the always-on built-in decorator passes.
+(face-define 'default                  {"fg": pal-fg            "bg": pal-bg})
+(face-define 'selection                {"bg": pal-visual})
+(face-define 'cursor-line              {"bg": pal-line          "fg": pal-fg})
+(face-define "vague.muted"             {"fg": pal-comment   "italic": 1})
+(face-define "vague.accent"            {"fg": pal-constant    "bold": 1})
+(face-define "vague.error"             {"fg": pal-error       "bold": 1 "underline": 1})
+(face-define "vague.warn"              {"fg": pal-warning     "bold": 1})
+(face-define "vague.mode.normal"       {"fg": pal-keyword     "bold": 1})
+(face-define "vague.mode.insert"       {"fg": pal-warning     "bold": 1})
+(face-define "vague.mode.visual"       {"fg": pal-parameter   "bold": 1})
+(face-define "vague.mode.visual-line"  {"fg": pal-parameter   "bold": 1 "italic": 1})
+(face-define "vague.mode.visual-block" {"fg": pal-parameter   "bold": 1 "underline": 1})
+(face-define "vague.mode.command"      {"fg": pal-hint        "bold": 1})
+
+;; dim for the rest of the buffer, fg for the active row.
+(face-define "vague.gutter"          {"fg": pal-comment})
+(face-define "vague.gutter-current"  {"fg": pal-fg       "bold": 1})
+
+(face-define "vague.signature"  {"fg": pal-string "italic": 1})
+(face-define "vague.reverse"    {"reverse": 1 "bold": 1})
+
+;; Faces used by the command-mode completion menu. The selected row gets a
+;; warning-coloured bar so it pops against the dimmer base row.
+(face-define "vague.menu"          {"fg": pal-fg "bg": pal-line})
+(face-define "vague.menu-selected" {"fg": pal-bg "bg": pal-warning "bold": 1})
+
+
+;; Tree-sitter syntax faces. The precompute pass looks up
+;; `syntax.<capture>` for each highlight capture emitted by the bundled
+;; grammars. Dotted captures (`function.method`) fall back to the parent
+;; (`function`) when the more specific face is undefined, so only override
+;; what you want different — everything else still gets styled.
+;;
+;; TODO: register your own tree-sitter grammar with `(grammar-register …)`
+;; — see `(show grammar-register)` from command mode for the full signature.
+(face-define "syntax.keyword"      {"fg": pal-keyword     "bold": 1})
+(face-define "syntax.string"       {"fg": pal-string    "italic": 1})
+(face-define "syntax.escape"       {"fg": pal-keyword})
+(face-define "syntax.number"       {"fg": pal-number})
+(face-define "syntax.comment"      {"fg": pal-comment   "italic": 1})
+(face-define "syntax.function"     {"fg": pal-func})
+(face-define "syntax.constructor"  {"fg": pal-constant})
+(face-define "syntax.type"         {"fg": pal-type})
+(face-define "syntax.constant"     {"fg": pal-constant})
+(face-define "syntax.variable"     {"fg": pal-fg})
+(face-define "syntax.property"     {"fg": pal-property})
+(face-define "syntax.attribute"    {"fg": pal-parameter "italic": 1})
+(face-define "syntax.label"        {"fg": pal-keyword})
+(face-define "syntax.operator"     {"fg": pal-operator})
+(face-define "syntax.punctuation"  {"fg": pal-fg})
+
+
+;; Popup faces, reused by `notify` / `messages` / `popup-help` / `popup-files`
+(face-define "popup.default"     {"fg": pal-fg       "bg": pal-bg})
+(face-define "popup.border"      {"fg": pal-border   "bg": pal-bg})
+(face-define "popup.title"       {"fg": pal-warning  "bg": pal-bg "bold": 1})
+(face-define "popup.dir"         {"fg": pal-hint     "bold": 1})
+(face-define "popup.file"        {"fg": pal-fg})
+
+
+;; ============================================================================
+;; Widgets — the building blocks of the UI
+;; ============================================================================
+;;
+;; The editor renders by evaluating a single widget tree per frame. A
+;; widget is just a value: the renderer turns it into screen cells and
+;; diffs the result against the previous frame to decide what to draw.
+;; Building a widget has no side effects, so you can compose, return, and
+;; store them freely without ordering surprises.
+;;
+;; ── Layout primitives ──
+;;
+;;   (w-vstack [children...])  stack children top-to-bottom
+;;   (w-hstack [children...])  stack children left-to-right
+;;   (w-size kind N child)     constrain a child inside a stack:
+;;                               'cells   exactly N rows/cols
+;;                               'min     at least N — grows to fill leftover
+;;                               'fill    proportional share of leftover space
+;;                               'frac    N/M of the parent's main axis;
+;;                                        signature: (w-size 'frac N M child)
+;;
+;; ── Content primitives ──
+;;
+;;   (w-line [span ...])       one screen row; pass 'right as a trailing
+;;                             arg to right-align the spans
+;;   (w-span "text" face)      a styled run of text — `face` is a face name
+;;   (w-block {props} child)   wrap child in a bordered/titled box. Props:
+;;                               "border", "title", "face",
+;;                               "border-face", "title-face"
+;;   (w-empty)                 zero-cell placeholder that collapses inside
+;;                             stacks — useful for "render nothing when X"
+;;
+;; ── Buffer leaves ──
+;;
+;;   (w-editor-tree)           the editor's window tree (your open buffers)
+;;   (w-minibuffer)            the minibuffer
+;;   (w-buffer-view BUFID)     render a specific buffer by id
+;;   (w-popup-self)            (inside a popup) the popup's own buffer
+;;
+;; ── Installing your widget ──
+;;
+;; `(set-frame FN)` registers a no-arg function called once per render
+;; whose return value is the root widget for that frame. There can be only
+;; one frame fn; call `set-frame` again to hot-swap it.
+;;
+;; `(set-gutter FN W)` registers a per-row function called for each visible
+;; screen row with the file line number (or () past EOF). It returns a
+;; widget for that row. `W` is the reserved gutter width in cells.
+;;
+;; NOTE: faces are looked up by name at render time, not when the widget
+;; is built. That means a widget can reference a face that hasn't been
+;; defined yet — the lookup happens later.
+;;
+;; NOTE: helper names starting with `_` are a rizz convention for "private
+;; to this file" — when this file is loaded via `open` from elsewhere, the
+;; `_`-prefixed bindings are filtered out and don't leak to the caller.
+
+;; ----- gutter ---------------------------------------------------------
+;; The gutter fn is called per visible row with `n` set to the file row,
+;; or `()` for rows past EOF. Returns one widget for that row. The total
+;; column width is the second arg to `set-gutter` further down.
+
+(fn _pad-right (s w)
+  (do
+    (let pad (- w (len s)))
+    (if (> pad 0)
+        (str-join [s (str-join (fmap (fn _spc (_) " ") (range 0 pad)) "")] "")
+        s)))
+
+(fn _gutter (n)
+  (if (= n ())
+      (w-span "     " "vague.gutter")
+      (if (= n (cursor-line))
+          (w-span (_pad-right (str-join ["▎ " (to-str n)] "") 5)
+                  "vague.gutter-current")
+          (w-span (_pad-right (str-join ["│ " (to-str n)] "") 5)
+                  "vague.gutter"))))
+
+;; ----- status line ----------------------------------------------------
+;; The status line is an hstack with a `fill` spacer between the left and
+;; right groups so right-aligned segments hug the right margin. Each
+;; segment helper is a fn that returns a single span; `_status-line`
+;; splices them into two `w-line`s.
+
+;; Tiny lookup table expressed as nested `if`.
+(fn _mode-face (m)
+  (if (= m "normal")       "vague.mode.normal"
+  (if (= m "insert")       "vague.mode.insert"
+  (if (= m "visual")       "vague.mode.visual"
+  (if (= m "visual-line")  "vague.mode.visual-line"
+  (if (= m "visual-block") "vague.mode.visual-block"
+  (if (= m "command")      "vague.mode.command"
+                           "vague.muted")))))))
+
+;; Tiny lookup tables expressed as `cond`.
+(fn _mode-glyph (m)
+  (cond
+    ((= m "normal")           "N")
+    ((= m "insert")           "I")
+    ((= m "visual")           "V")
+    ((= m "visual-line")      "L")
+    ((= m "visual-block")     "B")
+    ((= m "command")          "C")
+    (else                     "?")))
+
+(fn _seg-mode ()
+  (do
+    (let m (focused-mode))
+    (w-span (str-join [" " (_mode-glyph m) " "] "")
+            (_mode-face m))))
+
+(fn _seg-buf-path ()
+  (do
+    (let path (buf-path))
+    (if (= path ())
+        (w-span "  rizz  " "vague.signature")
+        (w-span path "vague.signature"))))
+
+(fn _seg-selection-hint ()
+  (do
+    (let sel (selected-text))
+    (if (= sel ())
+        (w-span "" "vague.muted")
+        (w-span (str-join [" " (to-str (len sel)) " chars selected "] "")
+                "vague.accent"))))
+
+(fn _seg-cursor ()
+  (w-span (str-join [(to-str (cursor-line)) ":" (to-str (cursor-col))] "")
+          "vague.accent"))
+
+;; (buf-index) returns a 1-based file-order index suitable for display, or
+;; () for the minibuffer / popup-backing buffers. We fall back to "*" so
+;; the status line still has *something* in those cases.
+(fn _seg-bufno ()
+  (do
+    (let m (focused-mode))
+    (let i (buf-index))
+    (let label (if (= i ()) "*" (to-str i)))
+    (if (= m "command")
+        (w-span label "vague.reverse")
+        (w-span label "vague.warn"))))
+
+(fn _status-line ()
+  (w-hstack
+    [(w-size 'min 1
+      (w-line [(_seg-mode)
+               (_seg-buf-path)
+               (_seg-selection-hint)]))
+     (w-size 'fill 1
+      (w-line [(_seg-cursor)
+               (w-span " • " "vague.muted")
+               (w-span (last-key) "vague.muted")
+               (w-span "  " "vague.muted")
+               (_seg-bufno)]
+              'right))]))
+
+
+;; ============================================================================
+;; Overlays — non-flowing widgets that float on top
+;; ============================================================================
+;;
+;; An overlay is a widget that paints on top of its parent without taking
+;; layout space. Its flowing siblings see the entire parent area as if the
+;; overlay weren't there — perfect for floating UI like a status badge,
+;; a completion menu, or any heads-up indicator.
+;;
+;;   (w-overlay PLACEMENT CHILD)
+;;
+;; PLACEMENT controls where the overlay lands within its parent. Use one
+;; of the named placements or build one with a constructor:
+;;
+;;   'centered                        half the parent, centered
+;;   'full                            covers the entire parent
+;;   (placement-centered W H)         fractional size, centered;
+;;                                    W / H are fractions like 0.6
+;;   (placement-anchored SIDE SIZE)   pinned to 'top / 'bottom / 'left /
+;;                                    'right. SIZE is a cell count or 'fit
+;;   (placement-at X Y W H)           absolute cell coordinates
+;;
+;; As a child of a (w-vstack) / (w-hstack), an overlay floats over the
+;; *entire* stack — not just one slot. The flowing siblings still share
+;; the whole area as if the overlay weren't there.
+;;
+;; NOTE: overlays only *paint*; they never take input focus. For interactive
+;; floating UI (file pickers, prompts, dismissable panels), use a popup —
+;; see the popups section further down.
+
+;; ----- demo: selection-size badge -------------------------------------
+;; A small "[N chars selected]" hint anchored to the top row of the editor
+;; area whenever a visual selection is active. (_seg-selection-hint) above
+;; already surfaces the same number in the status line at the bottom; this
+;; floats a louder version near where your eye is.
+;;
+;; With no active selection we return (w-empty), which collapses to a
+;; zero-cell slot in the stack so the overlay contributes nothing to
+;; layout when off.
+;;
+;; TODO: replace (_selection-badge) with (w-empty) in the frame fn below
+;; to disable; swap the placement constructor for a different floating
+;; position; or use the same pattern to surface anything (saving indicator,
+;; chord-prefix hint, ...).
+(fn _selection-badge ()
+  (do
+    (let sel (selected-text))
+    (if (= sel ())
+        (w-empty)
+        (w-overlay
+          (placement-anchored 'top 1)
+          (w-line [(w-span (str-join ["  " (to-str (len sel)) " chars selected  "] "")
+                           "vague.warn")]
+                  'right)))))
+
+
+;; ----- the completion menu --------------------------------------------
+;;
+;; When more than one tab-completion candidate is available the hint row
+;; grows into a navigable vertical menu floated above the bottom of the
+;; editor area. This is the larger overlay example — putting widgets,
+;; faces, and a ref-backed selection cell together:
+;;
+;;   <c-n>   move highlight down (wraps)
+;;   <c-p>   move highlight up   (wraps)
 ;;   <c-y>   accept the highlighted candidate
-;;   <tab>   still advances to the longest common prefix
+;;   <tab>   still advances to the longest common prefix (defined earlier)
 ;;
 ;; State is a single `ref` holding the selected index. The renderer reads
 ;; the live candidate list each frame and clamps the index, so typing or
@@ -602,240 +938,11 @@
 (map 'command "<c-p>" '(_menu-prev))
 (map 'command "<c-y>" '(_menu-accept))
 
-;; ============================================================================
-;;  Colorscheme (ported from [vague.nvim])
-;; ============================================================================
-;;
-;;  The colorscheme is just rizz code: a palette (let-bindings of named colors), a
-;;  pile of `face-define` calls that name visual styles, and a few helper
-;;  functions that build widgets for the gutter and status line. Nothing
-;;  here is privileged — replace any of it and the editor will pick up your
-;;  version on the next render.
-;;
-;;  The frame layout is described as a single widget tree returned by the fn
-;;  passed to `(set-frame ...)`.
-;;
-;;  The tree primitives are:
-;;
-;;    (w-vstack [...]) / (w-hstack [...])      — stack children with constraints
-;;    (w-size kind N child)                    — child constraint inside a stack
-;;                                               `kind` is one of:
-;;                                                  - 'cells
-;;                                                  - 'min
-;;                                                  - 'fill
-;;                                                  - 'frac    (frac takes one extra arg for the denominator.
-;;                                                               e.g. `(w-size 'frac N M child)`)
-;;    (w-line [span ...])                      — single screen row
-;;    (w-span "..." 'face)                     — shorthand for one span
-;;    (w-block {props} child)                  — bordered/titled box
-;;    (w-overlay placement child)              — non-focusable floating overlay
-;;    (w-buffer-view BUFID)                    — render a specific buffer
-;;    (w-popup-self)                           — inside a popup: the popup's own buf
-;;    (w-editor-tree)                          — the editor window tree leaf
-;;    (w-minibuffer)                           — the minibuffer leaf
-;;
-;;  placement values are either `'centered` / `'full`, or any of the constructor
-;;  fns: `(placement-centered W H)`, `(placement-anchored SIDE SIZE)`,
-;;  `(placement-at X Y W H)`.
-;;
-;;
-;; [vague.nvim]: (https://github.com/vague-theme/vague.nvim)
-;; ============================================================================
-
-;; Port of the Vague palette.
-;;
-;; NOTE: `rgb` is just a builtin returning a packed color value. `let`
-;; bindings here are plain names — shadow any of them from your own config
-;; (or just edit the numbers in place) to retheme the editor.
-(let pal-bg          (rgb  20  20  21))    ;; #141415
-(let pal-inactive-bg (rgb  28  28  36))    ;; #1c1c24
-(let pal-fg          (rgb 205 205 205))    ;; #cdcdcd
-(let pal-border      (rgb 135 135 135))    ;; #878787
-(let pal-line        (rgb  37  37  48))    ;; #252530
-(let pal-comment     (rgb  96  96 121))    ;; #606079
-(let pal-builtin     (rgb 180 212 207))    ;; #b4d4cf
-(let pal-func        (rgb 196 130 130))    ;; #c48282
-(let pal-string      (rgb 232 181 137))    ;; #e8b589
-(let pal-number      (rgb 224 163  99))    ;; #e0a363
-(let pal-property    (rgb 195 195 213))    ;; #c3c3d5
-(let pal-constant    (rgb 174 174 209))    ;; #aeaed1
-(let pal-parameter   (rgb 187 157 189))    ;; #bb9dbd
-(let pal-visual      (rgb  51  55  56))    ;; #333738
-(let pal-error       (rgb 216 100 126))    ;; #d8647e
-(let pal-warning     (rgb 243 190 124))    ;; #f3be7c
-(let pal-hint        (rgb 126 152 232))    ;; #7e98e8
-(let pal-operator    (rgb 144 160 181))    ;; #90a0b5
-(let pal-keyword     (rgb 110 148 178))    ;; #6e94b2
-(let pal-type        (rgb 155 180 188))    ;; #9bb4bc
-(let pal-search      (rgb  64  80 101))    ;; #405065
-(let pal-plus        (rgb 127 165  99))    ;; #7fa563
-(let pal-delta       (rgb 243 190 124))    ;; #f3be7c
-
-;; A *face* is a named style packet — fg/bg colors plus attributes like
-;; bold/italic/underline. Widgets reference faces by name, so changing a
-;; face here updates everywhere the name appears.
-;;
-;; The renderer looks up `default`, `selection`, `cursor-line` directly —
-;; redefining these here drives the always-on built-in decorator passes.
-(face-define 'default                  {"fg": pal-fg            "bg": pal-bg})
-(face-define 'selection                {"bg": pal-visual})
-(face-define 'cursor-line              {"bg": pal-line          "fg": pal-fg})
-(face-define "vague.muted"             {"fg": pal-comment   "italic": 1})
-(face-define "vague.accent"            {"fg": pal-constant    "bold": 1})
-(face-define "vague.error"             {"fg": pal-error       "bold": 1 "underline": 1})
-(face-define "vague.warn"              {"fg": pal-warning     "bold": 1})
-(face-define "vague.mode.normal"       {"fg": pal-keyword     "bold": 1})
-(face-define "vague.mode.insert"       {"fg": pal-warning     "bold": 1})
-(face-define "vague.mode.visual"       {"fg": pal-parameter   "bold": 1})
-(face-define "vague.mode.visual-line"  {"fg": pal-parameter   "bold": 1 "italic": 1})
-(face-define "vague.mode.visual-block" {"fg": pal-parameter   "bold": 1 "underline": 1})
-(face-define "vague.mode.command"      {"fg": pal-hint        "bold": 1})
-
-;; dim for the rest of the buffer, fg for the active row.
-(face-define "vague.gutter"          {"fg": pal-comment})
-(face-define "vague.gutter-current"  {"fg": pal-fg       "bold": 1})
-
-(face-define "vague.signature"  {"fg": pal-string "italic": 1})
-(face-define "vague.reverse"    {"reverse": 1 "bold": 1})
-
-;; Faces used by the command-mode completion menu. The selected row gets a
-;; warning-coloured bar so it pops against the dimmer base row.
-(face-define "vague.menu"          {"fg": pal-fg "bg": pal-line})
-(face-define "vague.menu-selected" {"fg": pal-bg "bg": pal-warning "bold": 1})
-
-
-;; Tree-sitter syntax faces. The precompute pass looks up
-;; `syntax.<capture>` for each highlight capture emitted by the bundled
-;; grammars. Dotted captures (`function.method`) fall back to the parent
-;; (`function`) when the more specific face is undefined, so only override
-;; what you want different — everything else still gets styled.
-;;
-;; TODO: register your own tree-sitter grammar with `(grammar-register …)`
-;; — see `(show grammar-register)` from command mode for the full signature.
-(face-define "syntax.keyword"      {"fg": pal-keyword     "bold": 1})
-(face-define "syntax.string"       {"fg": pal-string    "italic": 1})
-(face-define "syntax.escape"       {"fg": pal-keyword})
-(face-define "syntax.number"       {"fg": pal-number})
-(face-define "syntax.comment"      {"fg": pal-comment   "italic": 1})
-(face-define "syntax.function"     {"fg": pal-func})
-(face-define "syntax.constructor"  {"fg": pal-constant})
-(face-define "syntax.type"         {"fg": pal-type})
-(face-define "syntax.constant"     {"fg": pal-constant})
-(face-define "syntax.variable"     {"fg": pal-fg})
-(face-define "syntax.property"     {"fg": pal-property})
-(face-define "syntax.attribute"    {"fg": pal-parameter "italic": 1})
-(face-define "syntax.label"        {"fg": pal-keyword})
-(face-define "syntax.operator"     {"fg": pal-operator})
-(face-define "syntax.punctuation"  {"fg": pal-fg})
-
-
-;; Popup faces, reused by `notify` / `messages` / `popup-help` / `popup-files`
-(face-define "popup.default"     {"fg": pal-fg       "bg": pal-bg})
-(face-define "popup.border"      {"fg": pal-border   "bg": pal-bg})
-(face-define "popup.title"       {"fg": pal-warning  "bg": pal-bg "bold": 1})
-(face-define "popup.dir"         {"fg": pal-hint     "bold": 1})
-(face-define "popup.file"        {"fg": pal-fg})
-
-
-;; ----- status-line components -----------------------------------------
-;;
-;; Each helper below returns a *widget* — a value that the renderer turns
-;; into screen cells. Widgets are pure data: `_frame` is called once per
-;; render with no side effects, and the result is diffed against the
-;; previous frame to decide what to draw.
-;;
-;; NOTE: helper names starting with `_` are a rizz convention for "private
-;; to this file" — when this file is loaded via `open` from elsewhere, the
-;; `_`-prefixed bindings are filtered out and don't leak to the caller.
-
-;; Tiny lookup table expressed as nested `if`.
-(fn _mode-face (m)
-  (if (= m "normal")       "vague.mode.normal"
-  (if (= m "insert")       "vague.mode.insert"
-  (if (= m "visual")       "vague.mode.visual"
-  (if (= m "visual-line")  "vague.mode.visual-line"
-  (if (= m "visual-block") "vague.mode.visual-block"
-  (if (= m "command")      "vague.mode.command"
-                           "vague.muted")))))))
-
-;; Tiny lookup tables expressed as `cond`.
-(fn _mode-glyph (m)
-  (cond
-    ((= m "normal")           "N")
-    ((= m "insert")           "I")
-    ((= m "visual")           "V")
-    ((= m "visual-line")      "L")
-    ((= m "visual-block")     "B")
-    ((= m "command")          "C")
-    (else                     "?")))
-
-(fn _pad-right (s w)
-  (do
-    (let pad (- w (len s)))
-    (if (> pad 0)
-        (str-join [s (str-join (fmap (fn _spc (_) " ") (range 0 pad)) "")] "")
-        s)))
-
-
-;; The gutter fn is called per visible row with `lnum` set to the file row,
-;; or `()` for rows past EOF. Returns the styled content for one row of the
-;; gutter. The total column width is reserved by `gutter-width` on the
-;; editor-tree widget.
-
-(fn _gutter (n)
-  (if (= n ())
-      (w-span "     " "vague.gutter")
-      (if (= n (cursor-line))
-          (w-span (_pad-right (str-join ["▎ " (to-str n)] "") 5)
-                  "vague.gutter-current")
-          (w-span (_pad-right (str-join ["│ " (to-str n)] "") 5)
-                  "vague.gutter"))))
-
-;; Each segment is a fn returning a span. They get spliced into the status
-;; line by `_status-line` below.
-
-(fn _seg-mode ()
-  (do
-    (let m (focused-mode))
-    (w-span (str-join [" " (_mode-glyph m) " "] "")
-            (_mode-face m))))
-
-(fn _seg-buf-path ()
-  (do
-    (let path (buf-path))
-    (if (= path ())
-        (w-span "  rizz  " "vague.signature")
-        (w-span path "vague.signature"))))
-
-(fn _seg-selection-hint ()
-  (do
-    (let sel (selected-text))
-    (if (= sel ())
-        (w-span "" "vague.muted")
-        (w-span (str-join [" " (to-str (len sel)) " chars selected "] "")
-                "vague.accent"))))
-
-(fn _seg-cursor ()
-  (w-span (str-join [(to-str (cursor-line)) ":" (to-str (cursor-col))] "")
-          "vague.accent"))
-
-;; (buf-index) returns a 1-based file-order index suitable for display, or
-;; () for the minibuffer / popup-backing buffers. We fall back to "*" so
-;; the status line still has *something* in those cases.
-(fn _seg-bufno ()
-  (do
-    (let m (focused-mode))
-    (let i (buf-index))
-    (let label (if (= i ()) "*" (to-str i)))
-    (if (= m "command")
-        (w-span label "vague.reverse")
-        (w-span label "vague.warn"))))
-
-
-;; Floating completion menu. Sits as an overlay anchored to the bottom
-;; of the editor area, growing upward as more candidates appear so the
-;; editor rows underneath stay visible everywhere the menu doesn't paint.
-;; Returns (w-empty) when there are no candidates to show.
+;; The overlay wrapper. Anchors the menu to the bottom of the editor area
+;; and grows it upward as more candidates appear, so the editor rows
+;; underneath stay visible everywhere the menu doesn't paint. Returns
+;; (w-empty) when there are no candidates to show, collapsing the overlay
+;; out of the layout entirely.
 (fn _menu-overlay ()
   (do
     (let cands (_menu-cands))
@@ -847,75 +954,113 @@
           (w-overlay (placement-anchored 'bottom rows)
                      (_menu-build cands n (_menu-clamped n)))))))
 
-;; Vertical stack, top-to-bottom:
-;;
-;;    editor windows  (min-cells 1)   ← grows to fill
-;;    status line     (cells 1)
-;;    minibuffer      (cells 1)
-;;
-;; The status line is an hstack with a `fill` spacer between the left and
-;; right groups so right-aligned segments hug the right margin.
 
-(fn _status-line ()
-  (w-hstack
-    [(w-size 'min 1
-      (w-line [(_seg-mode)
-               (_seg-buf-path)
-               (_seg-selection-hint)]))
-     (w-size 'fill 1
-      (w-line [(_seg-cursor)
-               (w-span " • " "vague.muted")
-               (w-span (last-key) "vague.muted")
-               (w-span "  " "vague.muted")
-               (_seg-bufno)]
-              'right))]))
-
-;; ----- (w-overlay) demo: floating selection-size badge --------------------
+;; ============================================================================
+;; Frame assembly — putting it all together
+;; ============================================================================
 ;;
-;; (w-overlay PLACEMENT CHILD) paints CHILD on top of its parent without
-;; taking layout space. As a child of (w-vstack) / (w-hstack) the overlay
-;; floats over the *whole* stack — the flowing siblings still share the
-;; entire area as if the overlay weren't there.
-;;
-;; This one shows a small "[N chars]" hint anchored to the top row of the
-;; editor area whenever a visual selection is active. (_seg-selection-hint)
-;; already surfaces the same number in the status line at the bottom; this
-;; floats a louder version near where your eye is, with no permanent space
-;; cost (an inactive selection returns (w-empty), which collapses to a
-;; zero-cell slot in the stack).
-;;
-;; Tweak/turn off freely: replace (_selection-badge) with (w-empty) in the
-;; frame fn to disable; swap the placement constructor for a different
-;; floating position; or use the same pattern to surface anything (saving
-;; indicator, chord-prefix hint, ...).
-(fn _selection-badge ()
-  (do
-    (let sel (selected-text))
-    (if (= sel ())
-        (w-empty)
-        (w-overlay
-          (placement-anchored 'top 1)
-          (w-line [(w-span (str-join ["  " (to-str (len sel)) " chars selected  "] "")
-                           "vague.warn")]
-                  'right)))))
-
 ;; `_frame` is the single function the renderer calls per frame to assemble
 ;; the whole UI. `set-frame` installs it; calling `set-frame` again with a
 ;; different fn hot-swaps the layout. There can be only one frame fn.
-(fn _frame ()
-  (w-vstack
+;;
+;; The root widget list is held in a ref named `F`. `(let! F [...])` is
+;; sugar for `(let F (ref [...]))` (see the rizz primer's mutation
+;; section). Keeping the list in a ref means you can mutate it live and
+;; the very next frame picks up the change — no `set-frame` round-trip
+;; needed. From command mode try:
+;;
+;;     (push! F (w-size 'min 1 (w-span "hi" "vague.warn")))   ;; add a row
+;;     (pop! F)                                               ;; remove it
+;;
+;; `set!` swaps the whole list at once; `push!` / `pop!` mutate at the
+;; tail. The frame fn just derefs `F` and wraps the contents in a vstack.
+;;
+;; The default layout, top-to-bottom:
+;;
+;;    editor windows  (min-cells 1)   ← grows to fill, with the completion
+;;                                      menu overlaid at its bottom edge
+;;    status line     (cells 1)
+;;    minibuffer      (cells 1)
+;;    selection badge (overlay)       ← floats over everything when active
+
+(let! F
     [(w-size 'min   1 (w-vstack [(w-editor-tree)
                                  (_menu-overlay)]))
      (w-size 'cells 1 (_status-line))
      (w-size 'cells 1 (w-minibuffer))
-     (_selection-badge)]))
+     (_selection-badge)])
+
+(fn _frame () (w-vstack (deref F)))
 
 (set-frame _frame)
 (set-gutter _gutter 5)
 
+
 ;; ============================================================================
-;; Notifications and the message log
+;; Popups — focusable floating buffers
 ;; ============================================================================
+;;
+;; A popup is a floating panel backed by a buffer. Where an overlay only
+;; paints, a popup is interactive: while it's on top of the stack, key
+;; presses route through the popup's own keymap modes instead of the
+;; focused buffer's editing mode. Use a popup for any floating UI the user
+;; is meant to interact with — notifications, help, prompts, pickers.
+;;
+;; ── The builtin ──
+;;
+;;   (popup-show 'NAME WIDGET OPTIONS)
+;;
+;; popup-show is create-or-update keyed by NAME, so calling it again with
+;; the same name replaces the panel in place — no manual dedup needed.
+;;
+;;   'NAME       a symbol identifying this popup. Pick a fresh symbol per
+;;               distinct popup; `'notify`, `'messages`, `'files` are used
+;;               below.
+;;   WIDGET      the widget tree drawn for the popup. Typically
+;;               `(w-block {...} (w-popup-self))` — (w-popup-self) is the
+;;               leaf that renders the popup's backing buffer text.
+;;   OPTIONS     a map. Common keys:
+;;                 "text":        seed buffer contents (a string)
+;;                 "modes":       array of keymap modes resolved in order
+;;                                (a key falling through one mode is
+;;                                 looked up in the next)
+;;                 "buffer-mode": editing mode the popup's buffer is in
+;;                 "placement":   same constructors used by (w-overlay)
+;;                 "wrap-mode":   'word / 'char / 'none
+;;                 "show-cursor": 1 to display the popup buffer's cursor
+;;
+;; Dismiss a popup explicitly with `(popup-hide 'NAME)`, or use the no-arg
+;; `(popup-close)` which closes whichever popup is on top of the stack.
+;;
+;; ── The base popup keymap ──
+;;
+;; The bindings below give every popup that lists `'popup` in its modes a
+;; baseline of motion and dismiss keys. Custom popups can layer their own
+;; mode on top of `'popup` (e.g. `['popup 'popup.files]`) and bind only
+;; the keys unique to their behavior — j/k/q/<esc> are inherited from
+;; this base layer by the layered resolver.
+(map 'popup "j"          '(move-cursor 'down))
+(map 'popup "<down>"     '(move-cursor 'down))
+(map 'popup "k"          '(move-cursor 'up))
+(map 'popup "<up>"       '(move-cursor 'up))
+(map 'popup "h"          '(move-cursor 'left))
+(map 'popup "<left>"     '(move-cursor 'left))
+(map 'popup "l"          '(move-cursor 'right))
+(map 'popup "<right>"    '(move-cursor 'right))
+(map 'popup "<c-d>"      '(move-cursor 'half-page-down))
+(map 'popup "<c-u>"      '(move-cursor 'half-page-up))
+(map 'popup "<pagedown>" '(move-cursor 'half-page-down))
+(map 'popup "<pageup>"   '(move-cursor 'half-page-up))
+(map 'popup "gg"         '(move-cursor 'file-start))
+(map 'popup "G"          '(move-cursor 'file-end))
+(map 'popup "0"          '(move-cursor 'line-start))
+(map 'popup "$"          '(move-cursor 'line-end))
+(map 'popup "q"          '(popup-close))
+(map 'popup "<esc>"      '(popup-close))
+(map 'popup "<enter>"    '(popup-close))
+
+
+;; ----- notify, messages, history --------------------------------------
 ;;
 ;; `notify` is the bridge between Rust-side notifications (eval errors,
 ;; render-callback failures, command-submit results) and the user-visible
@@ -929,9 +1074,6 @@
 ;;   * `popup-show` is create-or-update keyed by name, so re-notify replaces
 ;;     the previous popup in place instead of stacking a new one.
 
-;; popup-show is create-or-update keyed by name, so a second notify just
-;; replaces the previous one in the same panel — no dedup logic needed,
-;; no concern about whether the existing popup-on-top is actually ours.
 ;; Ends with `()` (unit) so `command-submit` / `evaluate` don't surface
 ;; popup-show's return (the bufno) and recursively re-notify.
 (fn notify (msg)
@@ -984,39 +1126,12 @@
        "placement": (placement-anchored 'bottom 'fit)})
     ()))
 
-;; ============================================================================
-;; Popups — buffers with their own keymap and chrome
-;; ============================================================================
-;;
-;; The default keymap a popup is interpreted under. While a popup is on top
-;; of the stack `handle_key_event` resolves keys against the popup's
-;; `keymap_mode` instead of the focused buffer's editing mode — so this
-;; layer is what gives the message popup (and any other popup that doesn't
-;; choose a custom mode) its scroll / dismiss behavior.
-;;
-;; Custom popups can declare their own mode (e.g. `"popup.files"`) and bind
-;; whatever keys they like; the popup's backing buffer participates in the
-;; normal editor primitives (move-cursor, insert-char, …) under that mode.
-(map 'popup "j"          '(move-cursor 'down))
-(map 'popup "<down>"     '(move-cursor 'down))
-(map 'popup "k"          '(move-cursor 'up))
-(map 'popup "<up>"       '(move-cursor 'up))
-(map 'popup "h"          '(move-cursor 'left))
-(map 'popup "<left>"     '(move-cursor 'left))
-(map 'popup "l"          '(move-cursor 'right))
-(map 'popup "<right>"    '(move-cursor 'right))
-(map 'popup "<c-d>"      '(move-cursor 'half-page-down))
-(map 'popup "<c-u>"      '(move-cursor 'half-page-up))
-(map 'popup "<pagedown>" '(move-cursor 'half-page-down))
-(map 'popup "<pageup>"   '(move-cursor 'half-page-up))
-(map 'popup "gg"         '(move-cursor 'file-start))
-(map 'popup "G"          '(move-cursor 'file-end))
-(map 'popup "0"          '(move-cursor 'line-start))
-(map 'popup "$"          '(move-cursor 'line-end))
-(map 'popup "q"          '(popup-close))
-(map 'popup "<esc>"      '(popup-close))
-(map 'popup "<enter>"    '(popup-close))
 
+;; ----- popup-help: a static cheat-sheet popup --------------------------
+;;
+;; The smallest custom popup: seed it with some text, anchor it to the
+;; bottom, let the base `'popup` keymap handle dismissal. Bind it to `?`
+;; in normal mode so it's always one keystroke away.
 (fn popup-help ()
   (popup-show 'help
     (w-block {"border":      "rounded"
@@ -1041,12 +1156,14 @@
 (keymap-set 'normal "?" '(popup-help))
 
 
-;; --- (popup-files)  centered file-explorer popup -----------------------
-;; Reuses the buffer machinery (the popup buffer holds the directory
-;; listing as plain text) and *layers* `popup.files` on top of `popup`
-;; so that only the explorer-specific bindings (open / parent dir) need
-;; to be defined here — j/k/q/<esc>/movement keys are inherited from the
-;; base `popup` keymap by the layered resolver.
+;; ----- popup-files: layering custom keys on top of `'popup` -----------
+;;
+;; A centered file-explorer popup. Reuses the buffer machinery (the popup
+;; buffer holds the directory listing as plain text) and *layers* a fresh
+;; `'popup.files` mode on top of `'popup` so that only the explorer-
+;; specific bindings (open / parent dir) need to be defined here —
+;; j/k/q/<esc>/movement keys are inherited from the base `'popup` keymap
+;; by the layered resolver.
 
 ;; Snapshot of the directory we listed, indexed by line number. Updated on
 ;; each `(popup-files)` invocation so `<enter>` knows which path the cursor
@@ -1090,7 +1207,7 @@
        "show-cursor": 1})))
 
 ;; Bind the explorer to `<c-e>`. Motion and dismiss keys are inherited
-;; from the `popup` layer beneath `popup.files`, so only the explorer-
+;; from the `'popup` layer beneath `'popup.files`, so only the explorer-
 ;; specific actions (open + parent-dir) need to be bound here.
 (keymap-set 'normal "<c-e>" '(popup-files))
 

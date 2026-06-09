@@ -77,13 +77,16 @@ impl Highlighter {
         self.dirty
     }
 
-    /// Reparse if needed. Reuses the previous tree as a hint when present.
+    /// Reparse if needed. Always full-reparses: tree-sitter's incremental
+    /// reuse requires `Tree::edit` to be called on the old tree with each
+    /// rope edit's byte range, and the buffer layer doesn't surface that
+    /// yet. Passing the old tree without edits would make the parser treat
+    /// unchanged regions as still-unchanged and emit stale highlights.
     pub fn ensure_parsed(&mut self) {
         if !self.dirty {
             return;
         }
-        let old = self.tree.take();
-        self.tree = self.parser.parse(&self.text, old.as_ref());
+        self.tree = self.parser.parse(&self.text, None);
         self.dirty = false;
     }
 

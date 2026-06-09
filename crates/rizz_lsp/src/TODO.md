@@ -7,3 +7,13 @@
 - [ ] `o`/`O`/`enter` should be whitespace aware. put you on col of start of prev line
 - [ ] documentation for builtins
 - [ ] named mutable widgets
+- [ ] support more default tree-sitter highlights
+- [ ] add more known tree-sitter languages to grammars.toml
+- [ ] lspconfig
+- [ ] add more known lsps to lsp.toml
+- [ ] add support for package manager installation of lsps/ look at what mason does
+- [ ] add formatter support
+- [ ] add `<<` and `>>` like vim
+- [ ] highlight matching pair (parens, brackets, etc)
+- [ ] better tracing/ error handling/ reporting
+- [ ] picker (telescope like)

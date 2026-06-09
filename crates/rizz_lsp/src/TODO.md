@@ -1,0 +1,9 @@
+- [ ] buffers cycle should by access order instead of creation order
+- [ ] clean up comments and architecture
+- [ ] filetype on buffers
+- [ ] lifecycle hooks (autocommands)
+- [ ] moving cursor in command buffer and popups updates cursor-line of editor
+- [ ] lsp completion menu is slow
+- [ ] `o`/`O`/`enter` should be whitespace aware. put you on col of start of prev line
+- [ ] documentation for builtins
+- [ ] named mutable widgets

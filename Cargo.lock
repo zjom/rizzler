@@ -847,6 +847,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rizz_install"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "rizz_lsp"
 version = "0.1.0"
 dependencies = [
@@ -871,6 +880,7 @@ dependencies = [
 name = "rizz_lsp_install"
 version = "0.1.0"
 dependencies = [
+ "rizz_install",
  "serde",
  "sha2",
  "thiserror",
@@ -925,6 +935,7 @@ dependencies = [
 name = "rizz_ts_install"
 version = "0.1.0"
 dependencies = [
+ "rizz_install",
  "serde",
  "thiserror",
  "toml",

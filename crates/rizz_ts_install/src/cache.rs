@@ -16,15 +16,11 @@ use std::path::{Path, PathBuf};
 /// Root cache directory: `$XDG_DATA_HOME/rizz/grammars` (or
 /// `$HOME/.local/share/rizz/grammars`).
 pub fn cache_root() -> PathBuf {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("rizz").join("grammars")
+    rizz_install::cache_root_for("grammars")
 }
 
 pub fn grammar_dir(root: &Path, name: &str) -> PathBuf {
-    root.join(name)
+    rizz_install::entry_dir(root, name)
 }
 
 pub fn source_dir(root: &Path, name: &str) -> PathBuf {
@@ -40,7 +36,7 @@ pub fn highlights_path(root: &Path, name: &str) -> PathBuf {
 }
 
 pub fn stamp_path(root: &Path, name: &str) -> PathBuf {
-    grammar_dir(root, name).join(".stamp")
+    rizz_install::stamp_path(root, name)
 }
 
 /// Host-specific shared library filename. `libloading::Library::new` does no

@@ -13,15 +13,11 @@ use std::path::{Path, PathBuf};
 /// Root cache directory: `$XDG_DATA_HOME/rizz/lsp` (or
 /// `$HOME/.local/share/rizz/lsp`).
 pub fn cache_root() -> PathBuf {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("rizz").join("lsp")
+    rizz_install::cache_root_for("lsp")
 }
 
 pub fn server_dir(root: &Path, name: &str) -> PathBuf {
-    root.join(name)
+    rizz_install::entry_dir(root, name)
 }
 
 pub fn bin_dir(root: &Path, name: &str) -> PathBuf {
@@ -33,7 +29,7 @@ pub fn binary_path(root: &Path, name: &str, command: &str) -> PathBuf {
 }
 
 pub fn stamp_path(root: &Path, name: &str) -> PathBuf {
-    server_dir(root, name).join(".stamp")
+    rizz_install::stamp_path(root, name)
 }
 
 pub fn log_path(root: &Path, name: &str) -> PathBuf {

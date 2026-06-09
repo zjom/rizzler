@@ -130,7 +130,7 @@ impl State {
         };
         let Some(grammar_name) = self
             .grammar_manifest
-            .grammar_for_ext(&ext)
+            .lookup_by_ext(&ext)
             .map(str::to_string)
         else {
             return;
@@ -267,7 +267,7 @@ impl State {
         else {
             return;
         };
-        let Some(server_name) = self.lsp_manifest.server_for_ext(&ext).map(str::to_string) else {
+        let Some(server_name) = self.lsp_manifest.lookup_by_ext(&ext).map(str::to_string) else {
             return;
         };
 

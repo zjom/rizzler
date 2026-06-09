@@ -1,0 +1,10 @@
+[package]
+name = "rizz_install"
+version = "0.1.0"
+edition = "2024"
+description = "Shared primitives for declarative language-backend installers: a generic manifest type, cache-path helpers, manifest-parse error, and a `LanguageBackend<S>` that tracks one-shot 'missing' warnings and failed auto-installs. Used by `rizz_ts_install` and `rizz_lsp_install` to dedupe their TOML/HashMap/extension-index plumbing."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = { workspace = true }
+toml = "0.8"

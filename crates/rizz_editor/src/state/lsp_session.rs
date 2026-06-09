@@ -129,7 +129,7 @@ impl State {
                 .and_then(|e| e.to_str())
                 .map(|s| s.to_ascii_lowercase())
         })?;
-        let name = self.lsp_manifest.server_for_ext(&ext)?;
+        let name = self.lsp_manifest.lookup_by_ext(&ext)?;
         let running = self.lsp_registry.get(name)?;
         let lsp_pos = rizz_lsp::byte_to_lsp(b.rope(), abs.row, abs.col, running.encoding);
         Some((running.id, uri, running.encoding, lsp_pos, abs))
@@ -251,7 +251,7 @@ impl State {
                         .and_then(|e| e.to_str())
                         .map(|s| s.to_ascii_lowercase())
                 })
-                .and_then(|ext| self.lsp_manifest.server_for_ext(&ext).map(str::to_string))
+                .and_then(|ext| self.lsp_manifest.lookup_by_ext(&ext).map(str::to_string))
         });
         let Some(server_name) = resolved_name else {
             self.notify_via_lisp(

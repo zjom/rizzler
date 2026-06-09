@@ -94,8 +94,6 @@ impl Buffer {
     }
 }
 
-// ---- word --------------------------------------------------------------
-
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 enum CharClass {
     Ws,
@@ -131,11 +129,10 @@ fn word_range(rope: &Rope, cidx: usize, around: bool, big: bool) -> Option<(usiz
         return Some((start, end));
     }
 
-    // Around: include the trailing whitespace (or, if at end-of-line,
-    // leading whitespace) when the object itself is a word/punct; if the
-    // object IS whitespace, include the following word instead.
+    // Around: a whitespace object extends with the following word run; a
+    // word/punct object extends with trailing whitespace, falling back to
+    // leading whitespace when at end-of-line (matches vim).
     if class == CharClass::Ws {
-        // Whitespace object: extend with the following word run.
         let mut j = end;
         if j < len {
             let next_class = classify(rope.char(j), big);
@@ -147,7 +144,6 @@ fn word_range(rope: &Rope, cidx: usize, around: bool, big: bool) -> Option<(usiz
         return Some((start, j));
     }
 
-    // Word/punct object: try trailing whitespace first.
     let mut j = end;
     let mut extended_trailing = false;
     while j < len && rope.char(j) != '\n' && rope.char(j).is_whitespace() {
@@ -158,7 +154,6 @@ fn word_range(rope: &Rope, cidx: usize, around: bool, big: bool) -> Option<(usiz
         return Some((start, j));
     }
 
-    // No trailing whitespace on the line — pull in leading whitespace.
     let mut s = start;
     while s > 0 {
         let prev = rope.char(s - 1);
@@ -194,8 +189,6 @@ fn same_class_span(rope: &Rope, i: usize, class: CharClass, big: bool) -> (usize
     }
     (s, e)
 }
-
-// ---- pair (parens/brackets/braces/angles) -------------------------------
 
 /// Resolve `i<pair>` / `a<pair>`. Walks left from the cursor with a depth
 /// counter to find the nearest enclosing opener; then walks right from that
@@ -328,8 +321,6 @@ fn unmatched_opener(rope: &Rope, cidx: usize, open: char, close: char) -> Option
     None
 }
 
-// ---- quote --------------------------------------------------------------
-
 /// Resolve `i"` / `a"` (or `'` / `` ` ``). Vim restricts quote objects to
 /// the current line: scan the line's quote positions, pair them sequentially
 /// (`[0,1] [2,3] ...`), and pick the pair whose range contains `cidx` — or,
@@ -428,8 +419,6 @@ mod tests {
         }
     }
 
-    // ---- word -----------------------------------------------------------
-
     #[test]
     fn iw_on_word_returns_word() {
         let mut s = mk("hello world");
@@ -477,8 +466,6 @@ mod tests {
         let (lo, hi, _) = s.text_object_range(TextObject::BigWord, false, 1).unwrap();
         assert_eq!(&s.text_at(lo, hi), "foo.bar");
     }
-
-    // ---- pair -----------------------------------------------------------
 
     #[test]
     fn i_paren_excludes_brackets() {
@@ -552,8 +539,6 @@ mod tests {
         assert_eq!(&s.text_at(lo, hi), "\n  bar\n");
     }
 
-    // ---- quote ----------------------------------------------------------
-
     #[test]
     fn i_dquote_inner_text() {
         let mut s = mk(r#"x = "hello world" y"#);
@@ -614,8 +599,6 @@ mod tests {
                 .is_none()
         );
     }
-
-    // ---- FromStr --------------------------------------------------------
 
     #[test]
     fn from_str_accepts_friendly_aliases() {

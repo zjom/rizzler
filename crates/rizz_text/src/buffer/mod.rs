@@ -228,9 +228,7 @@ impl Buffer {
         self.record_lsp_edit(at_char, removed, inserted);
     }
 
-    /// Install (or remove) a fully-constructed highlighter. The editor's
-    /// `State::install_dynamic_highlighter` calls this after consulting the
-    /// `TsRegistry` populated by the `(grammar-register ...)` lisp builtin.
+    /// Install (or remove) a fully-constructed highlighter.
     pub fn set_highlighter(&mut self, h: Option<Highlighter>) {
         self.highlight = h;
     }
@@ -243,10 +241,8 @@ impl Buffer {
         self.highlight.as_ref()
     }
 
-    /// Install (or remove) an LSP attachment. The editor's
-    /// `State::install_lsp_client` calls this after resolving the buffer's
-    /// extension against the `lsp.toml` manifest. Replacing an existing
-    /// handle calls `did_close` on the old one.
+    /// Install (or remove) an LSP attachment. Replacing an existing handle
+    /// calls `did_close` on the old one before opening the new.
     pub fn set_lsp_handle(&mut self, h: Option<Box<dyn LspBufferHandle>>) {
         if let Some(old) = self.lsp.as_mut() {
             old.did_close();
@@ -272,8 +268,7 @@ impl Buffer {
 
     /// If a highlighter is attached and dirty, snapshot the rope into it and
     /// reparse. Cheap when clean: the dirty flag short-circuits before any
-    /// allocation. Called from `State::precompute_frame` before the precompute
-    /// pass walks buffers immutably.
+    /// allocation.
     pub fn refresh_highlight(&mut self) {
         if !self.highlight.as_ref().is_some_and(|h| h.is_dirty()) {
             return;
@@ -300,7 +295,7 @@ impl Buffer {
     }
 
     /// Most recent visual-line layout (from the last render's precompute
-    /// pass). Movement and scroll code reads this when wrap is on.
+    /// pass). `None` when wrap is off or no render has happened yet.
     pub fn wrap_cache(&self) -> Option<&WrapMap> {
         self.wrap_cache.as_ref()
     }
@@ -309,7 +304,6 @@ impl Buffer {
         self.wrap_cache = map;
     }
 
-    /// Cursor's absolute file position (file_pos + cursor_pos).
     pub fn abs_pos(&self) -> Position<usize> {
         Position::new(
             self.file_pos.col + self.cursor_pos.col as usize,
@@ -317,18 +311,14 @@ impl Buffer {
         )
     }
 
-    /// Cursor's absolute file row — `file_pos.row + cursor_pos.row`.
     pub fn abs_row(&self) -> usize {
         self.file_pos.row + self.cursor_pos.row as usize
     }
 
-    /// Cursor's absolute file column — `file_pos.col + cursor_pos.col`.
     pub fn abs_col(&self) -> usize {
         self.file_pos.col + self.cursor_pos.col as usize
     }
 
-    /// Reset rope content and cursor — used when the minibuffer finishes
-    /// processing a command and needs to be empty again.
     pub fn clear(&mut self) {
         self.buf = Rope::new();
         self.cursor_pos = Position::default();
@@ -344,7 +334,6 @@ impl Buffer {
         self.clamp_cursor();
     }
 
-    /// Owned snapshot of the rope text — used by command parsing.
     pub fn text(&self) -> String {
         self.buf.to_string()
     }
@@ -365,8 +354,6 @@ impl Buffer {
         self.buf.lines_at(idx)
     }
 
-    /// Read-only handle to the underlying rope. Used by callers that need
-    /// byte/char conversions (e.g. the tree-sitter highlight pass).
     pub fn rope(&self) -> &Rope {
         &self.buf
     }
@@ -457,8 +444,6 @@ mod tests {
         s.cursor_pos.col as usize + s.file_pos.col
     }
 
-    // ---- insert_char --------------------------------------------------
-
     #[test]
     fn insert_into_empty_buffer() {
         let mut s = mk("");
@@ -497,8 +482,6 @@ mod tests {
         assert_eq!(s.cursor_pos.col, 3);
     }
 
-    // ---- delete_char --------------------------------------------------
-
     #[test]
     fn delete_at_file_start_is_noop() {
         let mut s = mk("hello");
@@ -533,8 +516,6 @@ mod tests {
         assert_eq!(s.cursor_pos.row, 1);
         assert_eq!(s.cursor_pos.col, 2);
     }
-
-    // ---- move_cursor: LineStart / LineEnd -----------------------------
 
     #[test]
     fn line_start_moves_to_col_zero() {
@@ -596,8 +577,6 @@ mod tests {
         s.move_cursor(MoveKind::LineNum(100));
         assert_eq!(cur_row(&s), 2);
     }
-
-    // ---- word motions -------------------------------------------------
 
     #[test]
     fn word_end_lands_on_last_char_of_word() {
@@ -667,8 +646,6 @@ mod tests {
         assert_eq!(s.cursor_pos.row, 1);
         assert_eq!(s.cursor_pos.col, 0);
     }
-
-    // ---- match-bracket (vim `%`) ------------------------------------
 
     #[test]
     fn match_bracket_jumps_forward_to_close_paren() {
@@ -748,8 +725,6 @@ mod tests {
         assert_eq!(s.cursor_pos.col, 0);
     }
 
-    // ---- move_cursor_n -----------------------------------------------
-
     #[test]
     fn move_cursor_n_scales_relative_delta() {
         let mut s = mk("a\nb\nc\nd\ne");
@@ -770,8 +745,6 @@ mod tests {
         s.move_cursor_n(MoveKind::Relative(Position::new(0, 1)), 0);
         assert_eq!(cur_row(&s), 1);
     }
-
-    // ---- relative / absolute / clamp ---------------------------------
 
     #[test]
     fn relative_move_within_bounds() {
@@ -832,8 +805,6 @@ mod tests {
         s.clamp_cursor();
         assert_eq!(s.cursor_pos.col, 3);
     }
-
-    // ---- vertical scrolling -------------------------------------------
 
     #[test]
     fn move_down_within_viewport_does_not_scroll() {
@@ -936,8 +907,6 @@ mod tests {
         assert_eq!(s.cursor_pos.row, 0);
     }
 
-    // ---- goal column (sticky col for vertical motion) ---------------
-
     #[test]
     fn visual_vertical_motion_preserves_goal_col_across_short_line() {
         // Lines length 8, 2, 10 — anchor col 8 on line A, stepping through
@@ -1000,8 +969,6 @@ mod tests {
         assert_eq!(cur_col(&s), 3);
     }
 
-    // ---- selected_text ------------------------------------------------
-
     #[test]
     fn selected_text_none_when_not_visual() {
         let s = mk("hello");
@@ -1032,8 +999,6 @@ mod tests {
         s.cursor_pos = Position::<u16>::new(3, 2);
         assert_eq!(s.selected_text().as_deref(), Some("bcd\nghi\nlmn"));
     }
-
-    // ---- undo / redo --------------------------------------------------
 
     #[test]
     fn undo_reverts_insert_char_and_restores_cursor() {
@@ -1130,8 +1095,6 @@ mod tests {
         assert!(!s.undo());
         assert_eq!(s.buf.to_string(), "hello");
     }
-
-    // ---- delete_selection --------------------------------------------
 
     #[test]
     fn delete_selection_visual_single_line() {
@@ -1247,8 +1210,6 @@ mod tests {
         assert_eq!(s.buf.to_string(), "ae\nfj\nko");
     }
 
-    // ---- delete_range ------------------------------------------------
-
     #[test]
     fn delete_range_within_line() {
         let mut s = mk("hello");
@@ -1296,8 +1257,6 @@ mod tests {
         assert_eq!(s.buf.to_string(), "hello");
     }
 
-    // ---- delete_line (vim `dd`) --------------------------------------
-
     #[test]
     fn delete_line_removes_current_line_and_newline() {
         let mut s = mk("abc\ndef\nghi");
@@ -1334,8 +1293,6 @@ mod tests {
         assert!(s.undo());
         assert_eq!(s.buf.to_string(), "abc\ndef\nghi");
     }
-
-    // ---- delete_motion (vim `d<motion>`) -----------------------------
 
     #[test]
     fn delete_motion_word_forward_drops_through_whitespace() {
@@ -1407,15 +1364,12 @@ mod tests {
         assert_eq!(s.buf.to_string(), "hello world");
     }
 
-    // ---- replace_char_n (vim `r<char>`) ------------------------------
-
     #[test]
     fn replace_char_n_swaps_char_under_cursor() {
         let mut s = mk("hello");
         s.cursor_pos = Position::<u16>::new(1, 0);
         assert!(s.replace_char_n('a', 1));
         assert_eq!(s.buf.to_string(), "hallo");
-        // cursor stays on the replaced char
         assert_eq!(cur_col(&s), 1);
     }
 
@@ -1424,15 +1378,12 @@ mod tests {
         let mut s = mk("hello");
         assert!(s.replace_char_n('x', 3));
         assert_eq!(s.buf.to_string(), "xxxlo");
-        // cursor lands on last replaced char
         assert_eq!(cur_col(&s), 2);
     }
 
     #[test]
     fn replace_char_n_count_clamps_at_line_end() {
         let mut s = mk("hi\nworld");
-        // count 5 on a 2-char line only consumes 2 chars; the next line
-        // is untouched.
         assert!(s.replace_char_n('z', 5));
         assert_eq!(s.buf.to_string(), "zz\nworld");
         assert_eq!(cur_col(&s), 1);
@@ -1452,8 +1403,6 @@ mod tests {
         assert!(s.undo());
         assert_eq!(s.buf.to_string(), "hello");
     }
-
-    // ---- overwrite_char (vim Replace-mode keystroke) -----------------
 
     #[test]
     fn overwrite_char_replaces_and_advances() {
@@ -1493,8 +1442,6 @@ mod tests {
         assert!(s.undo());
         assert_eq!(s.buf.to_string(), "hello");
     }
-
-    // ---- replace_backspace (vim Replace-mode `<bs>`) -----------------
 
     #[test]
     fn replace_backspace_restores_overwritten_char() {
@@ -1553,7 +1500,6 @@ mod tests {
         s.set_mode(EditingMode::Replace);
         s.overwrite_char('H');
         assert!(s.replace_backspace());
-        // history is now empty — another bs is a no-op
         assert!(!s.replace_backspace());
         assert_eq!(s.buf.to_string(), "hello");
         assert_eq!(cur_col(&s), 0);
@@ -1562,7 +1508,6 @@ mod tests {
     #[test]
     fn replace_backspace_outside_replace_mode_is_noop() {
         let mut s = mk("hello");
-        // No batch active → no-op.
         assert!(!s.replace_backspace());
         assert_eq!(s.buf.to_string(), "hello");
     }

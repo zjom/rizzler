@@ -1,8 +1,8 @@
 //! One language-server client running as a tokio task.
 //!
-//! Lifetime: `spawn` → `initialize` handshake (timed out at 5s) → main
-//! loop that fans incoming messages out as `LspEvent`s and processes
-//! outgoing `ClientCmd`s.
+//! Lifetime: `spawn` → `initialize` handshake (5s timeout) → main loop
+//! that fans incoming messages out as `LspEvent`s and processes outgoing
+//! `ClientCmd`s.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -43,7 +43,6 @@ use crate::message::{
 };
 use crate::position::Encoding;
 
-/// Commands the runtime sends into a client task.
 #[derive(Debug)]
 pub enum ClientCmd {
     DidOpen {
@@ -97,7 +96,7 @@ pub enum ClientCmd {
     Shutdown,
 }
 
-/// Public handle a runtime dispatcher uses to talk to a running client.
+/// Handle the runtime dispatcher uses to talk to a running client.
 pub struct ClientHandle {
     #[allow(dead_code)]
     pub id: LspClientId,
@@ -109,8 +108,7 @@ pub struct ClientHandle {
 
 #[derive(Default)]
 struct PendingRequests {
-    /// Map our outbound request id → editor-side seq so we can route the
-    /// response. The map's key is the JSON-RPC id we put on the wire.
+    // Outbound JSON-RPC id → editor-side seq, used to route responses.
     by_lsp_id: HashMap<i64, PendingKind>,
 }
 
@@ -123,14 +121,11 @@ enum PendingKind {
     Format(RequestSeq),
     CodeAction(RequestSeq),
     ExecuteCommand(RequestSeq),
-    /// Reserved for the in-process `initialize` handshake. Never reaches
-    /// the event channel.
     Initialize,
-    /// `shutdown` request before sending `exit`.
     Shutdown,
 }
 
-/// Spawn the child, perform initialize, and return a handle once the
+/// Spawn the child, perform `initialize`, and return a handle once the
 /// server is ready. The client's main loop runs in `tokio::spawn`.
 pub async fn spawn(
     id: LspClientId,
@@ -162,7 +157,7 @@ pub async fn spawn(
     let mut writer = FramedWrite::new(stdin, LspCodec);
     let mut reader = FramedRead::new(stdout, LspCodec);
 
-    // Drive stderr separately so it doesn't block stdout framing.
+    // Drain stderr on its own task so it doesn't block stdout framing.
     let name_for_stderr = name.clone();
     tokio::spawn(drain_stderr(name_for_stderr, stderr));
 
@@ -263,7 +258,6 @@ where
         timeout_ms: 5000,
     })??;
 
-    // Determine encoding the server picked.
     let encoding = init_response
         .get("capabilities")
         .and_then(|c| serde_json::from_value::<ServerCapabilities>(c.clone()).ok())
@@ -271,7 +265,6 @@ where
         .map(|k| Encoding::from_lsp(Some(&k)))
         .unwrap_or_default();
 
-    // Send `initialized` notification to complete the handshake.
     let notif = OutgoingNotification::new(
         Initialized::METHOD,
         serde_json::to_value(InitializedParams {})?,
@@ -343,9 +336,8 @@ where
 {
     let mut next_id: i64 = 100; // reserve [0..100) for initialize/shutdown
     let mut pending = PendingRequests::default();
-    // URI → pending didChange batch. Each batch carries the latest
-    // version. We send when the debounce timer fires or when a non-edit
-    // command crosses the queue.
+    // URI → coalesced didChange batch. Flushed on the debounce tick or
+    // before any non-edit command goes out.
     let mut pending_changes: HashMap<String, PendingChange> = HashMap::new();
     let mut debounce = tokio::time::interval(Duration::from_millis(DIDCHANGE_DEBOUNCE_MS));
     debounce.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -358,14 +350,14 @@ where
                 let now = tokio::time::Instant::now();
                 if matches!(cmd, ClientCmd::Shutdown) {
                     flush_changes(&mut ctx, &mut pending_changes).await;
-                    // Initiate graceful shutdown.
                     let id = next_id; next_id += 1;
                     pending.by_lsp_id.insert(id, PendingKind::Shutdown);
                     let req = OutgoingRequest::new(
                         RequestId::number(id), Shutdown::METHOD, Value::Null,
                     );
                     let _ = send_frame(&mut ctx.writer, &req).await;
-                    // Optimistically send `exit` so the server tears down.
+                    // Send `exit` without waiting for the shutdown response so
+                    // the server tears down even if it's slow to reply.
                     let exit = OutgoingNotification::new(Exit::METHOD, Value::Null);
                     let _ = send_frame(&mut ctx.writer, &exit).await;
                     break;
@@ -576,7 +568,6 @@ where
             send_request::<ExecuteCommand>(&mut ctx.writer, id, params).await
         }
         ClientCmd::Cancel { seq } => {
-            // Find the LSP id that maps to this seq and send $/cancelRequest.
             let lsp_id = pending
                 .by_lsp_id
                 .iter()
@@ -686,12 +677,9 @@ where
     match method {
         PublishDiagnostics::METHOD => {
             let p: PublishDiagnosticsParams = serde_json::from_value(params)?;
-            // Use a per-frame empty rope; the editor side re-walks the
-            // line/character positions against its own rope. We pass an
-            // empty Rope here because action_bridge's diagnostic_owned
-            // doesn't actually need the rope when encoding is UTF-8/UTF-16
-            // — those paths only use it for end-of-line clamping. The
-            // editor reapplies position translation if needed.
+            // We don't have the buffer's rope here. action_bridge only
+            // needs it for end-of-line clamping; the editor re-walks
+            // positions against its own rope before applying.
             let empty = ropey::Rope::new();
             let items = p
                 .diagnostics
@@ -735,7 +723,7 @@ where
                 client: ctx.id,
                 edit,
             });
-            // Reply optimistically. We can't synchronously await the editor.
+            // Reply optimistically — we can't synchronously await the editor.
             let resp = OutgoingResponse {
                 jsonrpc: "2.0",
                 id,
@@ -745,7 +733,7 @@ where
             send_frame(&mut ctx.writer, &resp).await?;
         }
         WorkDoneProgressCreate::METHOD => {
-            // Acknowledge but don't track progress.
+            // Acknowledge but don't track progress tokens.
             let resp = OutgoingResponse {
                 jsonrpc: "2.0",
                 id,
@@ -755,7 +743,7 @@ where
             send_frame(&mut ctx.writer, &resp).await?;
         }
         _ => {
-            // Politely refuse so the server doesn't hang on us.
+            // Reply MethodNotFound so the server doesn't hang waiting on us.
             let resp = OutgoingResponse {
                 jsonrpc: "2.0",
                 id,
@@ -846,12 +834,8 @@ where
                 actions,
             });
         }
-        PendingKind::ExecuteCommand(_seq) => {
-            // No response payload to forward.
-        }
-        PendingKind::Initialize | PendingKind::Shutdown => {
-            // Should not be reached after the initialize handshake.
-        }
+        PendingKind::ExecuteCommand(_seq) => {}
+        PendingKind::Initialize | PendingKind::Shutdown => {}
     }
     Ok(())
 }

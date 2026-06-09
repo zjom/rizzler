@@ -35,10 +35,6 @@ mod popup_parse;
 
 pub use helpers::quote_for_lisp;
 
-// ---------------------------------------------------------------------------
-// Editor bridge: thread-local pointer to the live `State`.
-// ---------------------------------------------------------------------------
-
 thread_local! {
     static EDITOR: Cell<Option<NonNull<State>>> = const { Cell::new(None) };
     /// True while `State::precompute_frame` is walking the slot registry.
@@ -100,10 +96,6 @@ pub(crate) fn with_editor_mut<R>(f: impl FnOnce(&mut State) -> R) -> R {
     unsafe { f(ptr.as_ptr().as_mut().unwrap()) }
 }
 
-// ---------------------------------------------------------------------------
-// LispRuntime
-// ---------------------------------------------------------------------------
-
 pub struct LispRuntime(Runtime);
 
 impl LispRuntime {
@@ -138,7 +130,6 @@ impl LispRuntime {
         Ok(())
     }
 
-    /// Borrow the current environment.
     pub fn env(&self) -> &Env {
         self.0.env()
     }
@@ -224,7 +215,6 @@ mod tests {
     fn command_completions_filters_by_prefix() {
         use crossterm::event::{KeyCode, KeyModifiers};
         let mut s = test_state();
-        // Enter command mode and type "ed" — should match "edit"/"evaluate".
         for (code, mods) in [
             (KeyCode::Char(':'), KeyModifiers::NONE),
             (KeyCode::Char('e'), KeyModifiers::NONE),
@@ -241,7 +231,6 @@ mod tests {
             "missing edit: {names:?}"
         );
         assert!(names.iter().all(|n| n.starts_with("ed")));
-        // private (_-prefixed) bindings should be filtered out.
         assert!(names.iter().all(|n| !n.starts_with('_')));
     }
 
@@ -281,7 +270,6 @@ mod tests {
                 .unwrap();
         }
         let v = s.eval_lisp("(command-prefix)").unwrap();
-        // `buf-no` and `buf-next` share `buf-n`; tab should land there.
         assert_eq!(v.display(), "buf-n");
     }
 

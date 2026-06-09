@@ -1,3 +1,6 @@
+//! Widget constructor builtins (`w-*`, `placement-*`) plus `set-frame` /
+//! `set-gutter` for installing render callbacks.
+
 use std::rc::Rc;
 
 use im::{HashMap as ImHashMap, Vector};
@@ -84,7 +87,6 @@ returns the currently active per-frame render callback fn if set. returns () oth
         |args, _| {
             let spans: Vec<Rc<Value>> = value_iter(&args[0]).collect();
             let line = widget_line(spans);
-            // Optional second arg is the alignment ident: 'left | 'center | 'right.
             if let Some(align_v) = args.get(1) {
                 if align_v.is_unit() {
                     return Ok(line);
@@ -158,9 +160,8 @@ example:
         |args, _| {
             let kind = as_ident_or_str(&args[0], "w-size.kind")?;
             let kind_str = kind.as_ref();
-            // For frac, the call shape is (w-size 'frac n m child) — 4 args
-            // total, with m being the denominator. For everything else,
-            // (w-size kind n child) — 3 args.
+            // 'frac takes 4 args: (w-size 'frac n m child). Everything else
+            // is 3: (w-size kind n child).
             let (n_raw, m_raw, child) = if kind_str == "frac" {
                 let n = as_int(&args[1], "w-size.n")?;
                 let Some(m_v) = args.get(2) else {

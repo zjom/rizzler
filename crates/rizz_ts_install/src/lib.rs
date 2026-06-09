@@ -25,9 +25,6 @@ pub use error::InstallError;
 pub use install::{InstallOpts, InstalledGrammar, install, try_load_cached};
 pub use manifest::{GrammarSpec, Manifest};
 
-/// Read the highlights query off disk for an installed grammar. Thin wrapper
-/// over `std::fs::read_to_string` so callers don't have to know the file is
-/// just text.
 pub fn read_highlights(g: &InstalledGrammar) -> std::io::Result<String> {
     std::fs::read_to_string(&g.highlights)
 }

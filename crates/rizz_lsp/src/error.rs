@@ -1,3 +1,5 @@
+//! Error type surfaced by the LSP runtime and per-client tasks.
+
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]

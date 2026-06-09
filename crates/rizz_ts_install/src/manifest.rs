@@ -32,8 +32,8 @@ pub struct GrammarSpec {
     pub queries: Option<String>,
 }
 
-/// Parsed manifest plus a precomputed reverse-index from file extension to
-/// grammar name, used by the auto-load pass.
+/// Parsed manifest plus a reverse-index from file extension to grammar name,
+/// used by the auto-load pass.
 #[derive(Debug, Default, Clone)]
 pub struct Manifest {
     entries: HashMap<String, GrammarSpec>,
@@ -61,9 +61,8 @@ impl Manifest {
         self.entries.get(name)
     }
 
-    /// Reverse-index lookup: `"rs"` → `"rust"`. Returns `None` for unknown
-    /// extensions. Multiple grammars claiming the same extension resolve to
-    /// whichever was inserted first (insertion order in the TOML file).
+    /// Reverse-index lookup: `"rs"` → `"rust"`. Multiple grammars claiming the
+    /// same extension resolve to whichever was inserted first.
     pub fn grammar_for_ext(&self, ext: &str) -> Option<&str> {
         let normalized = ext.trim_start_matches('.').to_ascii_lowercase();
         self.by_ext.get(&normalized).map(String::as_str)

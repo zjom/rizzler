@@ -1,3 +1,5 @@
+//! Keymap mutation builtins: set/remove/get bindings.
+
 use std::rc::Rc;
 
 use im::HashMap as ImHashMap;

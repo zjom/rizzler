@@ -1,8 +1,6 @@
-//! Per-widget paint routines.
-//!
-//! Components live one level down from the top-level renderer so each one
-//! stays a thin glue layer between a [`crate::render::RenderedBuffer`] (or
-//! [`crate::render::StateSnapshot`]) and ratatui's primitives.
+//! Per-widget paint routines — thin glue between a
+//! [`crate::render::RenderedBuffer`] (or [`crate::render::StateSnapshot`])
+//! and ratatui's primitives.
 
 pub mod editor_view;
 pub mod minibuffer;

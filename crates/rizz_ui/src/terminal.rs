@@ -1,7 +1,7 @@
-//! RAII terminal lifecycle: alt screen, raw mode, mouse + focus capture, and
-//! kitty keyboard protocol when supported. [`TerminalGuard::new`] puts the
-//! terminal into editor mode; the `Drop` impl (plus a panic hook installed
-//! by [`install_panic_hook`]) restore it on the way out.
+//! RAII terminal lifecycle: alt screen, raw mode, mouse + focus capture,
+//! and the kitty keyboard protocol when supported. [`TerminalGuard::new`]
+//! enters editor mode; the `Drop` impl plus a panic hook installed by
+//! [`install_panic_hook`] restore it on the way out.
 
 use std::{
     io,
@@ -37,9 +37,9 @@ fn restore_terminal() {
     );
 }
 
-/// Installs a panic hook that leaves the alt screen before the default hook
-/// prints the panic message — otherwise the message renders into the alt
-/// screen and is wiped when [`TerminalGuard`]'s Drop fires during unwind.
+/// Restore the terminal before the default panic hook prints — without
+/// this the panic message renders into the alt screen and is wiped when
+/// [`TerminalGuard`]'s Drop fires during unwind.
 pub fn install_panic_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

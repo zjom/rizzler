@@ -250,7 +250,6 @@ impl Buffer {
         }
     }
 
-    /// Place `abs_row` at the vertical middle of the viewport.
     fn center_on(&mut self, abs_row: usize) {
         if self.viewport.row == 0 {
             return;
@@ -294,8 +293,6 @@ impl Buffer {
         self.cursor_pos.col = abs_col.saturating_sub(self.file_pos.col) as u16;
     }
 
-    /// Resolve `motion` against the rope from the cursor's current absolute
-    /// char index and move there.
     fn apply_motion(&mut self, motion: fn(&Rope, usize, bool) -> usize, big: bool) {
         let abs = self.abs_pos();
         let cidx = self.buf.line_to_char(abs.row) + abs.col;
@@ -313,7 +310,6 @@ impl Buffer {
         self.clamp_cursor();
     }
 
-    /// Place the cursor at absolute char index `cidx` in the rope.
     fn set_abs_char(&mut self, cidx: usize) {
         let row = self.buf.char_to_line(cidx);
         let col = cidx - self.buf.line_to_char(row);

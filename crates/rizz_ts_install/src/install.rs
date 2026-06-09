@@ -18,8 +18,8 @@ use crate::{InstallError, library_filename};
 #[derive(Debug, Default, Clone)]
 pub struct InstallOpts {
     pub repo: Option<String>,
-    /// Use an on-disk checkout instead of cloning. When set, `repo`/`branch`/
-    /// `rev` are ignored.
+    /// On-disk checkout to use instead of cloning. When set,
+    /// `repo`/`branch`/`rev` are ignored.
     pub path: Option<PathBuf>,
     pub branch: Option<String>,
     pub rev: Option<String>,
@@ -30,8 +30,8 @@ pub struct InstallOpts {
     pub force: bool,
 }
 
-/// Successful install result. The editor side hands `library` and `highlights`
-/// to `TsRegistry::register` to wire the grammar in.
+/// Successful install result. The editor hands `library` and `highlights` to
+/// `TsRegistry::register` to wire the grammar in.
 #[derive(Debug, Clone)]
 pub struct InstalledGrammar {
     pub name: String,
@@ -41,7 +41,6 @@ pub struct InstalledGrammar {
     pub highlights: PathBuf,
 }
 
-/// Resolved spec — the merge of the manifest entry and the per-call opts.
 #[derive(Debug)]
 struct Resolved {
     repo: Option<String>,
@@ -142,8 +141,8 @@ pub fn install(
         source,
     })?;
 
-    // 1. Acquire source: either point at a user-supplied checkout, or sync
-    //    a managed clone under <cache>/<name>/src.
+    // Either point at a user-supplied checkout, or sync a managed clone under
+    // <cache>/<name>/src.
     let (source_root, head_sha) = if let Some(path) = &resolved.path {
         if !path.exists() {
             return Err(InstallError::MissingSource { path: path.clone() });
@@ -155,7 +154,6 @@ pub fn install(
         (src, Some(sha))
     };
 
-    // 2. Short-circuit if cache matches stamp and we're not forcing a rebuild.
     let want_stamp = stamp_for(&resolved, head_sha.as_deref());
     if !opts.force
         && let Some(cached) = CachedGrammar::read(&cache_root, name)
@@ -171,8 +169,8 @@ pub fn install(
         });
     }
 
-    // 3. Build the parser library. tree-sitter build runs from inside the
-    //    grammar's source dir (`<subdir>` if vendored multi-grammar repo).
+    // tree-sitter build runs from inside the grammar's source dir
+    // (`<subdir>` if it's a vendored multi-grammar repo).
     let build_dir = match &resolved.subdir {
         Some(s) => source_root.join(s),
         None => source_root.clone(),
@@ -186,8 +184,6 @@ pub fn install(
     info!(?build_dir, ?library, "building grammar");
     run_tree_sitter_build(&build_dir, &library)?;
 
-    // 4. Copy highlights.scm into the cache. Default location is
-    //    `<build_dir>/queries/highlights.scm`; `queries` opt overrides.
     let queries_rel = resolved
         .queries
         .clone()
@@ -206,7 +202,7 @@ pub fn install(
         source,
     })?;
 
-    // 5. Write the stamp so subsequent installs of the same spec are no-ops.
+    // Stamp so subsequent installs of the same spec short-circuit.
     let stamp = cache::stamp_path(&cache_root, name);
     std::fs::write(&stamp, &want_stamp).map_err(|source| InstallError::Io {
         path: stamp,
@@ -242,8 +238,6 @@ pub fn try_load_cached(
         highlights: cached.highlights,
     })
 }
-
-// ----- shell-out helpers ------------------------------------------------
 
 fn run_capture(cmd: &mut Command, tool: &'static str) -> Result<Output, InstallError> {
     cmd.output()
@@ -342,9 +336,8 @@ fn run_tree_sitter_build(build_dir: &Path, out_lib: &Path) -> Result<(), Install
             .to_string(),
         });
     }
-    // Sanity check: tree-sitter sometimes ignores -o on older CLIs and writes
-    // somewhere else. If the file isn't where we asked, surface that early
-    // rather than later when libloading complains.
+    // Older tree-sitter CLIs occasionally ignore `-o` and write elsewhere;
+    // surface that here rather than at libloading time.
     if !out_lib.exists() {
         return Err(InstallError::Build {
             dir: build_dir.to_path_buf(),

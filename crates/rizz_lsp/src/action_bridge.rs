@@ -1,6 +1,6 @@
 //! Convert `lsp-types` response values into the owned snapshot types that
-//! `rizz_actions::Action` carries. Centralized here so the action layer can
-//! stay free of `lsp-types`.
+//! `rizz_actions::Action` carries, so the action layer stays free of
+//! `lsp-types`.
 
 use std::sync::Arc;
 
@@ -58,10 +58,9 @@ pub fn diagnostic_owned(rope: &Rope, d: &Diagnostic, enc: Encoding) -> LspDiagno
 }
 
 pub fn location_owned(_rope: &Rope, loc: &Location, _enc: Encoding) -> LocationOwned {
-    // The range references positions in the *target* document, which may
-    // not be the rope we have on hand. Store raw LSP line/character
-    // numbers as if encoding were UTF-8 byte offsets — the editor side
-    // re-converts when it opens the target file with the right rope.
+    // The range references the *target* document, not our rope. Store raw
+    // LSP line/character and let the editor re-convert when it opens the
+    // target file with the right rope.
     LocationOwned {
         uri: Arc::from(url_str(&loc.uri)),
         range: RangeOwned {
@@ -173,7 +172,7 @@ pub fn workspace_edit_owned(edit: WorkspaceEdit) -> WorkspaceEditOwned {
                     if let DocumentChangeOperation::Edit(e) = op {
                         docs.push(text_document_edit_owned(e));
                     }
-                    // Create/Rename/Delete file operations are out of MVP scope.
+                    // Create/Rename/Delete file operations are out of scope.
                 }
             }
         }

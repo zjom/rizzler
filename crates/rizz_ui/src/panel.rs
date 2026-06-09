@@ -1,22 +1,9 @@
-//! Panel — the unified input/overlay container.
+//! Panel — the unified input/overlay container above the editor window tree.
 //!
-//! A panel is any container that can receive keys: an editor window leaf, the
-//! minibuffer when command-mode is active, or a popup overlay. They differ
-//! only in *how* they get drawn, captured by [`PanelKind`]:
-//!
-//! - [`PanelKind::Minibuffer`] — drawn by the frame fn's `(w-minibuffer)`
-//!   leaf at whatever rect it claims. No chrome.
-//! - [`PanelKind::Overlay`] — a floating panel with explicit [`Placement`]
-//!   and its own widget tree.
-//!
-//! Editor windows are *not* in the panel stack — they're a separate concept
-//! (the [`crate::WindowTree`] still owns split layout + per-leaf BufferId).
-//! The "is this an editor window?" focus is implicit: it's where focus goes
-//! when no panel is on the stack.
-//!
-//! The [`PanelStack`] is the single source of truth for "where do keys go."
-//! Top of stack wins; bottom of stack falls through to the focused editor
-//! window leaf.
+//! A panel receives keys when it's on top of the [`PanelStack`]. The kinds
+//! ([`PanelKind::Minibuffer`], [`PanelKind::Overlay`]) differ only in how
+//! they're drawn. Editor windows are not panels: when the stack is empty,
+//! focus falls through to the focused [`crate::WindowTree`] leaf.
 
 use std::rc::Rc;
 
@@ -30,16 +17,15 @@ use crate::widget::Widget;
 pub enum Dim {
     Cells(u16),
     Frac(f32),
-    /// Resolve to the minimum size required to contain the panel's content
-    /// at its configured wrap mode. The actual fit value is computed
-    /// per-frame by [`resolve_overlay_rect`] from the backing buffer.
+    /// Minimum size required to contain the panel's content at its configured
+    /// wrap mode. The hint is computed per-frame by [`resolve_overlay_rect`]
+    /// from the backing buffer.
     Fit,
 }
 
 impl Dim {
-    /// `fit` is the precomputed "minimum to contain content" hint along this
-    /// axis. Callers that don't know fit pass `0` — `Dim::Fit` will collapse
-    /// to that, which the placement layer clamps to a minimum of 1.
+    /// `fit` is the content-fit hint along this axis. Callers that don't
+    /// know it pass `0`; the placement layer then clamps to a minimum of 1.
     pub fn resolve(self, total: u16, fit: u16) -> u16 {
         match self {
             Dim::Cells(n) => n.min(total),
@@ -76,11 +62,9 @@ pub enum Placement {
         side: Side,
         size: Dim,
     },
-    /// Cursor-anchored: resolved at render time against the focused window
-    /// leaf's area and the focused buffer's cursor screen position.
-    /// Placed one row below the cursor when there's room, otherwise above.
-    /// Width hugs `width` (typically `Fit`). When no anchor is available
-    /// (no focused leaf), falls back to `Centered`.
+    /// Anchored to the focused buffer's cursor: one row below when there's
+    /// room, otherwise above. Falls back to `Centered` when no anchor is
+    /// available.
     AtCursor {
         width: Dim,
         height: Dim,
@@ -88,15 +72,12 @@ pub enum Placement {
     Full,
 }
 
-/// Captures where the focused buffer's cursor lives in frame coordinates,
-/// plus the bounds of the focused window leaf. Threaded into the popup
-/// placement pass by the renderer so `Placement::AtCursor` can resolve.
+/// Focused cursor position in frame coordinates plus the focused window
+/// leaf's bounds. Threaded into popup placement so `Placement::AtCursor` can
+/// resolve and so popups stay inside the leaf when possible.
 #[derive(Clone, Copy, Debug)]
 pub struct CursorAnchor {
-    /// Frame-relative bounds of the focused window leaf — popups stay inside
-    /// this when possible.
     pub leaf: Rect,
-    /// Cursor's absolute frame coords.
     pub cursor_x: u16,
     pub cursor_y: u16,
 }
@@ -111,9 +92,8 @@ impl Default for Placement {
 }
 
 impl Placement {
-    /// Resolve to a screen rect within `area`. `fit_w`/`fit_h` are the
-    /// per-axis content-fit hints used by [`Dim::Fit`]; pass `0` when fit
-    /// isn't applicable.
+    /// Resolve to a screen rect within `area`. `fit_w`/`fit_h` feed
+    /// [`Dim::Fit`]; pass `0` when fit isn't applicable.
     pub fn resolve(&self, area: Rect, fit_w: u16, fit_h: u16) -> Rect {
         match *self {
             Placement::Centered { width, height } => {
@@ -169,20 +149,17 @@ impl Placement {
                     )
                 }
             },
-            // `AtCursor` needs a `CursorAnchor` — the plain `resolve` path
-            // has no access to one, so fall back to the editor area's
-            // centered default. The render path uses `resolve_with_anchor`
-            // which handles `AtCursor` properly.
+            // `AtCursor` needs an anchor; the render path uses
+            // `resolve_with_anchor`. Fall back to centered here.
             Placement::AtCursor { width, height } => Placement::Centered { width, height }
                 .resolve(area, fit_w, fit_h),
             Placement::Full => area,
         }
     }
 
-    /// Resolution path for popups: same as [`Self::resolve`] for every
-    /// variant except [`Placement::AtCursor`], which uses `anchor` (if
-    /// available) to place itself adjacent to the cursor. Falls back to
-    /// `Centered` when no anchor is available.
+    /// Same as [`Self::resolve`], but [`Placement::AtCursor`] uses `anchor`
+    /// to place itself adjacent to the cursor (or falls back to `Centered`
+    /// when no anchor is available).
     pub fn resolve_with_anchor(
         &self,
         area: Rect,
@@ -206,9 +183,8 @@ impl Placement {
                     .max(1)
                     .min(leaf.width);
                 // Prefer below the cursor; fall back to above when there's
-                // more room there. Below-room counts the rows under the
-                // cursor row (exclusive of the cursor's own row); above-room
-                // counts the rows above it.
+                // more room there. If neither side fully fits, pick the
+                // larger and let the height clamp below.
                 let below_room = leaf.bottom().saturating_sub(a.cursor_y + 1);
                 let above_room = a.cursor_y.saturating_sub(leaf.y);
                 let y = if below_room >= h {
@@ -216,18 +192,12 @@ impl Placement {
                 } else if above_room >= h {
                     a.cursor_y.saturating_sub(h)
                 } else if below_room >= above_room {
-                    // Neither side fully fits — pick whichever has more
-                    // room and let the height clamp.
                     a.cursor_y.saturating_add(1)
                 } else {
                     leaf.y
                 };
-                // Horizontal: anchor at cursor_x; shift left if the popup
-                // would overflow the leaf's right edge.
                 let max_x = leaf.right().saturating_sub(w);
                 let x = a.cursor_x.min(max_x).max(leaf.x);
-                // Clamp height to whatever room is actually available at the
-                // chosen y.
                 let avail_h = leaf.bottom().saturating_sub(y);
                 let h = h.min(avail_h).max(1);
                 Rect::new(x, y, w, h)
@@ -237,9 +207,8 @@ impl Placement {
     }
 }
 
-/// Parse a [`Placement`] from a lisp value. Accepts the shorthand idents
-/// `'centered` / `'full`, or a map shape `{kind: ... w: ... h: ...}`. Used
-/// by both `(popup-show ...)` and `(w-overlay ...)`.
+/// Parse a [`Placement`] from a lisp value: shorthand idents (`'centered`,
+/// `'full`) or a `{kind: ... w: ... h: ...}` map.
 pub fn parse_placement(v: &Rc<Value>) -> Result<Placement, RuntimeError> {
     match &**v {
         Value::Ident(s) | Value::Str(s) => match s.as_ref() {
@@ -403,35 +372,24 @@ impl BorderStyle {
 /// One entry on the editor's input/overlay stack.
 #[derive(Clone, Debug)]
 pub struct Panel {
-    /// Backing buffer for this panel. Keys routed to this panel mutate this
-    /// buffer; the precompute pass treats it like any other buffer.
     pub buf: BufferId,
     /// Keymap mode layers active while this panel has focus, most-recent
     /// first. The keymap resolver consults `panel.keymap_layers + [buf.mode]`
     /// when this panel is on top.
     pub keymap_layers: Vec<Rc<str>>,
     /// Widget tree drawn inside this panel's outer rect. `None` for a
-    /// minibuffer panel — that one's rect comes from the frame fn's
-    /// `(w-minibuffer)` leaf and renders without chrome.
+    /// minibuffer panel — its rect comes from `(w-minibuffer)` and it
+    /// renders without chrome.
     pub widget: Option<Widget>,
-    /// What sort of panel this is — drives how the renderer places it.
     pub kind: PanelKind,
 }
 
 #[derive(Clone, Debug)]
 pub enum PanelKind {
-    /// Pinned to the rect claimed by the frame fn's `(w-minibuffer)` leaf.
-    /// No chrome; the only way it differs from an editor window leaf is that
-    /// it's never inside the [`crate::WindowTree`] split layout.
     Minibuffer,
-    /// A floating overlay drawn at `placement`. The accompanying widget
-    /// (held on the [`Panel`] itself) describes its chrome + content,
-    /// typically `(w-block (w-popup-self))`.
-    ///
-    /// `name` is the symbol the lisp `(popup-show NAME …)` builtin assigned
-    /// to this popup. Names are unique within the panel stack: re-issuing
-    /// `popup-show` with the same name updates and re-raises the existing
-    /// panel instead of stacking a new one.
+    /// A floating overlay drawn at `placement`. `name` is unique within the
+    /// stack: re-issuing `popup-show` with the same name updates and
+    /// re-raises the existing panel instead of stacking a new one.
     Overlay {
         placement: Placement,
         show_cursor: bool,
@@ -457,8 +415,6 @@ impl Panel {
         matches!(self.kind, PanelKind::Minibuffer)
     }
 
-    /// Get the overlay-specific fields. Returns `None` for non-overlay
-    /// panels.
     pub fn as_overlay(&self) -> Option<(&Placement, &Widget, bool)> {
         match &self.kind {
             PanelKind::Overlay {
@@ -470,8 +426,6 @@ impl Panel {
         }
     }
 
-    /// The name this overlay panel was registered under, or `None` for the
-    /// minibuffer.
     pub fn overlay_name(&self) -> Option<&str> {
         match &self.kind {
             PanelKind::Overlay { name, .. } => Some(name),
@@ -480,12 +434,9 @@ impl Panel {
     }
 }
 
-/// Walk an overlay panel's widget tree and return the rect where the
-/// `(buffer-view)` leaf will be drawn, given the panel's outer placement
-/// rect. Recognizes [`Widget::Block`] as a chrome wrapper that insets the
-/// rect; for every other wrapper it descends through
-/// [`Widget::children`], so new transparent wrappers don't have to be
-/// registered here.
+/// Inner rect where the `(buffer-view)` leaf inside `widget` will be drawn
+/// given the panel's outer rect. [`Widget::Block`] insets by its border;
+/// any other wrapper descends transparently via [`Widget::children`].
 pub fn buffer_view_rect(widget: &Widget, outer: Rect, panel_buf: BufferId) -> Rect {
     match widget {
         Widget::BufferView { buf } if buf.unwrap_or(panel_buf) == panel_buf => outer,
@@ -500,10 +451,10 @@ pub fn buffer_view_rect(widget: &Widget, outer: Rect, panel_buf: BufferId) -> Re
     }
 }
 
-/// Total `(horizontal, vertical)` cells the panel's chrome adds between the
-/// outer placement rect and the `(buffer-view)` leaf. Used by
-/// [`resolve_overlay_rect`] to translate content-fit dims into outer dims
-/// without knowing the outer size first (insets don't depend on the rect).
+/// Total `(horizontal, vertical)` cells the panel's chrome adds between
+/// the outer rect and the `(buffer-view)` leaf. Independent of the outer
+/// size, so [`resolve_overlay_rect`] can translate content-fit dims into
+/// outer dims without knowing the rect yet.
 pub fn buffer_view_inset(widget: &Widget, panel_buf: BufferId) -> (u16, u16) {
     match widget {
         Widget::BufferView { buf } if buf.unwrap_or(panel_buf) == panel_buf => (0, 0),
@@ -529,13 +480,11 @@ fn inset_rect(outer: Rect, i: u16) -> Rect {
     }
 }
 
-/// Resolve an overlay panel's outer rect within `area`, honouring [`Dim::Fit`]
-/// by computing the minimum rows/cols needed to contain `buf`'s text under
-/// its configured wrap mode. Called per-frame so size tracks text edits and
-/// terminal resizes.
+/// Resolve an overlay panel's outer rect within `area`. [`Dim::Fit`]
+/// dims trigger a per-frame measurement of `buf` under its wrap mode so
+/// the rect tracks text edits and terminal resizes.
 ///
-/// Panics if `panel` is not an [`PanelKind::Overlay`] — only overlay panels
-/// have a placement to resolve.
+/// Panics if `panel` is not [`PanelKind::Overlay`].
 pub fn resolve_overlay_rect(
     panel: &Panel,
     area: Rect,
@@ -549,9 +498,9 @@ pub fn resolve_overlay_rect(
         return placement.resolve_with_anchor(area, 0, 0, anchor);
     }
     let (inset_w, inset_h) = buffer_view_inset(widget, panel.buf);
-    // Width budget for wrapping when fitting height: full available area
-    // minus chrome. `wrap_column` (if set) overrides — that's the buffer's
-    // explicit wrap target, narrower than the panel might end up.
+    // Width budget for wrapping. `wrap_column` overrides when set —
+    // it's the buffer's explicit wrap target, narrower than the panel
+    // might end up.
     let inner_w = match buf.wrap_column() {
         Some(c) => c,
         None => area.width.saturating_sub(inset_w),
@@ -564,8 +513,6 @@ pub fn resolve_overlay_rect(
     };
     let map = WrapMap::build(buf, 0, max_rows, cfg);
     let fit_inner_h = map.rows.len() as u16;
-    // Longest line width — for wrap-mode none this is the unwrapped length;
-    // for wrap-on it's the wrap target. Used for Centered/At/Left/Right fits.
     let fit_inner_w = match buf.wrap_mode() {
         WrapMode::None => longest_line_chars(buf, max_rows),
         _ => inner_w,
@@ -603,13 +550,13 @@ fn longest_line_chars(buf: &Buffer, max_rows: usize) -> u16 {
     longest
 }
 
-/// Stack of panels above the editor window tree. Bottom-to-top order: the
-/// renderer paints overlays in slice order so the last entry ends up on top,
-/// and the keymap resolver picks the topmost panel for input routing.
+/// Stack of panels above the editor window tree, bottom-to-top. The
+/// renderer paints overlays in slice order and the keymap resolver picks
+/// the topmost panel for input routing.
 ///
-/// The minibuffer enters the stack only when command mode is active (push on
-/// `set-mode 'command`, pop on `command-cancel`/`command-submit`). When the
-/// stack is empty, focus falls through to the editor window leaf.
+/// The minibuffer enters the stack only when command mode is active (push
+/// on `set-mode 'command`, pop on `command-cancel`/`command-submit`). When
+/// the stack is empty, focus falls through to the editor window leaf.
 #[derive(Default)]
 pub struct PanelStack {
     stack: Vec<Panel>,
@@ -654,9 +601,9 @@ impl PanelStack {
             .and_then(|p| p.keymap_layers.last().cloned())
     }
 
-    /// Keymap layers from the focused panel, most-recent first. Empty when
-    /// no panel is on the stack (editor windows have no layered modes of
-    /// their own — they just use the buffer's `EditingMode`).
+    /// Keymap layers from the focused panel, most-recent first. Empty
+    /// when no panel is on the stack — editor windows have no layered
+    /// modes of their own.
     pub fn top_keymap_layers(&self) -> &[Rc<str>] {
         self.stack
             .last()
@@ -664,28 +611,23 @@ impl PanelStack {
             .unwrap_or(&[])
     }
 
-    /// True if the topmost panel is the minibuffer.
     pub fn minibuffer_focused(&self) -> bool {
         self.stack.last().is_some_and(|p| p.is_minibuffer())
     }
 
-    /// Topmost overlay panel, if any. Skips a minibuffer panel that may be
-    /// sitting on top of overlays. Used by the renderer's "overlay cursor"
-    /// path and by `popup-close`/`popup-mode` lisp builtins.
+    /// Topmost overlay, skipping a minibuffer that may sit above it.
     pub fn top_overlay(&self) -> Option<&Panel> {
         self.stack.iter().rev().find(|p| p.is_overlay())
     }
 
-    /// Pop the topmost overlay (skipping a minibuffer if present). Returns
-    /// the popped panel, or `None` if there's no overlay on the stack.
+    /// Pop the topmost overlay (skipping a minibuffer if present).
     pub fn pop_top_overlay(&mut self) -> Option<Panel> {
         let idx = self.stack.iter().rposition(|p| p.is_overlay())?;
         Some(self.stack.remove(idx))
     }
 
-    /// Remove the overlay panel registered under `name` (regardless of
-    /// stack position). Used by `popup-show` to re-raise an existing popup
-    /// and by `popup-hide NAME` to dismiss a specific one.
+    /// Remove the overlay registered under `name` regardless of stack
+    /// position.
     pub fn remove_overlay_by_name(&mut self, name: &str) -> Option<Panel> {
         let idx = self
             .stack
@@ -694,14 +636,12 @@ impl PanelStack {
         Some(self.stack.remove(idx))
     }
 
-    /// Pop the topmost minibuffer panel (skipping overlays). Used when
-    /// exiting command mode while overlays may still be open.
+    /// Pop the topmost minibuffer panel (skipping overlays).
     pub fn pop_minibuffer(&mut self) -> Option<Panel> {
         let idx = self.stack.iter().rposition(|p| p.is_minibuffer())?;
         Some(self.stack.remove(idx))
     }
 
-    /// Iterate just the overlay panels, bottom-to-top.
     pub fn overlays(&self) -> impl Iterator<Item = &Panel> {
         self.stack.iter().filter(|p| p.is_overlay())
     }
@@ -763,8 +703,6 @@ mod tests {
         assert_eq!(r.width, 80);
     }
 
-    /// Cursor near the top of a tall leaf — there's plenty of room below,
-    /// so the popup drops one row beneath the cursor.
     #[test]
     fn at_cursor_drops_below_when_room() {
         let p = Placement::AtCursor {
@@ -783,7 +721,6 @@ mod tests {
         assert_eq!(r.height, 8);
     }
 
-    /// Cursor near the bottom — not enough room below, falls back to above.
     #[test]
     fn at_cursor_flips_above_when_no_room_below() {
         let p = Placement::AtCursor {
@@ -801,7 +738,6 @@ mod tests {
         assert_eq!(r.height, 8);
     }
 
-    /// Cursor near the right edge — popup shifts left to stay inside leaf.
     #[test]
     fn at_cursor_shifts_left_to_fit_horizontally() {
         let p = Placement::AtCursor {
@@ -819,9 +755,8 @@ mod tests {
         assert_eq!(r.width, 20);
     }
 
-    /// Multi-window: the popup respects the focused leaf's bounds, not the
-    /// frame bounds. Right-half leaf with cursor near its right edge → popup
-    /// shifts to keep it inside the leaf, not the frame.
+    /// In a split, the popup must shift to stay inside the focused leaf,
+    /// not the whole frame.
     #[test]
     fn at_cursor_respects_focused_leaf_in_split() {
         let p = Placement::AtCursor {
@@ -840,7 +775,6 @@ mod tests {
         assert_eq!(r.y, 6);
     }
 
-    /// No anchor available → falls back to centered.
     #[test]
     fn at_cursor_falls_back_to_centered_without_anchor() {
         let p = Placement::AtCursor {

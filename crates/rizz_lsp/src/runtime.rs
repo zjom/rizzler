@@ -1,12 +1,9 @@
 //! Process-wide tokio executor for the LSP subsystem.
 //!
-//! Created lazily on first access (`runtime()`). One dedicated `std::thread`
-//! drives a multi-threaded tokio runtime; the editor talks to it over
-//! crossbeam channels.
-//!
-//! The dispatcher task owns the `ClientRegistry` and is the single owner of
-//! every spawned `ClientHandle`. The editor calls `runtime().send_cmd(...)`
-//! to enqueue a `RuntimeCmd`; the dispatcher routes it to the matching
+//! Lazily started on first `runtime()` call: one dedicated `std::thread`
+//! drives a multi-threaded tokio runtime, and the editor talks to it over
+//! crossbeam channels. The dispatcher task is the sole owner of every
+//! spawned `ClientHandle` and routes each `RuntimeCmd` to the matching
 //! client's `ClientCmd` channel.
 
 use std::collections::HashMap;
@@ -26,7 +23,6 @@ pub struct LspRuntime {
 }
 
 impl LspRuntime {
-    /// Editor-side handle: send a command into the tokio dispatcher.
     pub fn send_cmd(&self, cmd: RuntimeCmd) {
         if let Err(e) = self.cmd_tx.send(cmd) {
             warn!(error = %e, "lsp runtime channel send failed (runtime gone?)");
@@ -40,7 +36,6 @@ impl LspRuntime {
 
 static RUNTIME: OnceLock<LspRuntime> = OnceLock::new();
 
-/// Lazily initialize and return the process-wide LSP runtime.
 pub fn runtime() -> &'static LspRuntime {
     RUNTIME.get_or_init(start_runtime)
 }
@@ -76,10 +71,9 @@ async fn dispatcher(cmd_rx: Receiver<RuntimeCmd>, events_tx: Sender<LspEvent>) {
     let mut next_client_id: u64 = 1;
 
     loop {
-        // The dispatcher itself runs in tokio but it sleeps on a blocking
-        // crossbeam_channel recv — keep the wait off the worker pool via
-        // `spawn_blocking`. The channel send rate is low so the indirection
-        // doesn't matter.
+        // crossbeam_channel::recv is blocking; offload it via spawn_blocking
+        // so we don't park a tokio worker. Send rate is low enough that the
+        // hop doesn't matter.
         let cmd = tokio::task::spawn_blocking({
             let cmd_rx = cmd_rx.clone();
             move || cmd_rx.recv()

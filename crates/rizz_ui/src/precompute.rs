@@ -1,17 +1,9 @@
-//! Build a [`RenderedFrame`] from the editor's current state.
-//!
-//! Pipeline:
-//!
-//! 1. Snapshot the theme (so a `face-define` from inside a render callback
-//!    only affects the next frame).
-//! 2. Evaluate the user's `set-frame` fn — its return value is parsed into a
-//!    [`Widget`] tree.
-//! 3. For every file buffer, pre-render the gutter rows using the
-//!    state-level gutter callback (set via the `set-gutter` lisp builtin).
-//! 4. Build per-buffer decorator ranges: built-in `base-fg`, selection
-//!    highlight, current-line highlight, plus the buffer's `PropStore`
-//!    (text properties + overlays).
-//! 5. Build soft-wrap layouts for buffers that opt in.
+//! Build a [`RenderedFrame`] from the editor's current state: snapshot the
+//! theme, evaluate the user's `set-frame` fn into a [`Widget`] tree,
+//! pre-render gutters and decorator ranges for each buffer, and build
+//! soft-wrap layouts for opt-in buffers. The theme is snapshotted up front
+//! so a `face-define` from inside a render callback only affects the next
+//! frame.
 
 use std::rc::Rc;
 
@@ -41,15 +33,12 @@ pub struct PrecomputeInput<'a> {
     pub windows: &'a WindowTree,
     pub frame_fn: Option<&'a Rc<Value>>,
     pub theme: &'a ThemeCell,
-    /// Stable id of the minibuffer. Used to skip decorator passes — the
-    /// minibuffer is plain text, no syntax/selection/cursor-line highlight.
+    /// Skipped from decorator passes — the minibuffer is plain text.
     pub minibuffer: BufferId,
-    /// File buffers (the ones the user can cycle through with `:bn`/`:bp`).
-    /// Only these get a gutter; popup-backing buffers don't.
+    /// File buffers (cycled via `:bn`/`:bp`). Only these get a gutter;
+    /// popup-backing buffers don't.
     pub file_bufs: &'a [BufferId],
-    /// Gutter render fn + width policy. `gutter = None` means "no gutter" —
-    /// file buffers render without one. Set per-frame from State so a
-    /// `set-gutter` lisp call takes effect the next render.
+    /// `None` means "no gutter".
     pub gutter: Option<&'a Rc<Value>>,
     pub gutter_width: GutterWidth,
     pub lisp_env: &'a Env,
@@ -160,9 +149,8 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
     )
 }
 
-/// The fallback layout used when no `set-frame` fn has been installed
-/// (or when one errors out). Renders editor windows + minibuffer with no
-/// gutter, no status line.
+/// Fallback layout when no `set-frame` fn is installed (or one errored).
+/// Renders editor windows + minibuffer with no gutter and no status line.
 fn default_layout() -> Widget {
     use crate::widget::{ConstraintKind, StackDir};
     Widget::Stack {
@@ -245,10 +233,9 @@ fn pad_line_to_width(spans: Vec<Span<'static>>, used: usize, width: u16) -> Line
     Line::from(spans)
 }
 
-/// Always-on decorator passes: base-fg, optional tree-sitter syntax,
-/// current-line highlight, selection highlight. Order is layered: later
-/// passes paint over earlier ones, so syntax colours the text after base-fg
-/// then cursor-line + selection backgrounds take precedence.
+/// Order matters: later passes paint over earlier ones. Base-fg first,
+/// then optional syntax/diagnostics, then cursor-line and selection
+/// backgrounds on top.
 fn push_builtin_decorators(buf: &Buffer, theme: &Theme, rb: &mut RenderedBuffer) {
     rb.decorators.push(base_fg_ranges(buf, theme));
     let syntax = syntax_ranges(buf, theme);
@@ -263,10 +250,9 @@ fn push_builtin_decorators(buf: &Buffer, theme: &Theme, rb: &mut RenderedBuffer)
     rb.decorators.push(selection_ranges(buf, theme));
 }
 
-/// Emit a styled range for every LSP diagnostic attached to the buffer
-/// that falls inside the viewport. Faces are named `diagnostic.error`,
-/// `diagnostic.warning`, etc. (see `rizz_core::Severity::face`); users
-/// theme them via the existing `face-define` builtin.
+/// Styled ranges for every LSP diagnostic in the viewport. Faces are
+/// `diagnostic.error`, `diagnostic.warning`, etc. (see
+/// `rizz_core::Severity::face`).
 fn diagnostic_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
     let mut ranges = Vec::new();
     let diags = buf.diagnostics();
@@ -315,11 +301,11 @@ fn diagnostic_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
     DecoratorRanges { ranges }
 }
 
-/// Walk the buffer's tree-sitter highlighter (if attached) and emit a styled
-/// range per highlight capture whose row falls inside the viewport.
-/// Pre-condition: the highlighter's tree must already be in sync with the
-/// rope. `State::precompute_frame` calls [`Buffer::refresh_highlight`] before
-/// this runs, so the tree is current.
+/// Styled ranges for tree-sitter captures in the viewport.
+///
+/// Pre-condition: the highlighter's tree must be in sync with the rope —
+/// `State::precompute_frame` calls [`Buffer::refresh_highlight`] before
+/// this runs.
 fn syntax_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
     let mut ranges = Vec::new();
     let Some(h) = buf.highlight() else {
@@ -352,7 +338,7 @@ fn syntax_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
         let Some(style) = resolve_syntax_face(theme, &span.capture) else {
             continue;
         };
-        // tree-sitter gives us byte offsets; rope coords are char-based.
+        // tree-sitter byte offsets → rope char coords.
         let s_char = rope.byte_to_char(span.start_byte);
         let e_char = rope.byte_to_char(span.end_byte);
         let s_row = rope.char_to_line(s_char);
@@ -492,8 +478,8 @@ fn selection_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
     DecoratorRanges { ranges }
 }
 
-/// Walk a buffer's text properties + overlays and produce render-ready
-/// [`StyledRange`]s clipped to the visible viewport.
+/// Render-ready [`StyledRange`]s from the buffer's text properties and
+/// overlays, clipped to the visible viewport.
 pub fn build_prop_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
     let mut ranges = Vec::new();
     let start_row = buf.file_pos().row;
@@ -567,10 +553,10 @@ fn emit_clipped(
     }
 }
 
-/// Look up a tree-sitter capture's face. Tries the fully-qualified name
-/// first (`syntax.function.method`), then peels off dotted suffixes
-/// (`syntax.function`) so a theme that only defines the base category still
-/// styles every refinement of it.
+/// Resolve a tree-sitter capture's face. Tries the fully-qualified name
+/// (`syntax.function.method`), then peels off dotted suffixes
+/// (`syntax.function`, `syntax`) so a theme defining only the base
+/// category still styles every refinement.
 fn resolve_syntax_face(theme: &Theme, capture: &str) -> Option<Style> {
     let mut name: &str = capture;
     loop {

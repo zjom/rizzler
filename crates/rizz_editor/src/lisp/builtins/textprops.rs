@@ -1,3 +1,6 @@
+//! Text-property and overlay builtins: tag ranges with face/display props
+//! and manage mutable overlays.
+
 use std::rc::Rc;
 
 use rizz::runtime::{RuntimeError, Value};

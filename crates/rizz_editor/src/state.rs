@@ -283,10 +283,9 @@ fn resolve_workdir(path: Option<&Path>, cwd: &Path) -> PathBuf {
     }
 }
 
-/// The directory holding `init.rz` when the caller doesn't override it.
-/// In debug/test builds this is the workspace root — where `init.rz` lives
-/// in the source tree — so editing the checked-in file is the loop you get.
-/// In release builds it's `$XDG_CONFIG_HOME/rizz` (or `~/.config/rizz`).
+/// Directory holding `init.rz` when the caller doesn't override it.
+/// Debug/test builds use the workspace root (so the checked-in `init.rz` is
+/// the edit loop); release builds use `$XDG_CONFIG_HOME/rizz`.
 #[cfg(any(test, debug_assertions))]
 fn default_config_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -522,11 +521,10 @@ impl State {
         eval_result.map_err(init_eval_err)
     }
 
-    /// Read `<config_dir>/init.rz` from disk (seeding it from the embedded
-    /// template if missing) and return its contents. Used by the lisp
-    /// `reload-config` builtin, which evals the result against the live env —
-    /// the builtin can't call back into `eval_lisp_script` because the runtime
-    /// is already on the stack when a builtin runs.
+    /// Read `<config_dir>/init.rz` (seeding from the embedded template if
+    /// missing). The lisp `reload-config` builtin uses this rather than
+    /// re-entering `eval_lisp_script`, since the runtime is already on the
+    /// stack when a builtin runs.
     pub fn load_init_script(&self) -> anyhow::Result<String> {
         load_init_script(&self.config_dir)
     }
@@ -698,15 +696,11 @@ impl State {
         self.journal.commands()
     }
 
-    /// Bridge from Rust-internal failure paths (eval errors, render-callback
-    /// errors) to the lisp-side `notify` fn defined in `default.lisp`.
-    ///
-    /// Safe to call from inside a lisp builtin: when the runtime has already
-    /// been checked out via `with_lisp`, the message is queued and drained
-    /// on the way out of that call, so the user still gets their popup —
-    /// just one tick later. Without the queue we'd either crash on a
-    /// recursive `lisp.take()` or have to fall back to a silent
-    /// `record_message`, which is invisible until the user opens `:messages`.
+    /// Bridge from Rust failure paths (eval errors, render-callback errors)
+    /// to the lisp-side `notify` fn. Safe to call from inside a lisp builtin:
+    /// when the runtime is checked out via `with_lisp`, the message is queued
+    /// and drained on the way out — avoiding a recursive `lisp.take()` crash
+    /// and the silent fallback to `record_message`.
     pub fn notify_via_lisp(&mut self, msg: &str) {
         debug!(msg, "notify_via_lisp");
         if self.lisp.is_none() {
@@ -818,9 +812,8 @@ impl State {
 
     fn dispose_overlay_buf(&mut self, removed: BufferId) {
         info!(?removed, "closing overlay");
-        // Only clean up the backing buffer if it's not a file buffer (those
-        // outlive their panel — closing a popup that happened to be viewing
-        // file buf 2 shouldn't delete file buf 2).
+        // File buffers outlive their panel — closing a popup viewing file
+        // buf 2 must not delete file buf 2.
         if !self.bufs.is_file_buf(removed) && removed != self.bufs.minibuffer_id() {
             self.bufs.remove(removed);
             let first = self.bufs.first_file_buf();
@@ -941,9 +934,8 @@ impl State {
             &highlights,
         )
         .map_err(|e| anyhow::anyhow!(e))?;
-        // Clear any one-shot warning or failed-install marker we've recorded
-        // for this grammar so a later uninstall+reinstall cycle can warn or
-        // retry again if needed.
+        // Reset one-shot warning + failed-install markers so a later
+        // uninstall+reinstall cycle can warn or retry again.
         let key = Rc::<str>::from(name);
         self.warned_missing_grammars.remove(&key);
         self.failed_auto_installs.remove(&key);
@@ -1038,9 +1030,8 @@ impl State {
             self.notify_via_lisp(&msg);
             match self.install_grammar(&grammar_name, InstallOpts::default()) {
                 Ok(()) => {
-                    // `install_grammar` → `register_grammar` already loops
-                    // over open buffers and attaches the new highlighter, so
-                    // there's nothing left to do here.
+                    // `install_grammar` → `register_grammar` already attaches
+                    // the new highlighter to every open buffer.
                 }
                 Err(e) => {
                     self.failed_auto_installs.insert(key);
@@ -1059,8 +1050,6 @@ impl State {
             self.notify_via_lisp(&msg);
         }
     }
-
-    // ---- LSP integration ----------------------------------------------
 
     /// True when a server is cached locally (PATH or recipe-built) for
     /// `name`. Pure local check; never touches the network.
@@ -1149,7 +1138,6 @@ impl State {
             return;
         };
 
-        // Resolve the binary: PATH/cache first, then auto-install if enabled.
         let mut installed = try_load_cached_lsp(&server_name, &self.lsp_manifest);
         let key: Rc<str> = Rc::from(server_name.as_str());
         if installed.is_none() {
@@ -1183,7 +1171,6 @@ impl State {
             None => return,
         };
 
-        // Compute workspace root and language id.
         let root_dir = find_workspace_root(&path, &installed.spec.root_markers)
             .unwrap_or(self.workdir.to_path_buf());
         let root_uri = path_to_uri(&root_dir);
@@ -1240,22 +1227,16 @@ impl State {
     )> {
         let b = self.bufs.get(buf)?;
         let handle = b.lsp_handle()?;
-        // Trait object: downcast won't work without manual support. Use
-        // the buffer's URI cache instead — every attached buffer has a URI
-        // registered in `buf_by_uri`. We map back to it by searching.
+        // The trait-object attachment can't be downcast for client+encoding,
+        // so we look it up via `buf_by_uri` (every attached buffer is
+        // registered there) and the manifest entry for the file's extension.
         let uri = self
             .buf_by_uri
             .iter()
             .find_map(|(uri, bid)| if *bid == buf { Some(uri.clone()) } else { None })?;
-        let _ = handle; // suppress unused
-        let _attach_marker = b.diagnostics(); // ensure handle present
+        let _ = handle;
+        let _attach_marker = b.diagnostics();
         let abs = b.abs_pos();
-        // We don't actually have direct access to client+encoding without
-        // a typed attachment. Look them up via the registry by name —
-        // but we don't store name on the buffer. Instead, since each
-        // ensure_running was indexed by name and the buffer's URI was
-        // registered alongside, we look up *any* running client whose
-        // name's manifest entry claims this extension.
         let ext = b.fs_path().and_then(|p| {
             p.extension()
                 .and_then(|e| e.to_str())
@@ -1344,8 +1325,7 @@ impl State {
             return;
         };
         let seq = self.next_lsp_seq();
-        // Single-position range is enough for MVP; visual-selection-driven
-        // ranges can be wired later.
+        // TODO: support visual-selection-driven ranges.
         let range = lsp_types::Range {
             start: position,
             end: position,
@@ -1361,8 +1341,8 @@ impl State {
     }
 
     pub(crate) fn lsp_send_did_open_focused(&mut self) {
-        // `set_lsp_handle` already fires `did_open` on installation. Kept
-        // as a hook so future paths that need to re-open have a slot.
+        // `set_lsp_handle` already fires `did_open` on install; this hook
+        // exists for future re-open paths.
     }
 
     pub(crate) fn lsp_send_did_close_focused(&mut self) {
@@ -1392,8 +1372,8 @@ impl State {
             );
             return;
         };
-        // Drop attachments on every buffer that uses this server, then
-        // shut down the client; the next buffer open re-spawns.
+        // Detach every buffer using this server and shut down the client;
+        // the next buffer open re-spawns it.
         let uris: Vec<String> = self.buf_by_uri.keys().cloned().collect();
         for uri in &uris {
             if let Some(&bid) = self.buf_by_uri.get(uri)
@@ -1405,13 +1385,11 @@ impl State {
         self.buf_by_uri.clear();
         self.lsp_registry.shutdown(&server_name);
         self.notify_via_lisp(&format!("lsp `{server_name}` restarted"));
-        // Re-attach to the focused buffer eagerly.
         self.install_lsp_client(buf);
     }
 
     pub(crate) fn show_lsp_hover(&mut self, contents: Arc<str>, _anchor: Position<usize>) {
-        // Minimal MVP: surface as a notify. A proper floating overlay is
-        // hooked up via the UI integration task.
+        // TODO: surface as a floating overlay instead of a notify.
         let s: &str = &contents;
         if !s.is_empty() {
             self.notify_via_lisp(&format!("hover: {s}"));
@@ -1434,8 +1412,7 @@ impl State {
             ));
             return;
         };
-        // Open the target file (reuse if already open) and jump. The buffer
-        // may be brand new — its viewport is `(0,0)` until layout runs, and
+        // A brand-new buffer has viewport `(0,0)` until layout runs, and
         // cursor clamping / centering / syntax highlighting all bail when
         // viewport row is zero. Refresh viewports first so the landing +
         // centering operate on real dimensions.
@@ -1462,9 +1439,8 @@ impl State {
     ) {
         if items.is_empty() {
             self.lsp_pending_completion = None;
-            // Still hand `[]` to the callback so the lisp side can dismiss
-            // any open completion popup. Falls back to notify when no
-            // callback is installed.
+            // Hand `[]` to the callback so the lisp side can dismiss any
+            // open completion popup.
             if self.lsp_completion_fn.is_some() {
                 self.fire_lsp_completion_fn(&items, anchor);
             } else {
@@ -1628,10 +1604,8 @@ impl State {
         if edits.is_empty() {
             return;
         }
-        // Convert each TextEdit to a (char-range start, char-range end,
-        // new_text) tuple, sort in reverse order so applying earlier
-        // edits doesn't shift later positions, and dispatch as
-        // `delete_range` + `insert_many` pairs.
+        // Apply edits back-to-front so an earlier edit can't shift the
+        // char positions of a later one.
         let mut sorted: Vec<&rizz_actions::TextEditOwned> = edits.iter().collect();
         sorted.sort_by(|a, b| {
             (b.range.start.row, b.range.start.col).cmp(&(a.range.start.row, a.range.start.col))
@@ -1648,8 +1622,6 @@ impl State {
             let end_idx = end_line + edit.range.end.col;
             let start = start_idx.min(rope.len_chars());
             let end = end_idx.min(rope.len_chars()).max(start);
-            // Position the cursor at the edit start, delete the old range,
-            // and insert the replacement.
             b.land_cursor_to(edit.range.start.row, edit.range.start.col);
             if end > start {
                 b.delete_range(start, end);
@@ -1848,29 +1820,20 @@ impl State {
         self.count_prefix.or_one()
     }
 
-    /// Read-only handle to the editor's vim-style registers. Lisp builtins
-    /// use this to expose `(register-read ...)` / `(registers)` without
-    /// owning a `&mut State`.
     pub fn registers(&self) -> &Registers {
         &self.registers
     }
 
-    /// Mutable handle to the editor's vim-style registers. Used by the lisp
-    /// `(register-write ...)` builtin and by tests.
     pub fn registers_mut(&mut self) -> &mut Registers {
         &mut self.registers
     }
 
-    /// Register name the next yank/delete/paste should target — vim's `"a`
-    /// prefix. `None` falls back to the unnamed register on the next
-    /// consuming action.
+    /// Register the next yank/delete/paste should target — vim's `"a` prefix.
+    /// `None` falls back to the unnamed register.
     pub fn pending_register(&self) -> Option<char> {
         self.pending_register
     }
 
-    /// Stage `name` as the next register to target. Cleared automatically by
-    /// the next consuming action, but callers can also reset it explicitly by
-    /// passing `None`.
     pub fn set_pending_register(&mut self, name: Option<char>) {
         self.pending_register = name;
     }
@@ -1889,10 +1852,8 @@ impl State {
         }
     }
 
-    /// Active keymap modes for the focused input context, most-specific first.
-    /// The top panel's named layers (e.g. `"popup"`, `"popup.files"`) precede
-    /// the focused buffer's [`EditingMode`]. When no panel is on the stack,
-    /// this is just `[buf.mode]`.
+    /// Active keymap modes for the focused input context, most-specific
+    /// first: the top panel's named layers, then the buffer's [`EditingMode`].
     fn active_modes(&self) -> Vec<Rc<str>> {
         let mut v: Vec<Rc<str>> = self
             .panels
@@ -1939,9 +1900,9 @@ impl State {
                 buf.viewport = Position::new(leaf.area.width, leaf.area.height);
             }
             if leaf.path == focused_path {
-                // Approximate cursor frame coords — exact rendering path
-                // adds the gutter offset, but for placement size selection
-                // a small column offset doesn't matter.
+                // Approximate cursor frame coords — the rendering path adds
+                // the gutter offset, but a small column offset doesn't matter
+                // for placement-size selection.
                 if let Some(buf) = self.bufs.get(leaf.buf) {
                     let c = buf.cursor_pos();
                     cursor_anchor = Some(rizz_ui::panel::CursorAnchor {
@@ -2026,9 +1987,8 @@ impl State {
     }
 
     fn count_eligible(&self) -> bool {
-        // Count prefix is only honoured for editor windows in a non-visual
-        // editing mode — any panel on the stack means input is going somewhere
-        // else (popup, minibuffer) and digits should pass through verbatim.
+        // A panel on the stack steals input (popup/minibuffer); digits
+        // should pass through verbatim.
         if !self.panels.is_empty() {
             return false;
         }
@@ -2048,8 +2008,8 @@ impl State {
     pub fn apply(&mut self, actions: &[Rc<Action>]) -> io::Result<()> {
         for action in actions {
             trace!(action = ?action.as_ref(), "applying action");
-            // Only mutating actions against the minibuffer text trigger a
-            // refresh; arrows / `<esc>` / submit handle themselves.
+            // Only text-mutating actions trigger a live-search refresh;
+            // arrows / `<esc>` / submit handle themselves.
             let edits_minibuffer_text = matches!(
                 action.as_ref(),
                 Action::InsertChar(_)
@@ -2211,9 +2171,8 @@ impl State {
                     };
                     let f = self.focused_buf_id();
                     debug!(buf = ?f, ?name, before, count, "Action::Paste");
-                    // `count > 1` multiplies the text in one shot — matches
-                    // vim's `Np`, where the inserted text is N copies of the
-                    // register's payload (not N successive paste positions).
+                    // Vim's `Np` inserts N copies of the register payload
+                    // in one shot, not N successive pastes.
                     let n = (*count).max(1) as usize;
                     let entry = if n > 1 {
                         let mut joined = String::with_capacity(entry.text.len() * n);
@@ -2292,22 +2251,18 @@ impl State {
                     let pattern = self.bufs.minibuffer().text();
                     debug!(pattern, "Action::SearchSubmit");
                     if pattern.is_empty() {
-                        // Empty submit → repeat last search forward from
-                        // wherever live search left the cursor (vim's
-                        // "/<enter>" semantic). The origin is no longer
-                        // useful at this point.
+                        // Vim's `/<enter>` semantic: repeat last search
+                        // forward from wherever live search left the cursor.
                         self.search.take_origin();
                         self.exit_minibuffer();
                         if self.search.last_pattern().is_some() {
                             rizz_search::repeat_search(self, SearchDir::Forward);
                         }
                     } else {
-                        // Live search already placed the cursor and painted
-                        // overlays; just commit by recording the pattern in
-                        // the `/` register and dropping the origin so cancel
-                        // can't fire afterwards. Center the viewport on the
-                        // match — vim's `nzz` flow, applied to the initial
-                        // submit as well as `n`/`N` repeats.
+                        // Live search already placed cursor + overlays. Just
+                        // record the pattern in `/` and drop origin so cancel
+                        // can't fire later. Center the viewport on the match
+                        // (vim's `nzz`, applied to submit as well as n/N).
                         self.search.take_origin();
                         self.registers.record_search(&*pattern);
                         self.exit_minibuffer();
@@ -2415,10 +2370,9 @@ impl State {
                     self.lsp_send_execute_command(*client, command.clone());
                 }
             }
-            // Live-`/`-search: after any minibuffer-text-mutating action,
-            // re-anchor the search at origin and re-run with the freshly
-            // typed pattern. Skipped for the action arms that handle search
-            // explicitly (Submit/Cancel/Next/Prev).
+            // After any minibuffer-text edit during a live `/` search,
+            // re-anchor at origin and re-run with the new pattern. Submit/
+            // Cancel/Next/Prev handle search themselves and are skipped.
             if edits_minibuffer_text && self.bufs.minibuffer().mode() == EditingMode::Search {
                 rizz_search::refresh_live_search(self);
             }
@@ -2429,8 +2383,7 @@ impl State {
     fn set_mode(&mut self, mode: EditingMode) {
         if matches!(mode, EditingMode::Command | EditingMode::Search) {
             debug!(?mode, "entering minibuffer-backed mode");
-            // Stash the cursor + scroll position so cancel can restore it
-            // and so live search has a stable origin to search from.
+            // Stash cursor + scroll for cancel-restore and live-search origin.
             if mode == EditingMode::Search {
                 let buf_id = self.focused_buf_id();
                 let buf = &self.bufs[buf_id];
@@ -2441,8 +2394,7 @@ impl State {
             }
             self.bufs.minibuffer_mut().clear();
             self.bufs.minibuffer_mut().set_mode(mode);
-            // Only push a fresh minibuffer panel if one isn't already on the
-            // stack — re-entering while already there is a no-op.
+            // Re-entering while already in a minibuffer mode is a no-op.
             if !self.panels.iter().any(|p| p.is_minibuffer()) {
                 let mb = self.bufs.minibuffer_id();
                 self.panels.push(Panel::minibuffer(mb));
@@ -2599,9 +2551,8 @@ impl State {
     /// `RenderedFrame` the renderer can consume without ever touching lisp.
     #[instrument(skip(self))]
     pub fn precompute_frame(&mut self) -> (RenderedFrame, Option<String>) {
-        // Bring every buffer's syntax tree up to date before precompute walks
-        // them immutably. `refresh_highlight` short-circuits when no language
-        // is attached or the tree is already clean.
+        // Sync syntax trees before precompute walks buffers immutably.
+        // `refresh_highlight` short-circuits when the tree is already clean.
         for (_, b) in self.bufs.iter_mut() {
             b.refresh_highlight();
         }
@@ -2640,11 +2591,9 @@ impl SearchHost for State {
     }
 
     fn focused_buf_id(&self) -> BufferId {
-        // Prefer the buffer captured when `/` opened so that searches started
-        // inside a popup keep targeting the popup buffer (rather than the
-        // editor window underneath) for live updates and `n`/`N` repeats.
-        // Falls back to the focused window when the recorded target is gone
-        // — e.g. the popup was closed between submit and `n`.
+        // Searches started inside a popup must keep targeting the popup
+        // buffer even after focus moves. Falls back to the focused window
+        // when the recorded target is gone (e.g. popup closed before `n`).
         if let Some(id) = self.search.target_buf()
             && self.bufs.contains(id)
         {
@@ -2675,12 +2624,12 @@ impl SearchHost for State {
     }
 }
 
-// Test support — `pub` so the lisp module's tests can use it.
+/// Test support — `pub` so the lisp module's tests can use it.
 pub mod test_support {
     use super::*;
     use rizz_ui::render::{Renderer, StateSnapshot};
 
-    /// A renderer that does nothing — used in tests that don't want to touch a terminal.
+    /// A renderer that does nothing — for tests that don't want to touch a terminal.
     pub struct NullRenderer;
     impl Renderer for NullRenderer {
         fn render(&mut self, _snap: StateSnapshot<'_>, _frame: &RenderedFrame) -> io::Result<()> {
@@ -2715,8 +2664,6 @@ mod tests {
         s.bufs[id].text()
     }
 
-    /// The first file buffer's id. Tests use it to address "the" editor
-    /// buffer the way they used to address `s.bufs[1]`.
     fn primary(s: &State) -> BufferId {
         s.bufs.first_file_buf()
     }
@@ -3033,8 +2980,6 @@ mod tests {
         assert_eq!(s.bufs[b].text(), "".to_string());
     }
 
-    // ---- registers ----------------------------------------------------
-
     fn reg_text(s: &State, name: char) -> Option<String> {
         s.registers().read(name).map(|e| e.text.to_string())
     }
@@ -3179,8 +3124,6 @@ mod tests {
         assert_eq!(s.bufs[b].text(), "hello hello world");
     }
 
-    // ---- text objects -------------------------------------------------
-
     #[test]
     fn delete_inner_word_under_cursor() {
         use rizz_text::TextObject;
@@ -3262,8 +3205,6 @@ mod tests {
         s.eval_lisp(r#"(select-inner "paren")"#).unwrap();
         assert_eq!(s.bufs[b].selected_text().as_deref(), Some("bar"));
     }
-
-    // ---- vim `r` / `R` ------------------------------------------------
 
     #[test]
     fn r_chord_replaces_char_under_cursor() {

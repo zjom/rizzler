@@ -1,6 +1,6 @@
-//! Concrete ratatui renderer. Walks the widget tree produced by the
-//! precompute pass into ratatui draws. Stateless wrt customization — every
-//! widget tree was assembled in lisp; this renderer just translates it.
+//! Concrete ratatui renderer. Walks the precomputed widget tree into
+//! ratatui draws — every customization decision was already made in lisp,
+//! so this layer just translates.
 
 use std::io::{self, Stdout};
 
@@ -24,10 +24,10 @@ use crate::{
     widget::{StackDir, Widget},
 };
 
-/// Per-walk context. `overlay` is `Some` when the walk is inside an overlay
-/// panel's widget tree — that's what resolves `Widget::BufferView { None }`
-/// to the enclosing panel's backing buffer and what lets the walker place
-/// the cursor inside the panel when it's on top.
+/// `overlay` is `Some` when the walk is inside an overlay panel's tree —
+/// it resolves `Widget::BufferView { None }` to the enclosing panel's
+/// buffer and lets the walker place the cursor in the panel when it's on
+/// top.
 #[derive(Clone, Copy, Default)]
 struct WalkCtx {
     overlay: Option<OverlayCtx>,
@@ -57,16 +57,13 @@ impl RatatuiRenderer {
 struct CursorPlacement {
     editor: Option<(u16, u16)>,
     overlay: Option<(u16, u16, CursorStyle)>,
-    /// Where the focused window leaf landed in the frame plus the editor
-    /// cursor's frame coords — fed into `Placement::AtCursor` resolution so
-    /// popups can anchor next to the cursor regardless of split layout.
-    /// Set even when a popup is on top: the popup's placement still wants
-    /// to follow the editor cursor, not the popup buffer's cursor.
+    /// Focused leaf bounds + editor cursor coords. Set even when a popup
+    /// is on top so `Placement::AtCursor` still follows the editor cursor
+    /// rather than the popup buffer's.
     anchor: Option<crate::panel::CursorAnchor>,
 }
 
-/// One non-focusable `Widget::Overlay` encountered during the main walk,
-/// stashed so it can be painted in a post-pass after the rest of the frame.
+/// One non-focusable `Widget::Overlay` deferred until after the main walk.
 struct DeferredOverlay<'a> {
     placement: Placement,
     child: &'a Widget,
@@ -94,10 +91,9 @@ impl Renderer for RatatuiRenderer {
                 WalkCtx::default(),
             );
 
-            // (w-overlay)s paint over the cells their child draws and
-            // nothing else — no Clear, so the editor underneath stays
-            // visible around the floated content. Users who want an opaque
-            // backdrop wrap their content in (w-block {"face": ...} …).
+            // No Clear here: (w-overlay) paints over only the cells its
+            // child draws, leaving the editor underneath visible. For an
+            // opaque backdrop, the user wraps in (w-block {"face": ...} …).
             for o in overlays {
                 let rect = o.placement.resolve(o.area, 0, 0);
                 if rect.width == 0 || rect.height == 0 {
@@ -229,10 +225,9 @@ fn walk_stack<'fr>(
     if children.is_empty() {
         return;
     }
-    // Overlay children are out-of-flow: they don't take a layout slice from
-    // the stack, they float over the stack's full area. Partition them out
-    // before computing the layout so the remaining children share the area
-    // as if the overlay wasn't there at all.
+    // Overlay children are out-of-flow: float over the stack's full area
+    // instead of consuming a layout slice. Partition them out so the
+    // in-flow children share the area as if the overlay weren't there.
     let (flow, floats): (Vec<&Widget>, Vec<&Widget>) = children
         .iter()
         .partition(|c| !matches!(c.unwrap_constraint(), Widget::Overlay { .. }));

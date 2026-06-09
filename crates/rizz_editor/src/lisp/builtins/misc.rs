@@ -1,3 +1,6 @@
+//! Catch-all builtins: focused mode/key queries, workdir, config-dir,
+//! `reload-config`.
+
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -41,8 +44,8 @@ pub(super) fn register(b: &mut Builtins) {
         "reload-config",
         0,
         |_, env| {
-            // Read source + capture config dir under the editor borrow, then
-            // drop it before eval so the parser can re-enter editor builtins.
+            // Read source + capture config dir under the editor borrow,
+            // then drop it before eval so editor builtins can be re-entered.
             let (src, dir) =
                 with_editor_mut(|st| st.load_init_script().map(|src| (src, st.config_dir())))
                     .map_err(|e| RuntimeError::Other(anyhow!("{e}")))?;

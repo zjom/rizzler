@@ -1,3 +1,5 @@
+//! Cursor motion builtins: named moves, relative deltas, line jumps.
+
 use std::str::FromStr;
 
 use rizz_actions::Action;

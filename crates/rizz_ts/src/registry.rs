@@ -10,18 +10,13 @@ use tree_sitter_language::LanguageFn;
 /// A loaded grammar living in a shared library. The `Library` must outlive
 /// every [`Highlighter`] that references this grammar — dropping it would
 /// dangle the `TsLanguage` pointer and every `Query` compiled against it.
-/// Held in an `Rc` so the registry and any highlighter built from it share
-/// ownership.
 pub struct TsGrammar {
     pub name: Rc<str>,
     pub(crate) language: TsLanguage,
-    /// Compiled once at registration; reused (via `Rc`) by every highlighter
-    /// the registry hands out for this grammar.
     pub(crate) query: Rc<Query>,
     pub(crate) capture_names: Rc<[Rc<str>]>,
-    /// Kept alive so `language` and `query` stay valid. Field name starts
-    /// with `_` because nothing reads it directly — its only job is `Drop`
-    /// ordering.
+    /// Kept alive so `language` and `query` stay valid; nothing reads it
+    /// directly, its only job is `Drop` ordering.
     _library: Library,
 }
 
@@ -32,9 +27,7 @@ impl std::fmt::Debug for TsGrammar {
 }
 
 /// Runtime registry of dynamically-loaded tree-sitter grammars, indexed by
-/// file extension (lowercase, no leading dot). The editor's `State` owns one;
-/// every buffer load consults it to install a highlighter for known
-/// extensions.
+/// file extension (lowercase, no leading dot).
 #[derive(Default)]
 pub struct TsRegistry {
     by_ext: HashMap<Rc<str>, Rc<TsGrammar>>,
@@ -70,9 +63,8 @@ impl TsRegistry {
                 source,
             })?
         };
-        // Resolve the `tree_sitter_<name>` factory, then copy the raw fn
-        // pointer out. The `Symbol` borrows `library`; the bare fn pointer
-        // stays valid for as long as `library` lives.
+        // Copy the raw fn pointer out so it isn't tied to the `Symbol`'s
+        // borrow of `library`; it stays valid as long as `library` lives.
         let symbol = format!("tree_sitter_{name}");
         let raw: unsafe extern "C" fn() -> *const () = unsafe {
             let sym: Symbol<unsafe extern "C" fn() -> *const ()> =
@@ -88,8 +80,8 @@ impl TsRegistry {
         // `&'static TSLanguage`. `library` is held in the `Grammar` we
         // build below, which keeps that storage live.
         let language: TsLanguage = unsafe { LanguageFn::from_raw(raw) }.into();
-        // Pre-flight: build a parser + query to catch ABI mismatches and
-        // bad queries before any state mutation.
+        // Build parser + query before mutating the registry so a bad ABI or
+        // bad query leaves it untouched.
         let mut parser = Parser::new();
         parser.set_language(&language)?;
         let query = Query::new(&language, highlights_query)?;
@@ -114,8 +106,8 @@ impl TsRegistry {
         Ok(())
     }
 
-    /// Build a highlighter for `path`, matched on the lowercased file
-    /// extension. Returns `None` when no registered grammar matches.
+    /// Build a highlighter for `path` by lowercased file extension. Returns
+    /// `None` when no registered grammar matches.
     pub fn highlighter_for_path(&self, path: &Path) -> Option<Highlighter> {
         let ext = path
             .extension()
@@ -130,6 +122,7 @@ impl TsRegistry {
     pub fn len(&self) -> usize {
         self.by_ext.len()
     }
+
 
     pub fn is_empty(&self) -> bool {
         self.by_ext.is_empty()

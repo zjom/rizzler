@@ -1,12 +1,9 @@
 //! Concrete `LspBufferHandle` implementation.
 //!
 //! Owns the per-document state the editor side needs to drive the LSP
-//! lifecycle: URI, language id, version counter, pending diagnostics, and
-//! a buffer of incremental changes ready to ship. Edits arrive via the
-//! `LspBufferHandle::record_edit` trait method (called from
-//! `Buffer::record_text_edit`); each one is converted to LSP coordinates
-//! and dispatched to the tokio side, where the per-client task batches
-//! them on a debounce timer.
+//! lifecycle: URI, language id, version counter, and pending diagnostics.
+//! Edits are converted to LSP coordinates here and dispatched to the tokio
+//! side, where the per-client task batches them on a debounce timer.
 
 use rizz_actions::LspClientId;
 use rizz_core::LspDiagnostic;
@@ -86,7 +83,6 @@ impl LspBufferHandle for LspBufferAttachment {
     }
 
     fn record_edit(&mut self, at_char: usize, removed: &str, inserted: &str, rope: &Rope) {
-        // Convert char index → (line, byte_col) for the splice start.
         let row = rope.char_to_line(at_char);
         let line_start_byte = rope.line_to_byte(row);
         let start_byte_in_rope = rope.char_to_byte(at_char);

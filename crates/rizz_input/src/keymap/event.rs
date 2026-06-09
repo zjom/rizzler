@@ -1,3 +1,8 @@
+//! Normalized [`KeyEvent`] with a human-readable string syntax (`<c-w>q`,
+//! `<s-tab>`) that round-trips through [`KeyEvent::parse_sequence`] and
+//! [`fmt::Display`]. Shift on plain chars is stripped at the boundary so
+//! synthesised and user-typed events compare equal in the keymap.
+
 use std::fmt;
 
 pub use crossterm::event::{KeyCode, KeyModifiers};
@@ -91,8 +96,6 @@ fn parse_token(tok: &str) -> Result<KeyEvent, String> {
 }
 
 impl fmt::Display for KeyEvent {
-    /// Renders a `KeyEvent` in the same syntax `parse_sequence` accepts:
-    /// `q`, `<esc>`, `<c-w>`, `<s-tab>`, etc.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ctrl = self.modifiers.contains(KeyModifiers::CONTROL);
         let alt = self.modifiers.contains(KeyModifiers::ALT);

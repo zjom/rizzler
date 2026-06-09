@@ -1,3 +1,9 @@
+//! Prefix trie of key sequences to actions. Each `Node` carries an explicit
+//! per-key map plus an optional `on_char` wildcard used to catch arbitrary
+//! printable input (insert mode, vim `r<char>` capture). `walk` and
+//! `walk_flush` differ in how they treat unresolved descents during chord
+//! flush — see their docs.
+
 use std::collections::HashMap;
 use std::rc::Rc;
 

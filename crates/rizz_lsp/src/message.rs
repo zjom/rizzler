@@ -73,9 +73,9 @@ pub struct ResponseError {
     pub message: String,
 }
 
-/// One inbound LSP message. The JSON-RPC spec allows three shapes — a
-/// request from the server, a notification, or a response to one of our
-/// requests — and the `method`/`id` fields distinguish them.
+/// One inbound LSP message. JSON-RPC allows three shapes — request,
+/// notification, or response — distinguished by the presence of `method`
+/// and `id`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum IncomingMessage {

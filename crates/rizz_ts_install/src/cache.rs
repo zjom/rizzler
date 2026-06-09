@@ -1,4 +1,6 @@
-//! Filesystem layout for cached grammar artefacts.
+//! Filesystem layout for cached grammar artefacts. Both [`install`](crate::install)
+//! (writes) and [`try_load_cached`](crate::install::try_load_cached) (reads)
+//! go through the helpers here so the path scheme has one source of truth.
 //!
 //! ```text
 //! $XDG_DATA_HOME/rizz/grammars/
@@ -8,11 +10,6 @@
 //!     ├── .stamp                  resolved repo+rev, used to skip rebuilds
 //!     └── src/                    git checkout, kept for incremental rebuilds
 //! ```
-//!
-//! Layout is shared between [`install`](crate::install) (writes) and
-//! [`try_load_cached`](crate::install::try_load_cached) (reads) — both go
-//! through the helpers here so the path scheme has exactly one source of
-//! truth.
 
 use std::path::{Path, PathBuf};
 
@@ -47,8 +44,8 @@ pub fn stamp_path(root: &Path, name: &str) -> PathBuf {
 }
 
 /// Host-specific shared library filename. `libloading::Library::new` does no
-/// auto-suffixing, so we pick the right name explicitly and pass it through
-/// to `tree-sitter build -o`.
+/// auto-suffixing, so we pick the name explicitly and pass it through to
+/// `tree-sitter build -o`.
 pub const fn library_filename() -> &'static str {
     #[cfg(target_os = "macos")]
     {
@@ -73,9 +70,9 @@ pub struct CachedGrammar {
 }
 
 impl CachedGrammar {
-    /// Return the cached artefacts for `name`, but only when both the library
-    /// and the highlights file are on disk. Missing either piece means the
-    /// last install was partial; callers should re-install.
+    /// Return the cached artefacts for `name` only when both the library and
+    /// the highlights file are present; a missing piece means the last install
+    /// was partial and the caller should re-install.
     pub fn read(root: &Path, name: &str) -> Option<Self> {
         let library = library_path(root, name);
         let highlights = highlights_path(root, name);

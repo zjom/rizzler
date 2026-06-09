@@ -1,17 +1,12 @@
-//! Pure helpers for command-line tab completion. Locating the symbol-like
-//! token under the cursor and computing the longest common prefix among a
-//! set of candidate strings — both feed the lisp-side builtins in
+//! Pure helpers for command-line tab completion. Locates the symbol-like
+//! token under the cursor and computes the longest common prefix among
+//! candidate strings — both feed the lisp builtins in
 //! `lisp::builtins::minibuffer`.
 //!
-//! Token-finding mirrors how the user thinks of a "word" to complete: a run
-//! of non-whitespace, non-delimiter characters. The exclusion set covers
-//! the lisp surface syntax (parens, brackets, braces, quotes, the comment
-//! introducer) so that completing `(ed|it` only replaces `edit`, not the
-//! enclosing list.
+//! A "word" to complete is a run of non-whitespace, non-delimiter chars.
+//! The exclusion set covers lisp surface syntax (parens, brackets, quotes,
+//! comment introducer) so completing `(ed|it` only replaces `edit`.
 
-/// A character that participates in a completable token. Stops at whitespace
-/// and at any lisp delimiter, so the token under the cursor is exactly the
-/// symbol the user could be naming.
 fn is_word_char(c: char) -> bool {
     !c.is_whitespace()
         && !matches!(

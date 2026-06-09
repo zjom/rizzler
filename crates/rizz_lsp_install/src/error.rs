@@ -1,3 +1,5 @@
+//! Errors surfaced when resolving or installing an LSP server binary.
+
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]

@@ -1,3 +1,6 @@
+//! Minibuffer / command-line builtins: submit, cancel, evaluate, history,
+//! and tab-completion against the lisp env.
+
 use std::rc::Rc;
 
 use im::Vector;
@@ -80,10 +83,9 @@ pub(super) fn register(b: &mut Builtins) {
         Ok(Rc::new(Value::Str(s.into())))
     });
 
-    // Iterating the lisp env via `Env::filter` with an always-true predicate
-    // is the supported escape hatch — the bindings map is private. The clone
-    // is O(1) thanks to `im::HashMap`'s persistent representation, so the
-    // only real cost is the single linear scan we'd have done anyway.
+    // `Env::filter` with an always-true predicate is the supported way to
+    // iterate the (private) bindings map. The clone is O(1) thanks to
+    // `im::HashMap`'s persistent representation.
     b.be("command-completions", 0, |_, env| {
         let prefix = with_editor_mut(|st| st.minibuffer_completion_prefix());
         let mut names: Vec<Rc<str>> = Vec::new();

@@ -1,3 +1,5 @@
+//! Theme/face builtins: define named faces, look them up, build rgb values.
+
 use std::rc::Rc;
 
 use rizz::runtime::Value;

@@ -1,3 +1,8 @@
+//! Renderer trait, read-only state snapshot, and the precomputed per-frame
+//! data the renderer consumes. Decoupling these from `State` lets a
+//! renderer be written without depending on editor internals and lets
+//! `State` hand out a snapshot without exposing its private fields.
+
 use std::io;
 
 use ratatui::text::Line;
@@ -14,37 +19,23 @@ use crate::{
     window::WindowTree,
 };
 
-// Re-export for downstream callers that previously imported Display via this module.
 pub use rizz_core::Display as DisplayRe;
 
-/// Read-only view of the editor passed to renderers. Decoupling this from
-/// `State` means a renderer can be implemented without depending on the
-/// editor's internal type, and `State` can hand out a snapshot without
-/// exposing its private fields.
 pub struct StateSnapshot<'a> {
-    /// All buffers, keyed by stable `BufferId`. The renderer looks up the
-    /// buffer for each window leaf / panel / `BufferView` from this map.
     pub bufs: &'a SlotMap<BufferId, Buffer>,
-    /// Window tree — the renderer walks it to lay out editor windows.
     pub windows: &'a WindowTree,
-    /// The minibuffer — always present, may be empty.
     pub minibuffer: &'a Buffer,
-    /// Id of the focused editor buffer — what the status line shows as the
-    /// "current" buffer.
+    /// Id of the focused editor buffer.
     pub buf: BufferId,
     pub keyevent: Option<KeyEvent>,
     pub cursor_style: CursorStyle,
-    /// Panel stack — minibuffer (when command mode is active) plus any
-    /// overlay panels. Bottom-to-top order; the topmost entry has focus.
-    /// The renderer iterates `panels.overlays()` to paint floating panels,
-    /// and asks `panels.minibuffer_focused()` to know whether the cursor
-    /// belongs to the minibuffer.
+    /// Bottom-to-top stack of panels above the window tree; the topmost
+    /// entry has focus.
     pub panels: &'a PanelStack,
 }
 
 impl StateSnapshot<'_> {
-    /// The buffer that currently receives keystrokes — used for things like
-    /// the mode glyph in the status line.
+    /// Buffer that currently receives keystrokes.
     pub fn focused(&self) -> &Buffer {
         match self.panels.top_buf() {
             Some(id) => &self.bufs[id],
@@ -52,7 +43,6 @@ impl StateSnapshot<'_> {
         }
     }
 
-    /// Convenience: whether the minibuffer panel currently owns focus.
     pub fn focus_minibuffer(&self) -> bool {
         self.panels.minibuffer_focused()
     }
@@ -64,57 +54,37 @@ pub enum CursorStyle {
     Block,
 }
 
-/// Everything the renderer needs that came out of the precompute pass.
-///
-/// The precompute pass calls the user's `set-frame` fn to build a widget
-/// tree, parses it into [`Widget`], pre-renders per-buffer gutters and
-/// decorator ranges, and snapshots the theme. The renderer is then a pure
-/// consumer — no lisp call happens from inside `Renderer::render`.
+/// Output of the precompute pass — the renderer is a pure consumer of
+/// this, no lisp call happens from inside `Renderer::render`.
 pub struct RenderedFrame {
-    /// Resolved style of the `default` face — the baseline fg/bg the renderer
-    /// fills the whole frame with before drawing anything else.
+    /// Baseline fg/bg the renderer fills the whole frame with first.
     pub default_style: Style,
-    /// Snapshot of the theme as of the precompute pass. The renderer reads it
-    /// to resolve face references on widgets and popup chrome.
     pub theme: Theme,
-    /// The user-supplied frame layout. Already concrete — no callables remain
-    /// in the tree, gutters have been pre-rendered into `per_buf`.
+    /// Frame layout with no callables and gutters already pre-rendered.
     pub root: Widget,
-    /// Per-buffer precomputed data: gutter rows (built from the EditorTree's
-    /// gutter fn), built-in + user decorator ranges, and the soft-wrap layout.
-    /// Keyed by `BufferId`; only buffers actually visible this frame are
+    /// Per-buffer precomputed data; only buffers visible this frame are
     /// populated.
     pub per_buf: SecondaryMap<BufferId, RenderedBuffer>,
 }
 
-/// Per-buffer precomputed data — gutter rows and decorator ranges.
 #[derive(Default)]
 pub struct RenderedBuffer {
     pub gutter: Option<RenderedGutter>,
     pub decorators: Vec<DecoratorRanges>,
-    /// Visual-line layout for soft-wrapped buffers. `None` = no wrap;
-    /// renderer falls back to one screen row per file row. When `Some`,
-    /// the first entry corresponds to `buf.file_pos().row` and the slice
-    /// covers at least the viewport height.
+    /// Visual-line layout for soft-wrapped buffers. `None` = no wrap.
+    /// When `Some`, the first entry corresponds to `buf.file_pos().row`
+    /// and the slice covers at least the viewport height.
     pub wrap: Option<WrapMap>,
 }
 
 pub struct RenderedGutter {
-    /// Resolved column width — what the renderer reserves on the left of the
-    /// buffer view. For [`GutterWidth::Fixed`] this matches the configured
-    /// value; for [`GutterWidth::Fit`] it's the measured max across `rows`.
     pub width: u16,
-    /// One [`Line`] per visible row of the buffer's viewport. Already
-    /// padded to `width`.
+    /// One row per visible viewport row, already padded to `width`.
     pub rows: Vec<Line<'static>>,
 }
 
-/// How wide the gutter column should be.
-///
-/// `Fit` (the default) measures the widest row the gutter fn returns this
-/// frame and uses that — the gutter shrinks/grows with its content.
-/// `Fixed(n)` reserves exactly `n` cells regardless of content. `Fixed(0)`
-/// disables the gutter.
+/// `Fit` measures the widest row the gutter fn returns this frame.
+/// `Fixed(n)` reserves exactly `n` cells. `Fixed(0)` disables the gutter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GutterWidth {
     Fit,
@@ -127,9 +97,8 @@ impl Default for GutterWidth {
     }
 }
 
-/// Whole-buffer decorator output: a flat list of styled character ranges
-/// to apply after the base line content is drawn. Indices are absolute
-/// (file row, byte column within the row).
+/// Styled character ranges applied after a buffer's base line content.
+/// Indices are absolute (file row, byte column within the row).
 #[derive(Default)]
 pub struct DecoratorRanges {
     pub ranges: Vec<StyledRange>,
@@ -141,11 +110,11 @@ pub struct StyledRange {
     pub col: usize,
     pub len: usize,
     pub style: Style,
-    /// Pad the highlight out to the area's full width, regardless of how
-    /// many real characters the line has on this row.
+    /// Pad the highlight to the area's full width regardless of how many
+    /// real characters the line has.
     pub pad_to_width: bool,
-    /// If set, the renderer *replaces* the underlying chars in `[col, col+len)`
-    /// with this display content instead of restyling them.
+    /// When set, the renderer *replaces* chars in `[col, col+len)` with
+    /// this content instead of restyling them.
     pub display: Option<Display>,
 }
 

@@ -192,7 +192,6 @@ impl KeymapRegistry {
         actions
     }
 
-    /// Bind a key sequence in `mode` to `action`.
     pub fn set(&mut self, mode: Rc<str>, keys: &[KeyEvent], action: Rc<Action>) {
         self.cur = None;
         self.pending.clear();
@@ -262,8 +261,6 @@ impl<'a> IntoIterator for &'a KeymapRegistry {
 }
 
 impl KeymapRegistry {
-    /// Returns a borrowing iterator over every `(mode, path, action)` triple
-    /// registered across all modes.
     pub fn iter(&self) -> KeymapRegistryIter<'_> {
         self.into_iter()
     }

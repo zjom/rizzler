@@ -179,7 +179,6 @@ where
     }
 
     // TODO: streaming match over `rope.chunks()` for very large buffers.
-    // For now we materialize once per search — fine for typical files.
     let rope = target_buf.rope().clone();
     let text = rope.to_string();
 
@@ -310,7 +309,7 @@ pub fn repeat_search<H: SearchHost + ?Sized>(host: &mut H, dir: SearchDir) {
         }
         None => return,
     };
-    // Advance past the current match — vim's `n`/`N` semantic.
+    // Advance past the current match — vim's `n`/`N` semantic (exclusive).
     let found =
         run_search_from(host, pattern.as_ref(), dir, cursor_char, false, true).unwrap_or(false);
     if found && let Some(b) = host.buf_mut(target_id) {
@@ -342,16 +341,15 @@ pub fn refresh_live_search<H: SearchHost + ?Sized>(host: &mut H) {
     let r = run_search_from(host, &pattern, SearchDir::Forward, from_char, true, false);
     match r {
         Ok(true) => {
-            // Center the viewport on the live match as the user types,
-            // matching vim's `set scrolloff=999` feel without the
-            // overshoot when the pattern stops matching (`restore_origin`
-            // above already snapped back).
+            // Center the viewport on each live match as the user types.
+            // When the pattern stops matching, `restore_origin` above has
+            // already snapped the cursor back, so there's no overshoot.
             if let Some(b) = host.buf_mut(origin.buf) {
                 b.move_cursor(MoveKind::Center);
             }
         }
         Err(_) => {
-            // Partial regex — drop any stale paint but don't fight the user.
+            // Partial regex — drop stale paint without disturbing the cursor.
             clear_live_overlays(host);
         }
         _ => {}

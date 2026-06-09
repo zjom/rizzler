@@ -1,8 +1,8 @@
 //! Vim-style numeric prefix accumulator. In Normal / Visual modes, digits
 //! typed while no keymap sequence is in flight feed [`CountPrefix`] instead
 //! of resolving against the keymap — `3j`, `12gg`, etc. `0` only counts once
-//! a digit has already been seen (it stays bound to `line-start` when the
-//! count is empty).
+//! a digit has already been seen, so the empty-count `0` stays bound to
+//! `line-start`.
 
 use crate::keymap::{KeyCode, KeyEvent};
 

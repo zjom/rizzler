@@ -76,9 +76,7 @@ pub enum Action {
         kind: MoveKind,
         count: u32,
     },
-    /// Reverse the focused buffer's most recent tracked edit.
     Undo,
-    /// Re-apply the most recently undone edit on the focused buffer.
     Redo,
     /// Vim `g;` — jump to the position of the last edit. Repeated calls walk
     /// further back through the buffer's change tree. `count` takes that
@@ -202,8 +200,6 @@ pub enum Action {
     /// is re-evaluated on every keystroke.
     EvalLisp(Rc<Value>),
 
-    // ---- LSP, user-initiated ------------------------------------------
-
     /// Request `textDocument/hover` at the focused buffer's cursor and
     /// surface the response as a floating overlay near the cursor.
     LspHover,
@@ -228,8 +224,6 @@ pub enum Action {
     /// Send `textDocument/didClose` for the focused buffer. Synthesized
     /// by buffer-delete / file-path-changed paths.
     LspDidCloseFocused,
-
-    // ---- LSP, asynchronous (synthesized from server responses) --------
 
     /// Open a hover popup with the given contents anchored at the buffer's
     /// `anchor` absolute position.

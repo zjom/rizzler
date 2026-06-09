@@ -1,9 +1,7 @@
-//! Frame layout as a widget tree.
-//!
-//! The user's `init.lisp` registers a single function via `(set-frame ...)`
-//! that builds a widget tree each frame. The precompute pass calls it,
-//! parses the returned [`rizz::runtime::Value`] into a [`Widget`] tree, and
-//! the renderer walks the tree into ratatui draws.
+//! Frame layout as a widget tree. The user's `init.lisp` registers a
+//! function via `(set-frame ...)` that builds the tree each frame; the
+//! precompute pass parses its return value into [`Widget`], and the
+//! renderer walks it into ratatui draws.
 
 use std::rc::Rc;
 
@@ -18,28 +16,24 @@ use crate::styling::{Theme, spans_from_value};
 
 #[derive(Clone, Debug)]
 pub enum Widget {
-    /// Nothing — empty area.
     Empty,
-    /// One screen row of styled spans, with horizontal alignment within the
-    /// allocated rect.
+    /// One screen row of styled spans with horizontal alignment.
     Line {
         spans: Vec<Span<'static>>,
         align: Alignment,
     },
-    /// Vertical or horizontal stack of children.
     Stack {
         dir: StackDir,
         children: Vec<Widget>,
     },
-    /// Wraps a child with an explicit constraint when it appears inside a
-    /// [`Widget::Stack`]. Outside a stack the constraint is ignored.
+    /// Wraps a child with an explicit constraint when inside a
+    /// [`Widget::Stack`]; ignored elsewhere.
     Constrained {
         kind: ConstraintKind,
         n: u16,
         m: u16,
         child: Box<Widget>,
     },
-    /// Bordered/titled box around a child.
     Block {
         border: BorderStyle,
         title: Option<Rc<str>>,
@@ -48,22 +42,16 @@ pub enum Widget {
         title_face: Option<Rc<str>>,
         child: Box<Widget>,
     },
-    /// The editor window tree leaf. Renderer expands this into the current
-    /// `WindowTree`'s split layout. Gutter content + width are not part of
-    /// this widget any more — they're a state-level setting (see the lisp
-    /// `(set-gutter fn width)` builtin) so the per-buffer treatment doesn't
-    /// have to be encoded in the layout vocabulary.
+    /// Editor split layout. Gutter content + width are state-level (see
+    /// `(set-gutter fn width)`), so they aren't encoded here.
     EditorTree,
-    /// The minibuffer leaf. Single row.
     Minibuffer,
-    /// Render a single buffer into the allocated rect via `EditorView`. When
-    /// `buf` is `None`, the renderer fills it in with the enclosing popup's
-    /// backing buffer.
+    /// Render a single buffer. When `buf` is `None`, the renderer uses the
+    /// enclosing popup's backing buffer.
     BufferView { buf: Option<BufferId> },
-    /// Non-focusable floating overlay: paints `child` at `placement` on top
-    /// of the rest of the frame. Has no backing buffer and never receives
-    /// keys — it's pure decoration. The renderer collects overlays during
-    /// the main walk and paints them in a post-pass.
+    /// Non-focusable floating overlay — paints `child` over the rest of
+    /// the frame in a post-pass. Has no backing buffer and never receives
+    /// keys.
     Overlay {
         placement: Placement,
         child: Box<Widget>,
@@ -85,11 +73,9 @@ pub enum ConstraintKind {
 }
 
 impl Widget {
-    /// Translate this widget's outer constraint (if any) into a ratatui
-    /// [`Constraint`]. [`Widget::Empty`] takes zero cells so `(w-empty)` is
-    /// a true "no layout slot" placeholder in conditional branches — handy
-    /// when you want a stack child to disappear when its predicate is
-    /// false instead of leaving a blank row behind.
+    /// Translate the outer constraint into a ratatui [`Constraint`].
+    /// [`Widget::Empty`] takes zero cells so `(w-empty)` truly disappears
+    /// from a stack when its predicate is false.
     pub fn outer_constraint(&self) -> Constraint {
         match self {
             Widget::Constrained { kind, n, m, .. } => match kind {
@@ -110,9 +96,8 @@ impl Widget {
         }
     }
 
-    /// Direct subwidgets of this node. Tree walkers should prefer this over
-    /// hand-rolling per-variant recursion so a new variant only requires
-    /// adding one match arm here.
+    /// Direct subwidgets — walkers should prefer this so new variants
+    /// only require one match arm here.
     pub fn children(&self) -> WidgetChildren<'_> {
         match self {
             Widget::Stack { children, .. } => WidgetChildren::Many(children.iter()),
@@ -124,8 +109,7 @@ impl Widget {
     }
 }
 
-/// Iterator over a widget's direct children. Variant-specific so callers
-/// don't need to allocate.
+/// Allocation-free iterator over a widget's direct children.
 pub enum WidgetChildren<'a> {
     Empty,
     One(Option<&'a Widget>),
@@ -144,9 +128,9 @@ impl<'a> Iterator for WidgetChildren<'a> {
     }
 }
 
-/// Parse a widget [`Value`] (the shape returned by `vstack`, `text`, etc.)
-/// into a [`Widget`]. `()` and any value missing a recognized `"type"` tag
-/// become `Widget::Empty` so a partially-broken layout still renders something.
+/// Parse a widget [`Value`] (the shape returned by `vstack`, `text`, etc.).
+/// `()` and any value missing a recognized `"type"` tag become
+/// [`Widget::Empty`] so a partially broken layout still renders.
 pub fn parse_widget(v: &Rc<Value>, theme: &Theme) -> Result<Widget, RuntimeError> {
     match &**v {
         Value::Unit => Ok(Widget::Empty),

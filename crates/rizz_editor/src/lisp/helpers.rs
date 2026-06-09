@@ -15,23 +15,20 @@ use slotmap::{Key, KeyData};
 
 use super::{in_render_phase, with_editor_mut};
 
-/// Encode a `BufferId` as an i64 that round-trips through lisp's int value.
-/// Uses slotmap's FFI representation (index + version packed into a u64),
-/// reinterpreted as i64. The reverse is [`buf_id_from_int`].
+/// Encode a `BufferId` as an i64 that round-trips through lisp's int value
+/// via slotmap's FFI representation (index + version packed into a u64).
 pub(super) fn buf_id_to_int(id: BufferId) -> i64 {
     id.data().as_ffi() as i64
 }
 
-/// Decode an i64 from lisp back into a `BufferId`. The caller is responsible
-/// for checking the returned id is still live (`State::buf_exists`).
+/// Reverse of [`buf_id_to_int`]. Caller must verify the id is still live.
 pub(super) fn buf_id_from_int(n: i64) -> BufferId {
     BufferId::from(KeyData::from_ffi(n as u64))
 }
 
 /// Accumulates `(name, NativeFn)` entries plus deferred aliases, then folds
 /// them into a single [`Env`] via [`Builtins::build`]. Each builtin module
-/// receives a `&mut Builtins` and registers its functions through one of the
-/// `be*` / `bi*` methods (mirroring the original `be!` / `bi!` macros).
+/// registers its functions through the `be*` / `bi*` methods.
 pub(super) struct Builtins {
     entries: Vec<(&'static str, NativeFn)>,
     aliases: Vec<(&'static str, &'static str)>,
@@ -45,7 +42,7 @@ impl Builtins {
         }
     }
 
-    /// Register a `WithEnv` builtin (reads env, returns a value only).
+    /// Register a `WithEnv` builtin (reads env, returns a value).
     pub fn be<F>(&mut self, name: &'static str, nargs: usize, f: F)
     where
         F: Fn(&[Rc<Value>], &Env) -> Result<Rc<Value>, RuntimeError> + 'static,
@@ -86,9 +83,8 @@ impl Builtins {
         ));
     }
 
-    /// Bind `a` as a second name for the value already registered under `t`.
-    /// Aliases are resolved after every primary entry has been inserted, so
-    /// order vs. `be*`/`bi*` calls does not matter.
+    /// Bind `a` as a second name for the value registered under `t`. Resolved
+    /// after every primary entry, so order vs. `be*`/`bi*` doesn't matter.
     pub fn alias(&mut self, a: &'static str, t: &'static str) {
         self.aliases.push((a, t));
     }

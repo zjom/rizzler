@@ -1,3 +1,5 @@
+//! Soft-wrap mode / wrap-column / breakindent builtins.
+
 use std::rc::Rc;
 
 use rizz::runtime::Value;

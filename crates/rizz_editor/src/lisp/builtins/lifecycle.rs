@@ -1,3 +1,5 @@
+//! Top-level editor lifecycle builtins: `quit`, `set-mode`.
+
 use rizz_actions::Action;
 
 use super::super::helpers::{Builtins, apply, parse_mode_ident, unit};

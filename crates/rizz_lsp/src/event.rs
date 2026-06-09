@@ -15,16 +15,15 @@ use serde_json::Value;
 
 use crate::position::Encoding;
 
-/// Stable identifier for an in-flight request. The editor side stores its
-/// own routing state keyed by this; the tokio side uses it to match
-/// responses.
+/// Stable identifier for an in-flight request, assigned by the editor and
+/// echoed back on the corresponding response event.
 pub type RequestSeq = u64;
 
 #[derive(Debug)]
 pub enum RuntimeCmd {
-    /// Spawn a new client task. The runtime replies with the assigned
-    /// `LspClientId` on `reply` once `initialize` succeeds. The editor
-    /// side blocks the apply loop briefly here — initialize is fast.
+    /// Spawn a new client task. The runtime replies on `reply` once
+    /// `initialize` succeeds; the editor blocks briefly on this — the
+    /// handshake is fast.
     SpawnClient {
         name: String,
         binary: PathBuf,
@@ -32,7 +31,6 @@ pub enum RuntimeCmd {
         root_uri: Option<String>,
         reply: Sender<SpawnReply>,
     },
-    /// Send a `textDocument/didOpen` for `uri` with this version + text.
     DidOpen {
         client: LspClientId,
         uri: String,
@@ -40,41 +38,36 @@ pub enum RuntimeCmd {
         version: i32,
         text: String,
     },
-    /// Queue an incremental change. The client task debounces these and
-    /// emits a single `textDocument/didChange` per debounce window.
+    /// Queue an incremental change. The client task coalesces these and
+    /// emits one `textDocument/didChange` per debounce window.
     DidChange {
         client: LspClientId,
         uri: String,
         version: i32,
         changes: Vec<ChangeEvent>,
     },
-    /// Send `textDocument/didClose`.
     DidClose {
         client: LspClientId,
         uri: String,
     },
-    /// Send `textDocument/hover` at `pos` (LSP coordinates already converted).
     Hover {
         client: LspClientId,
         seq: RequestSeq,
         uri: String,
         position: lsp_types::Position,
     },
-    /// Send `textDocument/definition` at `pos`.
     GotoDefinition {
         client: LspClientId,
         seq: RequestSeq,
         uri: String,
         position: lsp_types::Position,
     },
-    /// Send `textDocument/completion` at `pos`.
     Completion {
         client: LspClientId,
         seq: RequestSeq,
         uri: String,
         position: lsp_types::Position,
     },
-    /// Send `textDocument/formatting`.
     Format {
         client: LspClientId,
         seq: RequestSeq,
@@ -82,27 +75,24 @@ pub enum RuntimeCmd {
         tab_size: u32,
         insert_spaces: bool,
     },
-    /// Send `textDocument/codeAction` for `range`.
     CodeAction {
         client: LspClientId,
         seq: RequestSeq,
         uri: String,
         range: lsp_types::Range,
     },
-    /// Send `workspace/executeCommand`.
     ExecuteCommand {
         client: LspClientId,
         seq: RequestSeq,
         command: String,
         arguments: Vec<Value>,
     },
-    /// Cancel an in-flight request via `$/cancelRequest`.
     Cancel {
         client: LspClientId,
         seq: RequestSeq,
     },
-    /// Shut down the client task cleanly. The runtime drives `shutdown`
-    /// → `exit` and reaps the child process.
+    /// Graceful shutdown: the runtime drives `shutdown` → `exit` and reaps
+    /// the child.
     Shutdown { client: LspClientId },
 }
 
@@ -123,7 +113,6 @@ pub struct ChangeEvent {
 
 #[derive(Debug, Clone)]
 pub enum LspEvent {
-    /// Server pushed `textDocument/publishDiagnostics` for `uri`.
     Diagnostics {
         client: LspClientId,
         uri: String,
@@ -154,29 +143,27 @@ pub enum LspEvent {
         seq: RequestSeq,
         actions: Vec<CodeActionOwned>,
     },
-    /// Server requested that we apply a workspace edit.
+    /// Server-initiated `workspace/applyEdit`.
     WorkspaceApplyEdit {
         client: LspClientId,
         edit: WorkspaceEditOwned,
     },
-    /// Server requested that we run one of its commands.
+    /// Server-initiated `workspace/executeCommand`.
     WorkspaceExecuteCommand {
         client: LspClientId,
         command: CommandOwned,
     },
-    /// Server crashed or exited unexpectedly.
     ServerExited {
         client: LspClientId,
         status: Option<i32>,
         stderr_tail: String,
     },
-    /// Server-initiated message we want to surface as a notify.
+    /// `window/showMessage` or `window/logMessage` from the server.
     Notify {
         client: LspClientId,
         kind: lsp_types::MessageType,
         message: String,
     },
-    /// Request error from the server (e.g., hover returned an error).
     RequestError {
         client: LspClientId,
         seq: RequestSeq,

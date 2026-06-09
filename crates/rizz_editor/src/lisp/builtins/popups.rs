@@ -1,3 +1,5 @@
+//! Overlay-panel (popup) builtins: show/hide/close/inspect.
+
 use std::rc::Rc;
 
 use rizz::runtime::Value;

@@ -1,3 +1,5 @@
+//! Window split/close/focus builtins.
+
 use rizz_actions::Action;
 use rizz_core::{FocusDir, SplitDir};
 

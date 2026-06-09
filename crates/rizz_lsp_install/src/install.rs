@@ -11,9 +11,8 @@ use crate::cache;
 use crate::manifest::{Manifest, ServerSpec};
 use crate::InstallError;
 
-/// Per-call overrides on top of the curated manifest entry. Everything is
-/// optional; `(lsp-install 'rust-analyzer)` with no extra args produces
-/// `InstallOpts::default()`.
+/// Per-call overrides layered on top of the manifest entry. Everything
+/// is optional; `(lsp-install 'rust-analyzer)` uses `InstallOpts::default()`.
 #[derive(Debug, Default, Clone)]
 pub struct InstallOpts {
     pub force: bool,
@@ -22,8 +21,8 @@ pub struct InstallOpts {
     pub install: Option<String>,
 }
 
-/// Successful resolution: a binary the editor can spawn, plus the spec it
-/// should hand to the LSP client task for `initialize`.
+/// Successful resolution: a binary path plus the spec to hand the LSP
+/// client task for `initialize`.
 #[derive(Debug, Clone)]
 pub struct InstalledServer {
     pub name: String,
@@ -31,7 +30,6 @@ pub struct InstalledServer {
     pub spec: ServerSpec,
 }
 
-/// Merge of the manifest entry and the per-call opts.
 fn resolve(name: &str, opts: &InstallOpts, manifest: &Manifest) -> Result<ServerSpec, InstallError> {
     let mut spec = manifest.get(name).cloned().unwrap_or_default();
     if spec.command.is_empty() {
@@ -64,8 +62,9 @@ fn stamp_for(spec: &ServerSpec) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Resolve a server binary: PATH first, then cache, then install recipe.
-/// Idempotent: a matching cache stamp short-circuits the recipe.
+/// Resolve a server binary: `$PATH` first, then the per-server cache,
+/// then the install recipe. A matching cache stamp short-circuits the
+/// recipe, so repeated calls are idempotent.
 #[instrument(skip(opts, manifest), fields(name = name))]
 pub fn install(
     name: &str,
@@ -171,9 +170,9 @@ pub fn install(
     })
 }
 
-/// Pure cache + PATH lookup, never runs the recipe. Used by the auto-attach
-/// hook on buffer open: if it returns `None`, the caller decides whether to
-/// invoke `install` or surface a notify.
+/// Pure cache + `$PATH` lookup; never runs the recipe. Used by the
+/// auto-attach hook so opening a buffer never blocks on a recipe. On
+/// `None`, the caller decides whether to invoke [`install`] or notify.
 pub fn try_load_cached(name: &str, manifest: &Manifest) -> Option<InstalledServer> {
     let spec = manifest.get(name)?.clone();
     if let Ok(binary) = which::which(&spec.command) {
@@ -196,9 +195,9 @@ pub fn try_load_cached(name: &str, manifest: &Manifest) -> Option<InstalledServe
         .map(str::trim)
         != Some(want_stamp.as_str())
     {
-        // Stale stamp: still return the binary — the spec hasn't changed
-        // meaningfully often enough that we want to throw the binary away
-        // on a recipe-text edit. `install --force` will rebuild.
+        // Stale stamp is not enough to discard the cached binary — a
+        // recipe-text edit shouldn't force a rebuild on buffer open.
+        // `install --force` is the way to rebuild.
         debug!(name, "stale stamp, returning cached binary anyway");
     }
     Some(InstalledServer {
@@ -221,7 +220,7 @@ mod tests {
 
     #[test]
     fn opts_command_override_lets_unknown_name_resolve_to_path() {
-        // Use `sh` because it's reliably on PATH on macOS/Linux test runners.
+        // `sh` is reliably on PATH on macOS/Linux test runners.
         let m = Manifest::default();
         let installed = install(
             "adhoc",

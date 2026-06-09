@@ -1,12 +1,9 @@
-//! Editor window tree.
-//!
-//! The window tree organizes the editor area into splits and leaves; each
-//! leaf points at a buffer via a stable `BufferId`. The minibuffer is *not*
-//! part of this tree — it's a separate single-row strip the renderer handles
-//! via [`crate::Widget::Minibuffer`].
+//! Editor window tree: splits and leaves, each leaf pointing at a buffer
+//! via a stable `BufferId`. The minibuffer lives outside this tree — it's
+//! a single-row strip rendered via [`crate::Widget::Minibuffer`].
 //!
 //! Direction enums ([`SplitDir`], [`FocusDir`]) live in `rizz_core` so
-//! `rizz_actions` can reference them without taking a UI dependency.
+//! `rizz_actions` can reference them without depending on this crate.
 
 #![allow(dead_code)]
 
@@ -46,7 +43,6 @@ impl FocusDirExt for FocusDir {
     }
 }
 
-/// One node in the window tree.
 #[derive(Debug, Clone)]
 pub enum Window {
     Leaf {
@@ -259,8 +255,8 @@ impl WindowTree {
         }
     }
 
-    /// Visit every leaf, calling `f` on its buffer id. Used when a buffer is
-    /// being removed to redirect leaves that pointed at it to a fallback id.
+    /// Visit every leaf's buffer id. Used to redirect leaves pointing at
+    /// a buffer that's being removed to a fallback id.
     pub fn for_each_leaf_mut(&mut self, mut f: impl FnMut(&mut BufferId)) {
         Self::walk_mut(&mut self.root, &mut f);
     }
@@ -342,7 +338,6 @@ mod tests {
         let fallback = bid(1);
         let mut t = WindowTree::new(a);
         t.split(SplitDir::Horizontal, b);
-        // Redirect any leaf pointing at `b` to `fallback`.
         t.for_each_leaf_mut(|id| {
             if *id == b {
                 *id = fallback;
@@ -354,8 +349,6 @@ mod tests {
         assert!(layout.iter().all(|l| l.buf != b));
     }
 
-    // Suppress unused-import warning when no test uses Key but the import is
-    // kept for parity with future test helpers.
     fn _key_suppress() {
         let _ = bid(0).is_null();
     }

@@ -273,7 +273,6 @@ mod tests {
         r.record_yank("hello", RegisterKind::Char, None);
         assert_eq!(text(&r, '"'), Some("hello"));
         assert_eq!(text(&r, '0'), Some("hello"));
-        // numbered 1-9 stay empty for yanks
         assert!(r.read('1').is_none());
     }
 
@@ -309,7 +308,7 @@ mod tests {
         assert_eq!(text(&r, '-'), Some("hi"));
         assert_eq!(text(&r, '"'), Some("hi"));
         assert!(r.read('1').is_none());
-        // and the yank register is untouched by deletes
+        // The yank register is untouched by deletes.
         assert!(r.read('0').is_none());
     }
 
@@ -354,7 +353,6 @@ mod tests {
         r.record_yank("hi", RegisterKind::Char, Some('a'));
         r.record_delete("bye\n", RegisterKind::Line, None);
         let names: Vec<char> = r.iter().map(|(c, _)| c).collect();
-        // sorted: '"', '0', '1', 'a'
         assert_eq!(names, vec!['"', '0', '1', 'a']);
     }
 }

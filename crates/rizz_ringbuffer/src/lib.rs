@@ -1,3 +1,7 @@
+//! Fixed-capacity double-ended ring buffer backing the editor's bounded
+//! history queues (jumplist, change list, etc.). Inserts on a full buffer
+//! evict the opposite end and return the displaced value.
+
 use std::fmt;
 use std::mem::MaybeUninit;
 
@@ -189,7 +193,6 @@ impl<T, const N: usize> RingBuffer<T, N> {
     }
 }
 
-/// Drop every live element so memory is properly reclaimed.
 impl<T, const N: usize> Drop for RingBuffer<T, N> {
     fn drop(&mut self) {
         for i in 0..self.len {
@@ -318,10 +321,10 @@ mod tests {
     #[test]
     fn test_mixed_ends() {
         let mut rb = RingBuffer::<i32, 4>::new();
-        rb.push_back(1); //        [1]
-        rb.push_front(0); //     [0, 1]
-        rb.push_back(2); //     [0, 1, 2]
-        rb.push_front(-1); // [-1, 0, 1, 2]
+        rb.push_back(1);
+        rb.push_front(0);
+        rb.push_back(2);
+        rb.push_front(-1);
         assert_eq!(rb.iter().copied().collect::<Vec<_>>(), vec![-1, 0, 1, 2]);
         assert_eq!(rb.pop_front(), Some(-1));
         assert_eq!(rb.pop_back(), Some(2));
@@ -367,7 +370,7 @@ mod tests {
     fn test_wrap_then_pop_returns_logical_order() {
         let mut rb = RingBuffer::<i32, 3>::new();
         for v in [1, 2, 3, 4, 5] {
-            rb.push_back(v); // ends up holding 3, 4, 5
+            rb.push_back(v);
         }
         assert_eq!(rb.pop_back(), Some(5));
         assert_eq!(rb.pop_front(), Some(3));
@@ -403,8 +406,8 @@ mod tests {
         rb.push_back(2);
         rb.push_back(3);
         let mut it = rb.into_iter();
-        assert_eq!(it.next(), Some(1)); // front
-        assert_eq!(it.next_back(), Some(3)); // back
+        assert_eq!(it.next(), Some(1));
+        assert_eq!(it.next_back(), Some(3));
         assert_eq!(it.next(), Some(2));
         assert_eq!(it.next(), None);
         assert_eq!(it.next_back(), None);

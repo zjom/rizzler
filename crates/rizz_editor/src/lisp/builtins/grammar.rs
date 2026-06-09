@@ -1,3 +1,5 @@
+//! Tree-sitter grammar registration and install builtins.
+
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -10,9 +12,8 @@ use super::super::helpers::{Builtins, as_ident_or_str, as_str, unit};
 use super::super::with_editor_mut;
 
 pub(super) fn register(b: &mut Builtins) {
-    // Low-level escape hatch: register a grammar from a pre-built shared
-    // library. `(grammar-install)` below is the curated, declarative wrapper
-    // most users want.
+    // Escape hatch: register a grammar from a pre-built shared library.
+    // `(grammar-install)` is the curated wrapper most users want.
     b.be_doc(
         "grammar-register",
         4,
@@ -30,9 +31,6 @@ pub(super) fn register(b: &mut Builtins) {
         "(grammar-register/4)\nregister a tree-sitter grammar loaded from a shared library (.so/.dylib/.dll).\nthe library must export `tree_sitter_<name>` — Neovim's `parser/*.so` ABI.\nargs: <name str> <library-path str> <highlights.scm path str> <ext: str | [str ...]>",
     );
 
-    // Declarative install by name. Resolves against the curated
-    // `grammars.toml`; clones via `git`, builds via `tree-sitter`, caches
-    // under $XDG_DATA_HOME/rizz/grammars/<name>/. Idempotent on cache hit.
     b.be_doc(
         "grammar-install",
         1,
@@ -108,8 +106,8 @@ params:
     );
 }
 
-/// Accept either a single extension string (`".py"`, `"py"`) or an array of
-/// such strings. The leading dot is optional in both cases.
+/// Accept either a single extension string or an array of them. The leading
+/// dot is optional.
 fn parse_extensions(v: &Rc<Value>) -> Result<Vec<String>, RuntimeError> {
     match &**v {
         Value::Array(items) => items

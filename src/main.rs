@@ -23,7 +23,7 @@ fn main() -> anyhow::Result<()> {
             return Err(e);
         }
     };
-    state.render()?; // initial render
+    state.render()?;
     loop {
         if state.quit_requested() {
             info!("quit requested, exiting main loop");
@@ -52,8 +52,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        // Drain any pending LSP events (diagnostics, response payloads,
-        // server crashes) and apply the synthesized actions before the
+        // Drain pending LSP events and apply synthesized actions before the
         // next render. Re-render only when something actually changed.
         match state.tick() {
             Ok(true) => {
@@ -87,11 +86,10 @@ fn log_file_path() -> PathBuf {
     base.join("rizz").join("rizz.log")
 }
 
-/// Set up a file-backed tracing subscriber. Returns the `WorkerGuard` that
-/// flushes pending log lines on drop — keep it alive for the lifetime of the
-/// process. Logs go to stderr is meaningless for a TUI (we own the alt
-/// screen), so everything is routed to a rotating file under the cache dir.
-/// Default level is `info`; `RUST_LOG` overrides it (e.g. `RUST_LOG=debug`).
+/// Set up a file-backed tracing subscriber. The returned `WorkerGuard` flushes
+/// pending log lines on drop, so it must live for the lifetime of the process.
+/// stderr is unusable for a TUI that owns the alt screen, so logs are routed
+/// to a file under the cache dir. Default level is `info`; `RUST_LOG` overrides.
 fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let path = log_file_path();
     if let Some(parent) = path.parent()

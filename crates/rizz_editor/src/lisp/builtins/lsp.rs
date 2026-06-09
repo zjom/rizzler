@@ -1,3 +1,6 @@
+//! LSP client builtins: register/install servers, request hover/completion/
+//! code-action, and structured callback hooks for the lisp UI.
+
 use std::rc::Rc;
 
 use anyhow::anyhow;
@@ -10,8 +13,7 @@ use super::super::helpers::{Builtins, as_ident_or_str, as_str, as_usize, unit};
 use super::super::with_editor_mut;
 
 pub(super) fn register(b: &mut Builtins) {
-    // Low-level register: bypass lsp.toml entirely. Useful for ad-hoc
-    // servers or testing.
+    // Escape hatch: bypass lsp.toml entirely. Useful for ad-hoc servers.
     b.be_doc(
         "lsp-register",
         4,
@@ -103,8 +105,6 @@ params:
         "(lsp-auto-install?/0)\ntrue when lsp servers are auto-installed on first file open (the default).",
     );
 
-    // ---- key-bindable wrappers ---------------------------------------
-
     b.be_doc(
         "lsp-hover",
         0,
@@ -179,8 +179,6 @@ params:
         },
         "(lsp-restart [name])\nshut down a running lsp client and re-attach the focused buffer.\nwith no argument, restarts the server for the focused buffer's language.",
     );
-
-    // ---- structured completion / code-action hooks -------------------
 
     b.be_doc(
         "set-lsp-completion-fn",

@@ -1,3 +1,5 @@
+//! Buffer lifecycle builtins: create / delete / cycle / edit / write.
+
 use std::str::FromStr;
 
 use rizz_actions::Action;

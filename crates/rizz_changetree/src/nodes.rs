@@ -1,10 +1,15 @@
+//! Node types backing [`super::ChangeTree`].
+//!
+//! A [`Delta`] is the splice payload undo/redo replays. Trees are made of a
+//! single [`Trunk`] root and [`Leaf`] children, each tagged with a [`Meta`]
+//! whose ordering prefers recency so the most recent branch wins on redo.
+
 use std::{cmp::Ordering, collections::BinaryHeap, rc::Rc, time::Instant};
 
-/// Edit recorded in the change tree. A splice at char index `at`: the
-/// range `removed` was deleted and `inserted` was written in its place.
-/// Undo reinstates `removed` and lands the cursor at `cursor_before`;
-/// redo reapplies `inserted` and lands the cursor at `cursor_after`.
-/// Either side may be empty — a pure insert has `removed = ""`, a pure
+/// Edit recorded in the change tree: a splice at char index `at` where
+/// `removed` was replaced by `inserted`. Undo reinstates `removed` and
+/// lands the cursor at `cursor_before`; redo reapplies `inserted` and
+/// lands at `cursor_after`. A pure insert has `removed = ""`, a pure
 /// delete has `inserted = ""`.
 #[derive(Debug, Clone)]
 pub struct Delta {
@@ -15,12 +20,9 @@ pub struct Delta {
     pub cursor_after: (usize, usize),
 }
 
-/// identifier of nodes.
-///
-/// two nodes are PartialEq if their ids are equal
-/// no two nodes should have the same ids
-///
-/// Ordering prioritizes recency over ID
+/// Identity + timestamp for a node. Equality is by `id` (unique per tree);
+/// ordering prefers recency, so a `BinaryHeap<Meta>` peeks at the
+/// most-recently-created child.
 #[derive(Debug, Clone, Copy)]
 pub struct Meta {
     pub id: usize,

@@ -14,24 +14,23 @@ pub struct ServerSpec {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
-    /// File-extension index keys (without leading dot). Used by the auto-load
-    /// hook to pick a server when a buffer is opened.
+    /// Extensions (without leading dot) the auto-load hook uses to pick
+    /// this server when a buffer is opened.
     #[serde(default)]
     pub extensions: Vec<String>,
-    /// Filenames whose presence (walking upwards from the buffer's path)
-    /// marks the workspace root. Empty defaults to "use the buffer's parent
-    /// directory".
+    /// Filenames whose presence (walking upward from the buffer's path)
+    /// marks the workspace root. Empty falls back to the buffer's parent
+    /// directory.
     #[serde(default)]
     pub root_markers: Vec<String>,
-    /// Free-form initialization options passed verbatim in the `initialize`
-    /// request. Stored as `toml::Value` so the editor side can convert to
-    /// JSON without an extra schema layer.
+    /// Passed verbatim as the `initialize` request's `initializationOptions`.
+    /// Stored as `toml::Value` so we can convert to JSON without an extra
+    /// schema.
     #[serde(default)]
     pub initialization_options: Option<toml::Value>,
-    /// Optional shell command run inside the per-server cache dir on first
-    /// use when the binary is missing from PATH. `RIZZ_LSP_DIR` env points
-    /// at the cache dir; the recipe is expected to drop an executable at
-    /// `$RIZZ_LSP_DIR/bin/<command>`.
+    /// Shell recipe run inside the per-server cache dir when the binary
+    /// is missing from PATH. `RIZZ_LSP_DIR` points at the cache dir; the
+    /// recipe must drop an executable at `$RIZZ_LSP_DIR/bin/<command>`.
     #[serde(default)]
     pub install: Option<String>,
     /// Extra env vars forwarded to the spawned server.
@@ -39,8 +38,8 @@ pub struct ServerSpec {
     pub env: HashMap<String, String>,
 }
 
-/// Parsed manifest plus a precomputed reverse-index from file extension to
-/// server name, used by the auto-load pass.
+/// Parsed manifest plus a precomputed extension → server-name reverse
+/// index used by the auto-load pass.
 #[derive(Debug, Default, Clone)]
 pub struct Manifest {
     entries: HashMap<String, ServerSpec>,
@@ -72,16 +71,15 @@ impl Manifest {
         self.entries.get(name)
     }
 
-    /// Reverse-index lookup: `"rs"` → `"rust-analyzer"`. Multiple servers
-    /// claiming the same extension resolve to whichever was inserted first.
+    /// Reverse-index lookup: `"rs"` → `"rust-analyzer"`. Ties resolve to
+    /// whichever server was inserted first.
     pub fn server_for_ext(&self, ext: &str) -> Option<&str> {
         let normalized = ext.trim_start_matches('.').to_ascii_lowercase();
         self.by_ext.get(&normalized).map(String::as_str)
     }
 
-    /// Register an entry (or replace an existing one). Used by
-    /// `(lsp-register ...)` from lisp to add ad-hoc servers without editing
-    /// `lsp.toml`.
+    /// Register or replace an entry. Backs `(lsp-register ...)` from lisp,
+    /// for ad-hoc servers added without editing `lsp.toml`.
     pub fn insert(&mut self, name: String, spec: ServerSpec) {
         for ext in &spec.extensions {
             let normalized = ext.trim_start_matches('.').to_ascii_lowercase();

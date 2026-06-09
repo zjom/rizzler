@@ -1,3 +1,5 @@
+//! Read-only buffer/cursor/viewport query builtins surfaced to lisp.
+
 use std::rc::Rc;
 
 use anyhow::anyhow;

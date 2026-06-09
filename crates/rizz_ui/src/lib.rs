@@ -1,17 +1,8 @@
-//! UI for the rizz editor. Two halves:
-//!
-//! - **Renderer-agnostic primitives** — [`styling`] (Style/Color/Theme),
-//!   [`widget`] (declarative widget tree built from lisp), [`panel`]
-//!   (unified input/overlay container + placement vocabulary),
-//!   [`window`] (editor split tree), [`render`] (Renderer trait +
-//!   RenderedFrame data), [`scroll`] (re-export from rizz_text),
-//!   [`precompute`] (frame assembly: gutter rows, decorator ranges,
-//!   soft-wrap maps).
-//! - **Concrete ratatui renderer + components** — [`render_ratatui`] walks
-//!   a `RenderedFrame` into ratatui draws; [`components`] (`EditorView`,
-//!   `MinibufferLine`) are the per-widget paint routines.
-//! - **Terminal lifecycle** — [`terminal::TerminalGuard`] installs raw mode +
-//!   alt screen and restores them on drop (or panic).
+//! UI for the rizz editor: renderer-agnostic primitives ([`styling`],
+//! [`widget`], [`panel`], [`window`], [`render`], [`precompute`]), the
+//! concrete ratatui [`render_ratatui`] backend and its [`components`], and
+//! the RAII [`terminal`] lifecycle that swaps the host terminal into editor
+//! mode.
 
 pub mod components;
 pub mod panel;

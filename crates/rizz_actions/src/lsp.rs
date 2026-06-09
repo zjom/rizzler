@@ -10,9 +10,8 @@ use std::sync::Arc;
 
 use rizz_core::Position;
 
-/// Stable identifier for a spawned language-server client. Mirrors
-/// `rizz_lsp::ClientId` so the editor side can refer to clients by value
-/// without depending on the lsp crate.
+/// Stable identifier for a spawned language-server client. Lets the editor
+/// side refer to clients by value without depending on `rizz_lsp`.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct LspClientId(pub u64);
 

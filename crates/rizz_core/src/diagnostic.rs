@@ -22,7 +22,6 @@ pub enum Severity {
 
 impl Severity {
     /// Face name used to look up the visual style in the theme registry.
-    /// Mirrors the `syntax.*` family populated by the tree-sitter renderer.
     pub fn face(self) -> &'static str {
         match self {
             Severity::Error => "diagnostic.error",

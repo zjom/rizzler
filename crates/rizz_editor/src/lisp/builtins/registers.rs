@@ -21,8 +21,8 @@ use super::super::helpers::{
 };
 use super::super::with_editor_mut;
 
-/// Extract a single ASCII register name from a lisp string, e.g. `"a"`,
-/// `"\""`, `"0"`. Empty or multi-char strings are rejected.
+/// Extract a single ASCII register name from a lisp string. Empty or
+/// multi-char strings are rejected.
 fn as_register_name(v: &Rc<Value>, name: &str) -> Result<char, RuntimeError> {
     let s = as_str(v, name)?;
     let mut chars = s.chars();
@@ -132,7 +132,6 @@ pub(super) fn register(b: &mut Builtins) {
         Ok(unit())
     });
 
-    // (register-write-linewise "a" "abc\n") — explicit kind override.
     b.be("register-write-linewise", 2, |args, _| {
         let name = as_register_name(&args[0], "register-write-linewise")?;
         let text = as_str(&args[1], "register-write-linewise")?;
@@ -170,8 +169,8 @@ pub(super) fn register(b: &mut Builtins) {
         Ok(Rc::new(v))
     });
 
-    // Set a register's contents using a kind symbol — useful for restoring
-    // a register from a (registers) snapshot or for plumbing block-mode text.
+    // Set a register using an explicit kind symbol; lets callers restore
+    // a register from a `(registers)` snapshot or plumb block-mode text.
     b.be("register-set", 3, |args, _| {
         let name = as_register_name(&args[0], "register-set")?;
         let text = as_str(&args[1], "register-set")?;
@@ -180,9 +179,8 @@ pub(super) fn register(b: &mut Builtins) {
         Ok(unit())
     });
 
-    // Direct, non-action register write — does not record an action, used
-    // by tests / introspection helpers that want to seed a register without
-    // going through `apply`. Same kind defaults as `register-write`.
+    // Non-action write — seeds a register without going through `apply`.
+    // Used by tests and introspection helpers.
     b.be("register-poke", 2, |args, _| {
         let name = as_register_name(&args[0], "register-poke")?;
         let text = as_str(&args[1], "register-poke")?;
@@ -193,15 +191,8 @@ pub(super) fn register(b: &mut Builtins) {
         Ok(unit())
     });
 
-    // ---- text objects (vim's `i<x>` / `a<x>`) ---------------------------
-    //
-    // Three operators × {around, inner}. Each takes a single object symbol
-    // (`'word`, `'big-word`, `'paren`, `'bracket`, `'brace`, `'angle`,
-    // `'double-quote`, `'single-quote`, `'backtick`, or the corresponding
-    // single-char string `"("` / `"\""` / etc.). The pending count prefix
-    // is forwarded — `2daw` deletes the second-outer word, `2di(` expands
-    // to the second-outer paren pair.
-
+    // Text objects (vim's `i<x>` / `a<x>`): three operators × {around,
+    // inner}. The pending count prefix is forwarded.
     b.be("yank-inner", 1, |args, _| {
         apply_text_object(&args[0], "yank-inner", |object, count| {
             Action::YankTextObject {
@@ -269,8 +260,8 @@ pub(super) fn register(b: &mut Builtins) {
     });
 }
 
-/// Parse the text-object arg (symbol or single-char string), grab the
-/// pending count prefix, and apply the action `build` constructs from them.
+/// Parse the text-object arg, grab the pending count prefix, and apply the
+/// action `build` constructs from them.
 fn apply_text_object(
     arg: &Rc<Value>,
     name: &'static str,

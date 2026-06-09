@@ -10,7 +10,6 @@ use tracing::{debug, info, warn};
 
 use crate::buffer::Buffer;
 
-/// Read a buffer's contents from `r`. Other fields default.
 pub fn from_reader(r: impl io::Read) -> io::Result<Buffer> {
     Ok(Buffer {
         buf: Rope::from_reader(r)?,
@@ -20,9 +19,7 @@ pub fn from_reader(r: impl io::Read) -> io::Result<Buffer> {
 
 /// Construct a buffer associated with `path`. Attempts to read from disk; on
 /// any read failure produces an empty buffer with `fs_path` still set so a
-/// subsequent [`write()`] will create the file. Does not attach a
-/// highlighter — `State::install_dynamic_highlighter` consults the
-/// `TsRegistry` after the buffer is added to the buffer list.
+/// subsequent [`write()`] will create the file.
 pub fn with_path(path: Rc<Path>) -> Buffer {
     let mut buf = match std::fs::File::open(&path).and_then(from_reader) {
         Ok(b) => {

@@ -1,9 +1,7 @@
-//! Styling primitives shared by the renderer and the lisp surface.
-//!
-//! - [`Style`] / [`Color`] are the renderer-agnostic style representation.
-//! - [`Theme`] holds named [`Style`]s registered from lisp (`face-define`).
-//! - `*_from_value` helpers convert rizz [`Value`]s into a `Style`/`Color`
-//!   so any builtin or render path can accept the lisp shapes uniformly.
+//! Styling primitives shared by the renderer and the lisp surface:
+//! renderer-agnostic [`Style`]/[`Color`], the named [`Theme`] populated via
+//! `face-define`, and `*_from_value` helpers that translate rizz
+//! [`Value`]s into styles so every builtin accepts the same shapes.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -14,9 +12,8 @@ use rizz::runtime::{RuntimeError, Value};
 
 pub type Color = ratatui::style::Color;
 
-/// A *partial* style spec: every attribute is optional, so `None` means
-/// "transparent — inherit from the parent face / the layer underneath".
-/// `Some(false)` for a bool means "explicitly off" — distinguishable from
+/// Partial style spec. `None` means "transparent — inherit from below";
+/// `Some(false)` for a bool means "explicitly off", distinguishable from
 /// `None` for inheritance purposes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Style {
@@ -26,15 +23,14 @@ pub struct Style {
     pub italic: Option<bool>,
     pub underline: Option<bool>,
     pub reverse: Option<bool>,
-    /// Names of faces this style inherits from, in priority order: earlier
-    /// names win over later. Only set on faces in the [`Theme`].
+    /// Faces this style inherits from in priority order (earlier wins).
+    /// Only set on entries stored in [`Theme`].
     pub inherit: Vec<Rc<str>>,
 }
 
 impl Style {
-    /// Layer `over` on top of `self`: any attribute set on `over` (`Some(_)`)
-    /// wins; attributes left `None` on `over` preserve `self`. Used by both
-    /// inheritance resolution and decorator overlays.
+    /// Layer `over` on top of `self`: every `Some(_)` attribute on `over`
+    /// wins, every `None` preserves `self`.
     pub fn patch(mut self, over: &Style) -> Self {
         if over.fg.is_some() {
             self.fg = over.fg;
@@ -58,7 +54,7 @@ impl Style {
     }
 }
 
-/// Named style table. Mutated through `face-define`; read by the precompute
+/// Named style table. Mutated via `face-define`, read by the precompute
 /// pass when resolving ident-style references.
 #[derive(Clone, Debug, Default)]
 pub struct Theme {
@@ -78,8 +74,8 @@ impl Theme {
         self.faces.get(name)
     }
 
-    /// Resolve a face into a flattened style: walks its `inherit` chain,
-    /// layering each parent under the face's own attributes.
+    /// Flattened style: walks the `inherit` chain, layering each parent
+    /// under the face's own attributes.
     pub fn resolve(&self, name: &str) -> Option<Style> {
         self.resolve_at(name, 32)
     }
@@ -101,16 +97,13 @@ impl Theme {
     }
 }
 
-/// Wrapper that hands the runtime a stable interior-mutable handle. `State`
-/// owns one of these; lisp builtins and the render-time snapshot share it.
+/// Interior-mutable handle so lisp builtins and render-time snapshots can
+/// share a [`Theme`] owned by `State`.
 pub type ThemeCell = RefCell<Theme>;
 
-/// Convert a lisp value into a [`Style`]. Recognized shapes:
-///
-/// * `'face-name` — look up `face-name` in `theme`. Returns `Style::default()`
-///   if unknown.
-/// * `{...}` — inline map; see module docs for keys.
-/// * `()` — `Style::default()`.
+/// Convert a lisp value into a [`Style`]. Accepts a face ident (resolved
+/// against `theme`, defaulting if unknown), an inline map of style keys,
+/// or `()` for the default style.
 pub fn style_from_value(v: &Rc<Value>, theme: &Theme) -> Result<Style, RuntimeError> {
     match &**v {
         Value::Unit => Ok(Style::default()),
@@ -158,7 +151,7 @@ fn inherit_from_value(v: &Rc<Value>) -> Result<Vec<Rc<str>>, RuntimeError> {
     }
 }
 
-/// Convert a lisp value into an optional [`Color`]. `()` yields `None`.
+/// `()` yields `None`.
 pub fn color_from_value(v: &Rc<Value>) -> Result<Option<Color>, RuntimeError> {
     match &**v {
         Value::Unit => Ok(None),
@@ -210,8 +203,7 @@ pub fn color_from_value(v: &Rc<Value>) -> Result<Option<Color>, RuntimeError> {
     }
 }
 
-/// Convert a [`Style`] back into a lisp map so `(face-of ...)` can return a
-/// readable representation.
+/// Inverse of [`style_from_value`] — used by `(face-of ...)`.
 pub fn style_to_value(style: &Style) -> Rc<Value> {
     use im::HashMap as ImHashMap;
 
@@ -290,15 +282,16 @@ fn map_u8(m: &im::HashMap<Rc<Value>, Rc<Value>>, field: &str) -> Result<u8, Runt
     })
 }
 
-/// Build the tagged-map representation the `(rgb r g b)` builtin returns.
+/// Tagged-map representation returned by the `(rgb r g b)` builtin.
 pub fn rgb_value(r: u8, g: u8, b: u8) -> Rc<Value> {
     color_to_value(&Color::Rgb(r, g, b))
 }
 
 /// Normalize a user-supplied style expression into a form that survives
-/// rizz's post-call re-evaluation: face references collapse to `Value::Str`
-/// (the face name), inline maps are routed through [`style_from_value`] and
-/// [`style_to_value`] so every leaf becomes a string or int.
+/// rizz's post-call re-evaluation: face references collapse to
+/// `Value::Str`, inline maps round-trip through
+/// [`style_from_value`]/[`style_to_value`] so every leaf becomes a string
+/// or int.
 pub fn normalize_style_value(v: &Rc<Value>, theme: &Theme) -> Result<Rc<Value>, RuntimeError> {
     match &**v {
         Value::Unit => Ok(v.clone()),
@@ -315,7 +308,7 @@ pub fn normalize_style_value(v: &Rc<Value>, theme: &Theme) -> Result<Rc<Value>, 
     }
 }
 
-/// Render a lisp value as a list of styled ratatui spans.
+/// Flatten a lisp value into a list of styled ratatui spans.
 pub fn spans_from_value(
     v: &Rc<Value>,
     theme: &Theme,
@@ -392,7 +385,6 @@ fn span_from_map(
     Ok(Span::styled(text.to_string(), style_to_ratatui(&style)))
 }
 
-/// Convert into ratatui's runtime style type.
 pub fn style_to_ratatui(style: &Style) -> ratatui::style::Style {
     use ratatui::style::Modifier;
 

@@ -1,3 +1,5 @@
+//! Filesystem and subprocess builtins (canonicalize, readdir, exec, …).
+
 use std::path::PathBuf;
 use std::process;
 use std::rc::Rc;

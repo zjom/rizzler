@@ -9,10 +9,10 @@
 use lsp_types::{Position, PositionEncodingKind};
 use ropey::Rope;
 
-/// Encoding the client picked at `initialize` time.
+/// Position encoding negotiated at `initialize` time. Defaults to UTF-16
+/// per the LSP spec.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub enum Encoding {
-    /// Default if the server omits `positionEncoding` from its capabilities.
     #[default]
     Utf16,
     Utf8,
@@ -37,9 +37,8 @@ impl Encoding {
     }
 }
 
-/// Convert a (row, byte_col) coordinate into an LSP `Position` in the
-/// negotiated `encoding`. `byte_col` is interpreted as the byte offset
-/// from the start of `row`.
+/// Convert a `(row, byte_col)` rope coordinate into an LSP `Position`
+/// counted in the negotiated `encoding`.
 pub fn byte_to_lsp(rope: &Rope, row: usize, byte_col: usize, encoding: Encoding) -> Position {
     let row = row.min(rope.len_lines().saturating_sub(1));
     let line = rope.line(row);
@@ -85,8 +84,8 @@ pub fn byte_to_lsp(rope: &Rope, row: usize, byte_col: usize, encoding: Encoding)
     }
 }
 
-/// Convert an LSP `Position` (in the negotiated `encoding`) to a (row, byte_col)
-/// coordinate in the rope.
+/// Inverse of [`byte_to_lsp`]: convert an LSP `Position` (in the
+/// negotiated `encoding`) to a `(row, byte_col)` rope coordinate.
 pub fn lsp_to_byte(rope: &Rope, pos: Position, encoding: Encoding) -> (usize, usize) {
     let row = (pos.line as usize).min(rope.len_lines().saturating_sub(1));
     let line = rope.line(row);
@@ -120,10 +119,9 @@ pub fn lsp_to_byte(rope: &Rope, pos: Position, encoding: Encoding) -> (usize, us
     (row, byte)
 }
 
-/// Compute the LSP end position after applying a splice that wrote
-/// `inserted` starting at LSP `start`. Helper used when building
-/// `TextDocumentContentChangeEvent` ranges where the start of the change
-/// is known but the end has to be derived from the splice text alone.
+/// LSP position reached after writing `text` starting at `start`. Used to
+/// derive the end of a `TextDocumentContentChangeEvent` range from the
+/// inserted text alone.
 pub fn advance_position(start: Position, text: &str, encoding: Encoding) -> Position {
     let mut line = start.line;
     let mut character = start.character;

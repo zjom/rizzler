@@ -1,15 +1,9 @@
 //! Editor-side registry of running LSP clients, indexed by symbolic name.
 //!
-//! The `LspRuntime` (on the tokio thread) is the canonical owner of
-//! `ClientHandle`s. The editor only needs to remember:
-//! - `name → LspClientId` so a second buffer of the same language reuses
-//!   the same server,
-//! - the negotiated `Encoding` per client so position conversion can run
-//!   synchronously on the editor side.
-//!
-//! Spawning blocks the editor briefly because `initialize` is fast and
-//! returning the `ClientId` is the simplest way to make the rest of the
-//! editor's flow synchronous.
+//! The `LspRuntime` on the tokio thread owns the actual `ClientHandle`s;
+//! this registry only remembers `name → LspClientId` (so a second buffer
+//! of the same language reuses the server) and the negotiated `Encoding`
+//! per client (so position conversion runs synchronously editor-side).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -43,9 +37,8 @@ impl LspRegistry {
         self.by_name.get(name).copied()
     }
 
-    /// Spawn a new client task (or return the existing entry) and wait up
-    /// to 5s for the `initialize` handshake. Returns the `LspClientId` the
-    /// editor uses for subsequent requests.
+    /// Return the existing entry for `name`, or spawn a new client task
+    /// and wait up to 6s for the `initialize` handshake.
     pub fn ensure_running(
         &mut self,
         name: &str,
@@ -98,9 +91,8 @@ impl LspRegistry {
         self.by_name.keys().map(String::as_str)
     }
 
-    /// Forget a client without sending shutdown. Used when the runtime
-    /// reports `ServerExited` — the dispatch state is already gone on the
-    /// tokio side.
+    /// Drop a client without sending `shutdown`. Used on `ServerExited`,
+    /// since the tokio-side dispatch state is already gone.
     pub fn forget(&mut self, id: LspClientId) {
         self.by_name.retain(|_, c| c.id != id);
     }

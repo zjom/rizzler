@@ -42,7 +42,7 @@ impl EditingMode {
         }
     }
 
-    /// Single-character glyph used by the status-line mode indicator.
+    /// Single-character glyph for the status-line mode indicator.
     pub fn as_glyph(&self) -> &'static str {
         match self {
             Self::Insert => "i",

@@ -1,3 +1,5 @@
+//! Text-mutation builtins: insert/delete/undo/redo and friends.
+
 use std::str::FromStr;
 
 use rizz_actions::Action;

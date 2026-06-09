@@ -1,6 +1,6 @@
-//! Stateless editor view. All gutter/decorator content lives in the
-//! pre-computed `RenderedBuffer` produced by the precompute pass; this
-//! module is just glue between that and ratatui's layout/widget primitives.
+//! Stateless editor view. Gutter and decorator content lives in the
+//! `RenderedBuffer` from the precompute pass; this module is glue between
+//! that and ratatui's layout/widget primitives.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -17,7 +17,7 @@ use crate::styling::style_to_ratatui;
 pub struct EditorView;
 
 impl EditorView {
-    /// Gutter width reserved for this buffer's view. Used to translate
+    /// Gutter width reserved for this buffer — used to translate
     /// buffer-relative cursor cols into screen cols.
     pub fn gutter_width(buf_frame: Option<&RenderedBuffer>) -> u16 {
         buf_frame
@@ -93,9 +93,9 @@ impl EditorView {
         (area.x + gutter_w + cur.col, area.y + cur.row)
     }
 
-    /// Cursor placement for buffers with soft-wrap on. Derives the screen
-    /// coordinate from the buffer's *absolute file position* via `WrapMap`,
-    /// so logical and visual cursors can't drift.
+    /// Cursor for soft-wrapped buffers. Derives screen coords from the
+    /// buffer's absolute file position via `WrapMap` so the logical and
+    /// visual cursors can't drift.
     pub fn cursor_wrapped(
         buf: &Buffer,
         area: Rect,

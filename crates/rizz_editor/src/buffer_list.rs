@@ -44,19 +44,16 @@ impl BufferList {
         self.bufs.is_empty()
     }
 
-    /// Iterate every buffer in the registry. Order is unspecified.
     pub fn iter(&self) -> slotmap::basic::Iter<'_, BufferId, Buffer> {
         self.bufs.iter()
     }
 
     /// The underlying slot map. Handed to the renderer / precompute pass so
-    /// they can look up buffers by `BufferId` without going through
-    /// `BufferList` (which lives one crate up).
+    /// they can look up buffers without going through `BufferList`.
     pub fn raw(&self) -> &SlotMap<BufferId, Buffer> {
         &self.bufs
     }
 
-    /// Iterate every buffer mutably. Order is unspecified.
     pub fn iter_mut(&mut self) -> slotmap::basic::IterMut<'_, BufferId, Buffer> {
         self.bufs.iter_mut()
     }
@@ -160,8 +157,8 @@ impl BufferList {
     }
 
     /// 1-based position of `id` in the file cycle order, or `None` if `id`
-    /// isn't a file buffer. Used by status-line code as a human-friendly
-    /// buffer label, since the underlying `BufferId` is an opaque handle.
+    /// isn't a file buffer. Used as a human-friendly buffer label since
+    /// `BufferId` is opaque.
     pub fn file_display_index(&self, id: BufferId) -> Option<usize> {
         self.file_order.iter().position(|&i| i == id).map(|p| p + 1)
     }

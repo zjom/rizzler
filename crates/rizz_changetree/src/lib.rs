@@ -1,3 +1,9 @@
+//! Undo/redo tree for buffer edits.
+//!
+//! Each tracked change becomes a leaf hanging off the current node, so
+//! diverging edit histories form a tree rather than a linear stack. Undo
+//! walks toward the root; redo follows the branch the user last left.
+
 pub use nodes::{Delta, Leaf, Meta, Node, Trunk};
 use std::collections::HashMap;
 
@@ -9,7 +15,7 @@ pub struct ChangeTree {
     nodes: HashMap<usize, Node>,
     cur: usize,
     largest_assigned_id: usize,
-    /// parent_id -> child_id to redo into (the branch we last undid from)
+    /// parent_id -> child_id to redo into (the branch we last undid from).
     redo_target: HashMap<usize, usize>,
     /// Next leaf id `walk_back_edit` will visit. `None` means start fresh
     /// from `cur`. Reset on every new tracked edit so a fresh `g;` lands on
@@ -38,21 +44,19 @@ impl ChangeTree {
         let meta = Meta::new(newnode_id);
         let newnode = Node::Leaf(Leaf::new(meta, self.cur, delta));
 
-        // fresh id => insert must NOT collide
         let clash = self.nodes.insert(newnode_id, newnode);
         assert!(
             clash.is_none(),
             "ids are monotonically increasing and must never clash"
         );
 
-        // works for both Root and Leaf parents
         self.nodes
             .get_mut(&self.cur)
             .expect("self.cur must refer to a valid node")
             .children_mut()
             .push(meta);
 
-        // a new change becomes the canonical redo target for this parent
+        // A new change becomes the canonical redo target for this parent.
         self.redo_target.insert(self.cur, newnode_id);
         self.cur = newnode_id;
         self.walk_id = None;
@@ -94,16 +98,15 @@ impl ChangeTree {
             }
         };
 
-        // remember where to redo, and move up. children heap is left intact:
-        // membership is unchanged by undo, so the heap stays consistent.
+        // Children heap is left intact: undo does not change membership.
         self.redo_target.insert(parent, child_id);
         self.cur = parent;
         Some(delta)
     }
 
     pub fn redo(&mut self) -> Option<Delta> {
-        // pick the branch we last undid from; if none recorded, fall back to
-        // the most-recent child via the heap (peek, don't mutate).
+        // Prefer the branch we last undid from; otherwise pick the
+        // most-recent child via the heap.
         let child_id = match self.redo_target.get(&self.cur) {
             Some(&id) => id,
             None => {

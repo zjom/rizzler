@@ -57,6 +57,12 @@ impl RatatuiRenderer {
 struct CursorPlacement {
     editor: Option<(u16, u16)>,
     overlay: Option<(u16, u16, CursorStyle)>,
+    /// Where the focused window leaf landed in the frame plus the editor
+    /// cursor's frame coords — fed into `Placement::AtCursor` resolution so
+    /// popups can anchor next to the cursor regardless of split layout.
+    /// Set even when a popup is on top: the popup's placement still wants
+    /// to follow the editor cursor, not the popup buffer's cursor.
+    anchor: Option<crate::panel::CursorAnchor>,
 }
 
 /// One non-focusable `Widget::Overlay` encountered during the main walk,
@@ -112,9 +118,19 @@ impl Renderer for RatatuiRenderer {
 
             let panel_overlays: Vec<&Panel> = snap.panels.overlays().collect();
             let last = panel_overlays.len().saturating_sub(1);
+            let editor_anchor = cur.anchor;
             for (i, panel) in panel_overlays.iter().enumerate() {
                 let is_top = i == last;
-                draw_overlay(panel, f.area(), &snap, frame_data, is_top, f, &mut cur);
+                draw_overlay(
+                    panel,
+                    f.area(),
+                    &snap,
+                    frame_data,
+                    is_top,
+                    f,
+                    &mut cur,
+                    editor_anchor,
+                );
             }
 
             if let Some((x, y, cs)) = cur.overlay {
@@ -338,11 +354,19 @@ fn walk_editor_tree(
         };
         let buf_frame = fd.per_buf.get(leaf.buf);
         EditorView::render(buf, leaf.area, buf_frame, f);
-        if editor_focused && &leaf.path == focused_path {
-            cur.editor = Some(match buf_frame.and_then(|bf| bf.wrap.as_ref()) {
+        if &leaf.path == focused_path {
+            let (cx, cy) = match buf_frame.and_then(|bf| bf.wrap.as_ref()) {
                 Some(wrap) => EditorView::cursor_wrapped(buf, leaf.area, buf_frame, wrap),
                 None => EditorView::cursor(buf, leaf.area, buf_frame),
+            };
+            cur.anchor = Some(crate::panel::CursorAnchor {
+                leaf: leaf.area,
+                cursor_x: cx,
+                cursor_y: cy,
             });
+            if editor_focused {
+                cur.editor = Some((cx, cy));
+            }
         }
     }
 }
@@ -355,6 +379,7 @@ fn draw_overlay<'fr>(
     is_top: bool,
     f: &mut Frame,
     cur: &mut CursorPlacement,
+    anchor: Option<crate::panel::CursorAnchor>,
 ) {
     let buf = match snap.bufs.get(panel.buf) {
         Some(b) => b,
@@ -363,7 +388,7 @@ fn draw_overlay<'fr>(
     let Some((_, widget, show_cursor)) = panel.as_overlay() else {
         return;
     };
-    let outer = crate::panel::resolve_overlay_rect(panel, area, buf);
+    let outer = crate::panel::resolve_overlay_rect(panel, area, buf, anchor);
     if outer.width == 0 || outer.height == 0 {
         return;
     }

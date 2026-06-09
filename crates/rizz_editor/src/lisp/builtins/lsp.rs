@@ -6,7 +6,7 @@ use rizz::runtime::{RuntimeError, Value};
 use rizz_actions::Action;
 use rizz_lsp_install::InstallOpts;
 
-use super::super::helpers::{as_ident_or_str, as_str, unit, Builtins};
+use super::super::helpers::{Builtins, as_ident_or_str, as_str, as_usize, unit};
 use super::super::with_editor_mut;
 
 pub(super) fn register(b: &mut Builtins) {
@@ -178,6 +178,102 @@ params:
             Ok(unit())
         },
         "(lsp-restart [name])\nshut down a running lsp client and re-attach the focused buffer.\nwith no argument, restarts the server for the focused buffer's language.",
+    );
+
+    // ---- structured completion / code-action hooks -------------------
+
+    b.be_doc(
+        "set-lsp-completion-fn",
+        1,
+        |args, _| {
+            let v = args[0].clone();
+            let opt = if v.is_unit() { None } else { Some(v) };
+            with_editor_mut(|st| st.set_lsp_completion_fn(opt));
+            Ok(unit())
+        },
+        r#"(set-lsp-completion-fn/1)
+install the lisp callback for textDocument/completion responses. the fn
+receives `(items anchor)`:
+  items  — array of maps: {"id": int, "label": str, "detail": str|(),
+            "insert-text": str, "kind": 'function|'method|'variable|…}
+  anchor — map {"row": int, "col": int} for the position the request
+            was issued at.
+
+an empty `items` array means the response carried no completions (or
+the most recent batch was cleared); use it to dismiss any popup the
+callback opened previously.
+
+pass () to clear the callback — the editor falls back to a one-line
+notify summary of the first item.
+
+example:
+  (fn _completion-popup (items anchor)
+    (popup-show 'completion
+      (w-block {"border": "rounded"} (w-popup-self))
+      {"text": (str-join (fmap (fn (i) (get i "label")) items) "\n")
+       "placement": (placement-anchored 'bottom 'fit)}))
+  (set-lsp-completion-fn _completion-popup)"#,
+    );
+
+    b.be_doc(
+        "set-lsp-code-action-fn",
+        1,
+        |args, _| {
+            let v = args[0].clone();
+            let opt = if v.is_unit() { None } else { Some(v) };
+            with_editor_mut(|st| st.set_lsp_code_action_fn(opt));
+            Ok(unit())
+        },
+        r#"(set-lsp-code-action-fn/1)
+install the lisp callback for textDocument/codeAction responses. the fn
+receives `(actions)`:
+  actions — array of maps: {"id": int, "title": str, "kind": str|(),
+             "has-edit": 0|1, "has-command": 0|1}
+
+call `(lsp-invoke-code-action id)` from inside the picker to apply the
+chosen action's edit + command. an empty array means no actions were
+returned at the cursor.
+
+pass () to clear the callback — the editor falls back to a one-line
+notify summary of the first action."#,
+    );
+
+    b.be_doc(
+        "lsp-apply-completion",
+        1,
+        |args, _| {
+            let id = as_usize(&args[0], "lsp-apply-completion.id")?;
+            with_editor_mut(|st| st.apply_lsp_completion_by_id(id));
+            Ok(unit())
+        },
+        r#"(lsp-apply-completion/1)
+apply the completion item with the given id from the most recent
+`textDocument/completion` batch — inserts its `insert-text` at the
+originating buffer's cursor. id is the `id` field from the item map
+handed to the `set-lsp-completion-fn` callback.
+
+no-op (with a notify) when the id is out of range or no batch is
+pending. call `(popup-hide 'your-popup)` separately if you opened one
+for the picker."#,
+    );
+
+    b.be_doc(
+        "lsp-invoke-code-action",
+        1,
+        |args, _| {
+            let id = as_usize(&args[0], "lsp-invoke-code-action.id")?;
+            with_editor_mut(|st| st.invoke_lsp_code_action_by_id(id));
+            Ok(unit())
+        },
+        r#"(lsp-invoke-code-action/1)
+invoke the code action with the given id from the most recent
+`textDocument/codeAction` batch — applies its workspace edit if any,
+then forwards its server command (if any) via
+`workspace/executeCommand`. id is the `id` field from the action map
+handed to the `set-lsp-code-action-fn` callback.
+
+no-op (with a notify) when the id is out of range or no batch is
+pending."#,
     );
 }
 

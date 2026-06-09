@@ -76,7 +76,29 @@ pub enum Placement {
         side: Side,
         size: Dim,
     },
+    /// Cursor-anchored: resolved at render time against the focused window
+    /// leaf's area and the focused buffer's cursor screen position.
+    /// Placed one row below the cursor when there's room, otherwise above.
+    /// Width hugs `width` (typically `Fit`). When no anchor is available
+    /// (no focused leaf), falls back to `Centered`.
+    AtCursor {
+        width: Dim,
+        height: Dim,
+    },
     Full,
+}
+
+/// Captures where the focused buffer's cursor lives in frame coordinates,
+/// plus the bounds of the focused window leaf. Threaded into the popup
+/// placement pass by the renderer so `Placement::AtCursor` can resolve.
+#[derive(Clone, Copy, Debug)]
+pub struct CursorAnchor {
+    /// Frame-relative bounds of the focused window leaf — popups stay inside
+    /// this when possible.
+    pub leaf: Rect,
+    /// Cursor's absolute frame coords.
+    pub cursor_x: u16,
+    pub cursor_y: u16,
 }
 
 impl Default for Placement {
@@ -147,7 +169,70 @@ impl Placement {
                     )
                 }
             },
+            // `AtCursor` needs a `CursorAnchor` — the plain `resolve` path
+            // has no access to one, so fall back to the editor area's
+            // centered default. The render path uses `resolve_with_anchor`
+            // which handles `AtCursor` properly.
+            Placement::AtCursor { width, height } => Placement::Centered { width, height }
+                .resolve(area, fit_w, fit_h),
             Placement::Full => area,
+        }
+    }
+
+    /// Resolution path for popups: same as [`Self::resolve`] for every
+    /// variant except [`Placement::AtCursor`], which uses `anchor` (if
+    /// available) to place itself adjacent to the cursor. Falls back to
+    /// `Centered` when no anchor is available.
+    pub fn resolve_with_anchor(
+        &self,
+        area: Rect,
+        fit_w: u16,
+        fit_h: u16,
+        anchor: Option<CursorAnchor>,
+    ) -> Rect {
+        match *self {
+            Placement::AtCursor { width, height } => {
+                let Some(a) = anchor else {
+                    return Placement::Centered { width, height }
+                        .resolve(area, fit_w, fit_h);
+                };
+                let leaf = a.leaf;
+                let h = height
+                    .resolve(leaf.height, fit_h)
+                    .max(1)
+                    .min(leaf.height);
+                let w = width
+                    .resolve(leaf.width, fit_w)
+                    .max(1)
+                    .min(leaf.width);
+                // Prefer below the cursor; fall back to above when there's
+                // more room there. Below-room counts the rows under the
+                // cursor row (exclusive of the cursor's own row); above-room
+                // counts the rows above it.
+                let below_room = leaf.bottom().saturating_sub(a.cursor_y + 1);
+                let above_room = a.cursor_y.saturating_sub(leaf.y);
+                let y = if below_room >= h {
+                    a.cursor_y.saturating_add(1)
+                } else if above_room >= h {
+                    a.cursor_y.saturating_sub(h)
+                } else if below_room >= above_room {
+                    // Neither side fully fits — pick whichever has more
+                    // room and let the height clamp.
+                    a.cursor_y.saturating_add(1)
+                } else {
+                    leaf.y
+                };
+                // Horizontal: anchor at cursor_x; shift left if the popup
+                // would overflow the leaf's right edge.
+                let max_x = leaf.right().saturating_sub(w);
+                let x = a.cursor_x.min(max_x).max(leaf.x);
+                // Clamp height to whatever room is actually available at the
+                // chosen y.
+                let avail_h = leaf.bottom().saturating_sub(y);
+                let h = h.min(avail_h).max(1);
+                Rect::new(x, y, w, h)
+            }
+            _ => self.resolve(area, fit_w, fit_h),
         }
     }
 }
@@ -228,6 +313,21 @@ pub fn parse_placement(v: &Rc<Value>) -> Result<Placement, RuntimeError> {
                         .transpose()?
                         .unwrap_or(Dim::Fit);
                     Ok(Placement::Anchored { side, size })
+                }
+                "at-cursor" => {
+                    let width = m
+                        .get(&strkey("w"))
+                        .or_else(|| m.get(&strkey("width")))
+                        .map(parse_dim)
+                        .transpose()?
+                        .unwrap_or(Dim::Fit);
+                    let height = m
+                        .get(&strkey("h"))
+                        .or_else(|| m.get(&strkey("height")))
+                        .map(parse_dim)
+                        .transpose()?
+                        .unwrap_or(Dim::Fit);
+                    Ok(Placement::AtCursor { width, height })
                 }
                 "full" => Ok(Placement::Full),
                 other => Err(unknown_variant("placement.kind", other)),
@@ -436,12 +536,17 @@ fn inset_rect(outer: Rect, i: u16) -> Rect {
 ///
 /// Panics if `panel` is not an [`PanelKind::Overlay`] — only overlay panels
 /// have a placement to resolve.
-pub fn resolve_overlay_rect(panel: &Panel, area: Rect, buf: &Buffer) -> Rect {
+pub fn resolve_overlay_rect(
+    panel: &Panel,
+    area: Rect,
+    buf: &Buffer,
+    anchor: Option<CursorAnchor>,
+) -> Rect {
     let (placement, widget, _) = panel
         .as_overlay()
         .expect("resolve_overlay_rect: panel must be an Overlay");
     if !placement_needs_fit(placement) {
-        return placement.resolve(area, 0, 0);
+        return placement.resolve_with_anchor(area, 0, 0, anchor);
     }
     let (inset_w, inset_h) = buffer_view_inset(widget, panel.buf);
     // Width budget for wrapping when fitting height: full available area
@@ -467,7 +572,7 @@ pub fn resolve_overlay_rect(panel: &Panel, area: Rect, buf: &Buffer) -> Rect {
     };
     let fit_w = fit_inner_w.saturating_add(inset_w);
     let fit_h = fit_inner_h.saturating_add(inset_h);
-    placement.resolve(area, fit_w, fit_h)
+    placement.resolve_with_anchor(area, fit_w, fit_h, anchor)
 }
 
 fn placement_needs_fit(p: &Placement) -> bool {
@@ -475,9 +580,9 @@ fn placement_needs_fit(p: &Placement) -> bool {
         matches!(d, Dim::Fit)
     }
     match *p {
-        Placement::Centered { width, height } | Placement::At { width, height, .. } => {
-            is_fit(width) || is_fit(height)
-        }
+        Placement::Centered { width, height }
+        | Placement::At { width, height, .. }
+        | Placement::AtCursor { width, height } => is_fit(width) || is_fit(height),
         Placement::Anchored { size, .. } => is_fit(size),
         Placement::Full => false,
     }
@@ -656,5 +761,95 @@ mod tests {
         assert_eq!(r.height, 7);
         assert_eq!(r.y, 17);
         assert_eq!(r.width, 80);
+    }
+
+    /// Cursor near the top of a tall leaf — there's plenty of room below,
+    /// so the popup drops one row beneath the cursor.
+    #[test]
+    fn at_cursor_drops_below_when_room() {
+        let p = Placement::AtCursor {
+            width: Dim::Cells(20),
+            height: Dim::Cells(8),
+        };
+        let anchor = CursorAnchor {
+            leaf: Rect::new(0, 0, 80, 24),
+            cursor_x: 5,
+            cursor_y: 3,
+        };
+        let r = p.resolve_with_anchor(Rect::new(0, 0, 80, 24), 20, 8, Some(anchor));
+        assert_eq!(r.x, 5);
+        assert_eq!(r.y, 4);
+        assert_eq!(r.width, 20);
+        assert_eq!(r.height, 8);
+    }
+
+    /// Cursor near the bottom — not enough room below, falls back to above.
+    #[test]
+    fn at_cursor_flips_above_when_no_room_below() {
+        let p = Placement::AtCursor {
+            width: Dim::Cells(20),
+            height: Dim::Cells(8),
+        };
+        let anchor = CursorAnchor {
+            leaf: Rect::new(0, 0, 80, 24),
+            cursor_x: 5,
+            cursor_y: 20,
+        };
+        let r = p.resolve_with_anchor(Rect::new(0, 0, 80, 24), 20, 8, Some(anchor));
+        assert_eq!(r.x, 5);
+        assert_eq!(r.y, 12); // 20 - 8
+        assert_eq!(r.height, 8);
+    }
+
+    /// Cursor near the right edge — popup shifts left to stay inside leaf.
+    #[test]
+    fn at_cursor_shifts_left_to_fit_horizontally() {
+        let p = Placement::AtCursor {
+            width: Dim::Cells(20),
+            height: Dim::Cells(4),
+        };
+        let anchor = CursorAnchor {
+            leaf: Rect::new(0, 0, 30, 24),
+            cursor_x: 25,
+            cursor_y: 2,
+        };
+        let r = p.resolve_with_anchor(Rect::new(0, 0, 30, 24), 20, 4, Some(anchor));
+        // leaf right edge = 30, w=20 → max x = 10. Cursor_x 25 clamped to 10.
+        assert_eq!(r.x, 10);
+        assert_eq!(r.width, 20);
+    }
+
+    /// Multi-window: the popup respects the focused leaf's bounds, not the
+    /// frame bounds. Right-half leaf with cursor near its right edge → popup
+    /// shifts to keep it inside the leaf, not the frame.
+    #[test]
+    fn at_cursor_respects_focused_leaf_in_split() {
+        let p = Placement::AtCursor {
+            width: Dim::Cells(15),
+            height: Dim::Cells(4),
+        };
+        let anchor = CursorAnchor {
+            leaf: Rect::new(40, 0, 40, 24), // right half of an 80-col frame
+            cursor_x: 75,
+            cursor_y: 5,
+        };
+        let r = p.resolve_with_anchor(Rect::new(0, 0, 80, 24), 15, 4, Some(anchor));
+        // leaf right edge = 80, w=15 → max_x = 65. Cursor at 75 → x clamped to 65.
+        assert_eq!(r.x, 65);
+        assert!(r.x >= 40, "popup must not drift left of the leaf");
+        assert_eq!(r.y, 6);
+    }
+
+    /// No anchor available → falls back to centered.
+    #[test]
+    fn at_cursor_falls_back_to_centered_without_anchor() {
+        let p = Placement::AtCursor {
+            width: Dim::Cells(20),
+            height: Dim::Cells(8),
+        };
+        let r = p.resolve_with_anchor(Rect::new(0, 0, 80, 24), 20, 8, None);
+        // Centered: 80-20 / 2 = 30, 24-8 / 2 = 8
+        assert_eq!(r.x, 30);
+        assert_eq!(r.y, 8);
     }
 }

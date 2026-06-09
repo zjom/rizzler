@@ -1395,6 +1395,99 @@
 
 (map 'popup.files "<c-e>" '(popup-hide 'files))
 
+
+;; ----- popup-lsp-completion: picker for textDocument/completion ------
+;;
+;; The Rust side fires `set-lsp-completion-fn` with the items array (and the
+;; request anchor) whenever a completion response lands. We turn that into a
+;; popup-show picker capped at `_lsp-completion-max-rows` visible rows,
+;; anchored just above or below the cursor depending on which side has
+;; room. Applying defers back to `(lsp-apply-completion id)` so Rust
+;; handles the actual text mutation against the originating buffer.
+;;
+;; Bindings (layered on top of `'popup`):
+;;   <c-n> / j  next item       (wraps via buffer scroll)
+;;   <c-p> / k  previous item
+;;   <c-y> / <enter>  accept the highlighted item
+;;   <esc> / q  dismiss the picker without applying
+
+(let _lsp-completion-items    (ref []))
+(let _lsp-completion-max-rows 8)
+
+(fn _lsp-completion-show (items anchor)
+  (do
+    (set! _lsp-completion-items items)
+    (if (= (len items) 0)
+        (popup-hide 'lsp-completion)
+        (popup-show 'lsp-completion
+          (_popup-block "rounded"
+            (str-join [" completions (" (to-str (len items)) ") "] ""))
+          {"text":        (str-join
+                            (fmap (fn _row (it) (get it "label")) items)
+                            "\n")
+           "modes":       ['popup 'popup.lsp-completion]
+           "buffer-mode": 'normal
+           ;; placement-at-cursor is resolved at render time against the
+           ;; focused window leaf, so this works under splits too.
+           "placement":   (placement-at-cursor
+                            'fit (min (len items) _lsp-completion-max-rows))
+           "show-cursor": 1}))))
+
+(set-lsp-completion-fn _lsp-completion-show)
+
+;; Accept the highlighted item — shared by <c-y> and <enter>.
+(fn _lsp-completion-accept ()
+  (do
+    (let items (deref _lsp-completion-items))
+    (let it    (get items (cursor-line)))
+    (if (= it ()) ()
+        (do
+          (popup-hide 'lsp-completion)
+          (lsp-apply-completion (get it "id"))))))
+
+(keymap-set 'popup.lsp-completion "<enter>" '(_lsp-completion-accept))
+(keymap-set 'popup.lsp-completion "<c-y>"   '(_lsp-completion-accept))
+(keymap-set 'popup.lsp-completion "<c-n>"   '(move-cursor 'down))
+(keymap-set 'popup.lsp-completion "<c-p>"   '(move-cursor 'up))
+
+
+;; ----- popup-lsp-code-action: picker for textDocument/codeAction -----
+;;
+;; Same shape as the completion picker, but the keymap layer is
+;; `'popup.lsp-code-action` and accept routes through
+;; `(lsp-invoke-code-action id)` — Rust applies the workspace edit and/or
+;; forwards the server command.
+
+(let _lsp-code-action-items (ref []))
+
+(fn _lsp-code-action-show (actions)
+  (do
+    (set! _lsp-code-action-items actions)
+    (if (= (len actions) 0)
+        (popup-hide 'lsp-code-action)
+        (popup-show 'lsp-code-action
+          (_popup-block "rounded"
+            (str-join [" code actions (" (to-str (len actions)) ") "] ""))
+          {"text":        (str-join
+                            (fmap (fn _row (a) (get a "title")) actions)
+                            "\n")
+           "modes":       ['popup 'popup.lsp-code-action]
+           "buffer-mode": 'normal
+           "placement":   (placement-centered 0.5 0.4)
+           "show-cursor": 1}))))
+
+(set-lsp-code-action-fn _lsp-code-action-show)
+
+(keymap-set 'popup.lsp-code-action "<enter>"
+  '(do
+     (let actions (deref _lsp-code-action-items))
+     (let a       (get actions (cursor-line)))
+     (if (= a ()) ()
+         (do
+           (popup-hide 'lsp-code-action)
+           (lsp-invoke-code-action (get a "id"))))))
+
+
 ;; =============================================================================
 ;; That's the whole default config.
 ;;

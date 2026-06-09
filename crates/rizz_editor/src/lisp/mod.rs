@@ -30,6 +30,7 @@ use crate::state::State;
 
 mod builtins;
 mod helpers;
+pub(crate) mod lsp_convert;
 mod popup_parse;
 
 pub use helpers::quote_for_lisp;

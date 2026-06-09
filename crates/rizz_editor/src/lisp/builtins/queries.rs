@@ -75,4 +75,44 @@ pub(super) fn register(b: &mut Builtins) {
         let n = with_editor_mut(|st| st.focused_buf().abs_col() as i64);
         Ok(Rc::new(n.into()))
     });
+
+    b.be_doc(
+        "cursor-screen-row",
+        0,
+        |_, _| {
+            let n = with_editor_mut(|st| st.focused_buf().cursor_pos().row as i64);
+            Ok(Rc::new(n.into()))
+        },
+        "(cursor-screen-row/0)\nthe focused buffer's cursor row within its viewport (0-indexed from\nthe top of the visible region). pair with (viewport-rows) to decide\nwhether a popup fits below the cursor.",
+    );
+
+    b.be_doc(
+        "cursor-screen-col",
+        0,
+        |_, _| {
+            let n = with_editor_mut(|st| st.focused_buf().cursor_pos().col as i64);
+            Ok(Rc::new(n.into()))
+        },
+        "(cursor-screen-col/0)\nthe focused buffer's cursor column within its viewport (0-indexed\nfrom the left). useful for positioning cursor-anchored popups.",
+    );
+
+    b.be_doc(
+        "viewport-rows",
+        0,
+        |_, _| {
+            let n = with_editor_mut(|st| st.focused_buf().viewport.row as i64);
+            Ok(Rc::new(n.into()))
+        },
+        "(viewport-rows/0)\nthe focused buffer's visible viewport height in cells.",
+    );
+
+    b.be_doc(
+        "viewport-cols",
+        0,
+        |_, _| {
+            let n = with_editor_mut(|st| st.focused_buf().viewport.col as i64);
+            Ok(Rc::new(n.into()))
+        },
+        "(viewport-cols/0)\nthe focused buffer's visible viewport width in cells.",
+    );
 }

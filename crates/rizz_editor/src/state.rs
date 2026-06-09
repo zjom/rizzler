@@ -210,6 +210,40 @@ pub struct State {
     buf_by_uri: HashMap<String, BufferId>,
     /// Monotonic sequence counter for LSP request routing.
     next_lsp_seq: RequestSeq,
+    /// Lisp callable invoked with the items array + anchor when a
+    /// `textDocument/completion` response arrives. `None` falls back to a
+    /// summary `notify`. Installed via `(set-lsp-completion-fn …)`.
+    lsp_completion_fn: Option<Rc<Value>>,
+    /// Lisp callable invoked with the actions array when a
+    /// `textDocument/codeAction` response arrives. `None` falls back to a
+    /// summary `notify`. Installed via `(set-lsp-code-action-fn …)`.
+    lsp_code_action_fn: Option<Rc<Value>>,
+    /// The most recently surfaced completion batch. Keyed by id so lisp can
+    /// invoke an item without round-tripping the insert-text back to Rust.
+    /// Replaced (not appended) on each `LspShowCompletion`.
+    lsp_pending_completion: Option<PendingCompletion>,
+    /// The most recently surfaced code-action batch. Same shape as
+    /// `lsp_pending_completion`.
+    lsp_pending_code_actions: Option<PendingCodeActions>,
+}
+
+/// Side-table backing `(lsp-apply-completion id)`. Captures the originating
+/// buffer and anchor so a delayed invocation still applies in the right
+/// place even if the cursor has moved.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingCompletion {
+    pub buf: BufferId,
+    pub anchor: Position<usize>,
+    pub items: Arc<[rizz_actions::CompletionItemOwned]>,
+}
+
+/// Side-table backing `(lsp-invoke-code-action id)`. The buffer field is
+/// used to look up the originating LSP client at invoke time when the
+/// action carries a `Command` instead of an edit.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingCodeActions {
+    pub buf: BufferId,
+    pub actions: Arc<[rizz_actions::CodeActionOwned]>,
 }
 
 /// What to do with an LSP response when it lands. Held in
@@ -446,6 +480,10 @@ impl State {
             pending_lsp_requests: HashMap::new(),
             buf_by_uri: HashMap::new(),
             next_lsp_seq: 1,
+            lsp_completion_fn: None,
+            lsp_code_action_fn: None,
+            lsp_pending_completion: None,
+            lsp_pending_code_actions: None,
         };
         if let Some(path) = config.edit_path
             && !path.is_dir()
@@ -613,6 +651,29 @@ impl State {
 
     pub fn gutter_width(&self) -> GutterWidth {
         self.gutter_width
+    }
+
+    /// Install the lisp callback for `textDocument/completion` responses.
+    /// The fn receives `(items anchor)` — `items` is an array of maps with
+    /// fields `id`, `label`, `detail`, `insert-text`, `kind`; `anchor` is a
+    /// map with `row` / `col`. Pass `None` to revert to the notify fallback.
+    pub fn set_lsp_completion_fn(&mut self, f: Option<Rc<Value>>) {
+        self.lsp_completion_fn = f;
+    }
+
+    pub fn lsp_completion_fn(&self) -> Option<&Rc<Value>> {
+        self.lsp_completion_fn.as_ref()
+    }
+
+    /// Install the lisp callback for `textDocument/codeAction` responses.
+    /// The fn receives `(actions)` — an array of maps with fields `id`,
+    /// `title`, `kind`, `has-edit`, `has-command`.
+    pub fn set_lsp_code_action_fn(&mut self, f: Option<Rc<Value>>) {
+        self.lsp_code_action_fn = f;
+    }
+
+    pub fn lsp_code_action_fn(&self) -> Option<&Rc<Value>> {
+        self.lsp_code_action_fn.as_ref()
     }
 
     pub fn last_key(&self) -> Option<KeyEvent> {
@@ -1397,30 +1458,162 @@ impl State {
     pub(crate) fn show_lsp_completion(
         &mut self,
         items: Arc<[rizz_actions::CompletionItemOwned]>,
-        _anchor: Position<usize>,
+        anchor: Position<usize>,
     ) {
         if items.is_empty() {
-            self.notify_via_lisp("no completions");
+            self.lsp_pending_completion = None;
+            // Still hand `[]` to the callback so the lisp side can dismiss
+            // any open completion popup. Falls back to notify when no
+            // callback is installed.
+            if self.lsp_completion_fn.is_some() {
+                self.fire_lsp_completion_fn(&items, anchor);
+            } else {
+                self.notify_via_lisp("no completions");
+            }
             return;
         }
-        // Minimal MVP: surface the first item's label.
-        self.notify_via_lisp(&format!(
-            "completion: {} ({} more)",
-            items[0].label,
-            items.len().saturating_sub(1)
-        ));
+        let buf = self.focused_buf_id();
+        self.lsp_pending_completion = Some(PendingCompletion {
+            buf,
+            anchor,
+            items: items.clone(),
+        });
+        if self.lsp_completion_fn.is_some() {
+            self.fire_lsp_completion_fn(&items, anchor);
+        } else {
+            self.notify_via_lisp(&format!(
+                "completion: {} ({} more)",
+                items[0].label,
+                items.len().saturating_sub(1)
+            ));
+        }
+    }
+
+    fn fire_lsp_completion_fn(
+        &mut self,
+        items: &Arc<[rizz_actions::CompletionItemOwned]>,
+        anchor: Position<usize>,
+    ) {
+        use crate::lisp::lsp_convert::{completion_items_to_value, position_to_value};
+        let Some(f) = self.lsp_completion_fn.clone() else {
+            return;
+        };
+        let items_val = completion_items_to_value(items);
+        let anchor_val = position_to_value(anchor);
+        let res = self.with_lisp(|lisp| {
+            let env = lisp.env().clone();
+            rizz::runtime::apply(&f, &[items_val, anchor_val], &env)
+        });
+        if let Err(e) = res {
+            let msg = format!("lsp-completion-fn failed: {e}");
+            warn!(error = %e, "lsp completion callback failed");
+            self.notify_via_lisp(&msg);
+        }
     }
 
     pub(crate) fn show_lsp_code_actions(&mut self, actions: Arc<[rizz_actions::CodeActionOwned]>) {
         if actions.is_empty() {
-            self.notify_via_lisp("no code actions");
+            self.lsp_pending_code_actions = None;
+            if self.lsp_code_action_fn.is_some() {
+                self.fire_lsp_code_action_fn(&actions);
+            } else {
+                self.notify_via_lisp("no code actions");
+            }
             return;
         }
-        self.notify_via_lisp(&format!(
-            "code action: {} ({} more)",
-            actions[0].title,
-            actions.len().saturating_sub(1)
-        ));
+        let buf = self.focused_buf_id();
+        self.lsp_pending_code_actions = Some(PendingCodeActions {
+            buf,
+            actions: actions.clone(),
+        });
+        if self.lsp_code_action_fn.is_some() {
+            self.fire_lsp_code_action_fn(&actions);
+        } else {
+            self.notify_via_lisp(&format!(
+                "code action: {} ({} more)",
+                actions[0].title,
+                actions.len().saturating_sub(1)
+            ));
+        }
+    }
+
+    fn fire_lsp_code_action_fn(&mut self, actions: &Arc<[rizz_actions::CodeActionOwned]>) {
+        use crate::lisp::lsp_convert::code_actions_to_value;
+        let Some(f) = self.lsp_code_action_fn.clone() else {
+            return;
+        };
+        let actions_val = code_actions_to_value(actions);
+        let res = self.with_lisp(|lisp| {
+            let env = lisp.env().clone();
+            rizz::runtime::apply(&f, &[actions_val], &env)
+        });
+        if let Err(e) = res {
+            let msg = format!("lsp-code-action-fn failed: {e}");
+            warn!(error = %e, "lsp code action callback failed");
+            self.notify_via_lisp(&msg);
+        }
+    }
+
+    /// Apply the completion at `id` from the most recent batch. Replaces
+    /// any text typed between the request anchor and the current cursor
+    /// with the item's `insert_text`, in the originating buffer. No-op
+    /// (with notify) when the id is out of range. Called by
+    /// `(lsp-apply-completion id)`.
+    pub(crate) fn apply_lsp_completion_by_id(&mut self, id: usize) {
+        let Some(pending) = self.lsp_pending_completion.clone() else {
+            self.notify_via_lisp("lsp-apply-completion: no pending completion");
+            return;
+        };
+        let Some(item) = pending.items.get(id) else {
+            self.notify_via_lisp(&format!("lsp-apply-completion: id {id} out of range"));
+            return;
+        };
+        let Some(b) = self.bufs.get_mut(pending.buf) else {
+            return;
+        };
+        let rope = b.rope().clone();
+        let last_line = rope.len_lines().saturating_sub(1);
+        let anchor_line = rope.line_to_char(pending.anchor.row.min(last_line));
+        let anchor_idx = (anchor_line + pending.anchor.col).min(rope.len_chars());
+        let cursor = b.abs_pos();
+        let cursor_line = rope.line_to_char(cursor.row.min(last_line));
+        let cursor_idx = (cursor_line + cursor.col).min(rope.len_chars());
+        let (start, end) = (anchor_idx.min(cursor_idx), anchor_idx.max(cursor_idx));
+        b.land_cursor_to(pending.anchor.row, pending.anchor.col);
+        if end > start {
+            b.delete_range(start, end);
+        }
+        let text = item.insert_text.clone();
+        if !text.is_empty() {
+            b.insert_many(&text);
+        }
+    }
+
+    /// Invoke the code action at `id` from the most recent batch — apply its
+    /// workspace edit if present, then forward its command (if any) through
+    /// `workspace/executeCommand`. Called by `(lsp-invoke-code-action id)`.
+    pub(crate) fn invoke_lsp_code_action_by_id(&mut self, id: usize) {
+        let Some(pending) = self.lsp_pending_code_actions.clone() else {
+            self.notify_via_lisp("lsp-invoke-code-action: no pending code action");
+            return;
+        };
+        let Some(action) = pending.actions.get(id).cloned() else {
+            self.notify_via_lisp(&format!("lsp-invoke-code-action: id {id} out of range"));
+            return;
+        };
+        if let Some(edit) = action.edit {
+            self.apply_lsp_workspace_edit(Arc::new(edit), Arc::from(action.title.as_ref()));
+        }
+        if let Some(cmd) = action.command {
+            let Some((client, _uri, _enc, _pos, _anchor)) = self.focused_lsp_context(pending.buf)
+            else {
+                self.notify_via_lisp(
+                    "lsp-invoke-code-action: no language server attached to originating buffer",
+                );
+                return;
+            };
+            self.lsp_send_execute_command(client, cmd);
+        }
     }
 
     pub(crate) fn apply_lsp_text_edits(
@@ -1739,9 +1932,24 @@ impl State {
         };
         let editor_h = rows.saturating_sub(STATUS_LINE_ROWS + MINIBUFFER_ROWS);
         let editor_area = ratatui::layout::Rect::new(0, 0, cols, editor_h);
+        let focused_path = self.windows.focused_path().clone();
+        let mut cursor_anchor: Option<rizz_ui::panel::CursorAnchor> = None;
         for leaf in self.windows.layout(editor_area) {
             if let Some(buf) = self.bufs.get_mut(leaf.buf) {
                 buf.viewport = Position::new(leaf.area.width, leaf.area.height);
+            }
+            if leaf.path == focused_path {
+                // Approximate cursor frame coords — exact rendering path
+                // adds the gutter offset, but for placement size selection
+                // a small column offset doesn't matter.
+                if let Some(buf) = self.bufs.get(leaf.buf) {
+                    let c = buf.cursor_pos();
+                    cursor_anchor = Some(rizz_ui::panel::CursorAnchor {
+                        leaf: leaf.area,
+                        cursor_x: leaf.area.x.saturating_add(c.col),
+                        cursor_y: leaf.area.y.saturating_add(c.row),
+                    });
+                }
             }
         }
         self.bufs.minibuffer_mut().viewport = Position::new(cols, MINIBUFFER_ROWS);
@@ -1751,7 +1959,8 @@ impl State {
             .filter_map(|p| {
                 let (_, widget, _) = p.as_overlay()?;
                 let buf = &self.bufs[p.buf];
-                let outer = rizz_ui::panel::resolve_overlay_rect(p, editor_area, buf);
+                let outer =
+                    rizz_ui::panel::resolve_overlay_rect(p, editor_area, buf, cursor_anchor);
                 let inner = rizz_ui::panel::buffer_view_rect(widget, outer, p.buf);
                 Some((p.buf, Position::new(inner.width, inner.height)))
             })
@@ -2673,6 +2882,106 @@ mod tests {
             .message_history()
             .any(|m| m.as_ref() == "drained via with_lisp");
         assert!(found, "with_lisp must drain queued notifications on exit");
+    }
+
+    /// End-to-end: a lisp callback installed via `set-lsp-completion-fn`
+    /// runs when `show_lsp_completion` fires, receives the items as a
+    /// structured array (not a flattened notify string), and an item's
+    /// `insert-text` can be applied via `lsp-apply-completion`.
+    #[test]
+    fn lsp_completion_callback_receives_items_and_applies() {
+        use rizz_actions::{CompletionItemKindOwned, CompletionItemOwned};
+        let mut s = test_state();
+        // Capture the items the callback was handed into a ref so we can
+        // assert on the structure from outside lisp.
+        s.eval_lisp("(let _lsp-comp-seen (ref ()))").unwrap();
+        s.eval_lisp("(fn _lsp-comp (items anchor) (set! _lsp-comp-seen items))")
+            .unwrap();
+        s.eval_lisp("(set-lsp-completion-fn _lsp-comp)").unwrap();
+
+        let items: Arc<[CompletionItemOwned]> = Arc::from(vec![
+            CompletionItemOwned {
+                label: Arc::from("println!"),
+                detail: None,
+                insert_text: Arc::from("println!"),
+                kind: CompletionItemKindOwned::Function,
+            },
+            CompletionItemOwned {
+                label: Arc::from("print!"),
+                detail: Some(Arc::from("macro")),
+                insert_text: Arc::from("print!"),
+                kind: CompletionItemKindOwned::Function,
+            },
+        ]);
+        let anchor = Position { row: 0, col: 0 };
+        s.show_lsp_completion(items, anchor);
+
+        // The callback should have seen an array of two maps.
+        let seen_label = s
+            .eval_lisp("(get (get (deref _lsp-comp-seen) 0) \"label\")")
+            .unwrap();
+        assert_eq!(seen_label.as_str().as_deref(), Some("println!"));
+        let seen_kind = s
+            .eval_lisp("(get (get (deref _lsp-comp-seen) 0) \"kind\")")
+            .unwrap();
+        match &*seen_kind {
+            Value::Ident(s) => assert_eq!(s.as_ref(), "function"),
+            other => panic!("expected ident kind, got {other:?}"),
+        }
+
+        // Applying id=1 should insert `print!` at the originating buffer.
+        s.set_mode(EditingMode::Insert);
+        s.eval_lisp("(lsp-apply-completion 1)").unwrap();
+        let text = s.focused_buf().text();
+        assert!(text.starts_with("print!"), "got buffer text: {text:?}");
+    }
+
+    /// End-to-end: a lisp callback installed via `set-lsp-code-action-fn`
+    /// receives the actions as a structured array. Out-of-range id falls
+    /// through as a notify rather than panicking.
+    #[test]
+    fn lsp_code_action_callback_receives_actions_and_handles_bad_id() {
+        use rizz_actions::CodeActionOwned;
+        let mut s = test_state();
+        s.eval_lisp("(let _lsp-ca-seen (ref ()))").unwrap();
+        s.eval_lisp("(fn _lsp-ca (actions) (set! _lsp-ca-seen actions))")
+            .unwrap();
+        s.eval_lisp("(set-lsp-code-action-fn _lsp-ca)").unwrap();
+
+        let actions: Arc<[CodeActionOwned]> = Arc::from(vec![CodeActionOwned {
+            title: Arc::from("Import `HashMap`"),
+            kind: Some(Arc::from("quickfix")),
+            edit: None,
+            command: None,
+        }]);
+        s.show_lsp_code_actions(actions);
+
+        let seen_title = s
+            .eval_lisp("(get (get (deref _lsp-ca-seen) 0) \"title\")")
+            .unwrap();
+        assert_eq!(seen_title.as_str().as_deref(), Some("Import `HashMap`"));
+
+        // Out-of-range id is a graceful no-op (notify path).
+        s.eval_lisp("(lsp-invoke-code-action 42)").unwrap();
+    }
+
+    /// Clearing the callback with `()` reverts to the notify-string
+    /// fallback the older code shipped. init.rz installs a popup-based
+    /// callback by default, so this test clears it first.
+    #[test]
+    fn lsp_completion_with_no_callback_falls_back_to_notify() {
+        use rizz_actions::{CompletionItemKindOwned, CompletionItemOwned};
+        let mut s = test_state();
+        s.eval_lisp("(set-lsp-completion-fn ())").unwrap();
+        let items: Arc<[CompletionItemOwned]> = Arc::from(vec![CompletionItemOwned {
+            label: Arc::from("only"),
+            detail: None,
+            insert_text: Arc::from("only"),
+            kind: CompletionItemKindOwned::Text,
+        }]);
+        s.show_lsp_completion(items, Position { row: 0, col: 0 });
+        let found = s.message_history().any(|m| m.as_ref().contains("only"));
+        assert!(found, "notify fallback should still surface the label");
     }
 
     #[test]

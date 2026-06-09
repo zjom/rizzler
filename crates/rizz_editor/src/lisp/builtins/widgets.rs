@@ -496,6 +496,30 @@ example:
   (placement-at 0 0 40 10)
   (placement-at 10 5 'fit 'fit)"#,
     );
+
+    b.be_doc(
+        "placement-at-cursor",
+        2,
+        |args, _| {
+            let mut m: ImHashMap<Rc<Value>, Rc<Value>> = ImHashMap::new();
+            m.insert(strkey("kind"), Rc::new(Value::Str("at-cursor".into())));
+            m.insert(strkey("w"), args[0].clone());
+            m.insert(strkey("h"), args[1].clone());
+            Ok(Rc::new(Value::Map(m)))
+        },
+        r#"(placement-at-cursor/2)
+returns a placement map anchored next to the focused editor cursor. the
+renderer drops the popup one row below the cursor when there's room and
+above it otherwise, keeping it inside the focused window leaf — so the
+placement stays correct under splits and custom frame layouts.
+w / h follow the same shape as in (placement-centered):
+  - int        absolute cell count
+  - float      fraction of the leaf's width / height (0.0..=1.0)
+  - 'fit       hug content (the popup's text bounds)
+example:
+  (placement-at-cursor 'fit 8)         ; hug width, 8 rows tall
+  (placement-at-cursor 'fit 'fit)      ; hug both axes"#,
+    );
 }
 
 fn strkey(s: &str) -> Rc<Value> {

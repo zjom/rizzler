@@ -838,6 +838,17 @@ impl State {
                     let f = self.focused_buf_id();
                     self.bufs[f].insert_char(*c);
                 }
+                Action::ReplaceChar(c) => {
+                    let count = self.count_prefix.or_one();
+                    let f = self.focused_buf_id();
+                    debug!(buf = ?f, ch = %c, count, "Action::ReplaceChar");
+                    self.bufs[f].replace_char_n(*c, count);
+                }
+                Action::OverwriteChar(c) => {
+                    let f = self.focused_buf_id();
+                    trace!(buf = ?f, ch = %c, "Action::OverwriteChar");
+                    self.bufs[f].overwrite_char(*c);
+                }
                 Action::SpeculativeInsertChar(c) => {
                     let f = self.focused_buf_id();
                     self.bufs[f].insert_speculative_char(*c);
@@ -1697,5 +1708,76 @@ mod tests {
         s.bufs[b].move_cursor_n(rizz_text::MoveKind::Relative(Position::new(5, 0)), 1);
         s.eval_lisp(r#"(select-inner "paren")"#).unwrap();
         assert_eq!(s.bufs[b].selected_text().as_deref(), Some("bar"));
+    }
+
+    // ---- vim `r` / `R` ------------------------------------------------
+
+    #[test]
+    fn r_chord_replaces_char_under_cursor() {
+        use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("hello");
+        s.handle_key_event(CT::new(KeyCode::Char('r'), KeyModifiers::NONE))
+            .unwrap();
+        // Chord descended; nothing changed yet.
+        assert_eq!(s.bufs[b].text(), "hello");
+        s.handle_key_event(CT::new(KeyCode::Char('X'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(s.bufs[b].text(), "Xello");
+        assert_eq!(s.bufs[b].mode(), EditingMode::Normal);
+    }
+
+    #[test]
+    fn count_prefix_scales_r_chord() {
+        use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("hello");
+        s.handle_key_event(CT::new(KeyCode::Char('3'), KeyModifiers::NONE))
+            .unwrap();
+        s.handle_key_event(CT::new(KeyCode::Char('r'), KeyModifiers::NONE))
+            .unwrap();
+        s.handle_key_event(CT::new(KeyCode::Char('z'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(s.bufs[b].text(), "zzzlo");
+    }
+
+    #[test]
+    fn capital_r_enters_replace_mode_and_overwrites() {
+        use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("hello");
+        s.handle_key_event(CT::new(KeyCode::Char('R'), KeyModifiers::SHIFT))
+            .unwrap();
+        assert_eq!(s.bufs[b].mode(), EditingMode::Replace);
+        s.handle_key_event(CT::new(KeyCode::Char('H'), KeyModifiers::SHIFT))
+            .unwrap();
+        s.handle_key_event(CT::new(KeyCode::Char('I'), KeyModifiers::SHIFT))
+            .unwrap();
+        assert_eq!(s.bufs[b].text(), "HIllo");
+        s.handle_key_event(CT::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(s.bufs[b].mode(), EditingMode::Normal);
+    }
+
+    #[test]
+    fn replace_mode_at_eol_extends_line() {
+        use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("hi");
+        // Park the cursor past the last char (`A` semantics) before
+        // entering Replace mode: subsequent overwrites have to fall back
+        // to insert because there's no char under the cursor to replace.
+        s.bufs[b].set_mode(EditingMode::Insert);
+        s.bufs[b].move_cursor_n(rizz_text::MoveKind::LineEnd, 1);
+        s.bufs[b].set_mode(EditingMode::Replace);
+        s.handle_key_event(CT::new(KeyCode::Char('!'), KeyModifiers::NONE))
+            .unwrap();
+        s.handle_key_event(CT::new(KeyCode::Char('?'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(s.bufs[b].text(), "hi!?");
     }
 }

@@ -285,6 +285,15 @@
 (map 'normal "cG"     '(change-motion 'file-end))
 (map 'normal "c%"     '(change-motion 'match-bracket))
 
+;; Replace: `r<char>` is a chord prefix that overwrites the char under the
+;; cursor (or `Nr<char>` overwrites `N` chars) with a single keystroke; `R`
+;; drops you into Replace mode, where every typed char overwrites and
+;; advances until you press <esc>. Both halves are wired in Rust because
+;; they need an `on_char` capture the keymap-set surface can't express —
+;; `r` lives at a non-root trie node, and Replace mode swaps its root
+;; `on_char` for an overwriting variant.
+(map 'normal "R"      '(set-mode 'replace))
+
 (map 'normal "u"      '(undo))
 (map 'normal "<c-r>"  '(redo))
 
@@ -443,6 +452,24 @@
 (map 'insert "<down>"      '(move-cursor 'down))
 (map 'insert "<left>"      '(move-cursor 'left))
 (map 'insert "<right>"     '(move-cursor 'right))
+
+;; ============================================================================
+;; Replace mode (`R`)
+;; ============================================================================
+;;
+;; Each printable key overwrites the char under the cursor and advances by
+;; one (the `on_char` wiring is in Rust — see `default_keymaps`). The
+;; bindings here are just the control keys that need to do something other
+;; than overwrite. `<backspace>` only walks the cursor back; restoring the
+;; original char on the way back (vim's full Replace-mode `<bs>` semantics)
+;; isn't tracked yet.
+(map 'replace "<esc>"       '(set-mode 'normal))
+(map 'replace "<enter>"     '(newline))
+(map 'replace "<backspace>" '(move-cursor 'left))
+(map 'replace "<up>"        '(move-cursor 'up))
+(map 'replace "<down>"      '(move-cursor 'down))
+(map 'replace "<left>"      '(move-cursor 'left))
+(map 'replace "<right>"     '(move-cursor 'right))
 
 ;; ============================================================================
 ;; Command mode (minibuffer)
@@ -620,6 +647,7 @@
 (face-define "vague.mode.visual-line"  {"fg": pal-parameter   "bold": 1 "italic": 1})
 (face-define "vague.mode.visual-block" {"fg": pal-parameter   "bold": 1 "underline": 1})
 (face-define "vague.mode.command"      {"fg": pal-hint        "bold": 1})
+(face-define "vague.mode.replace"      {"fg": pal-error       "bold": 1})
 
 ;; dim for the rest of the buffer, fg for the active row.
 (face-define "vague.gutter"          {"fg": pal-comment})
@@ -759,7 +787,8 @@
   (if (= m "visual-line")  "vague.mode.visual-line"
   (if (= m "visual-block") "vague.mode.visual-block"
   (if (= m "command")      "vague.mode.command"
-                           "vague.muted")))))))
+  (if (= m "replace")      "vague.mode.replace"
+                           "vague.muted"))))))))
 
 ;; Tiny lookup tables expressed as `cond`.
 (fn _mode-glyph (m)
@@ -770,6 +799,7 @@
     ((= m "visual-line")      "L")
     ((= m "visual-block")     "B")
     ((= m "command")          "C")
+    ((= m "replace")          "R")
     (else                     "?")))
 
 (fn _seg-mode ()

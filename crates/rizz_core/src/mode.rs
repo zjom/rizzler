@@ -16,6 +16,9 @@ pub enum EditingMode {
     VisualLine,
     VisualBlock,
     Command,
+    /// Vim `R` — typed characters overwrite the char under the cursor and
+    /// advance. At end-of-line the typed char extends the line.
+    Replace,
 }
 
 impl EditingMode {
@@ -31,6 +34,7 @@ impl EditingMode {
             Self::VisualLine => "visual-line",
             Self::VisualBlock => "visual-block",
             Self::Command => "command",
+            Self::Replace => "replace",
         }
     }
 
@@ -43,6 +47,7 @@ impl EditingMode {
             Self::VisualLine => "V",
             Self::VisualBlock => "^V",
             Self::Command => "c",
+            Self::Replace => "R",
         }
     }
 }
@@ -57,6 +62,7 @@ impl FromStr for EditingMode {
             "visual-line" => EditingMode::VisualLine,
             "visual-block" => EditingMode::VisualBlock,
             "command" => EditingMode::Command,
+            "replace" => EditingMode::Replace,
             _ => return Err("unknown EditingMode"),
         })
     }

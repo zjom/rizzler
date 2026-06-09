@@ -1258,4 +1258,91 @@ mod tests {
         assert!(s.undo());
         assert_eq!(s.buf.to_string(), "hello world");
     }
+
+    // ---- replace_char_n (vim `r<char>`) ------------------------------
+
+    #[test]
+    fn replace_char_n_swaps_char_under_cursor() {
+        let mut s = mk("hello");
+        s.cursor_pos = Position::<u16>::new(1, 0);
+        assert!(s.replace_char_n('a', 1));
+        assert_eq!(s.buf.to_string(), "hallo");
+        // cursor stays on the replaced char
+        assert_eq!(cur_col(&s), 1);
+    }
+
+    #[test]
+    fn replace_char_n_with_count_replaces_multiple() {
+        let mut s = mk("hello");
+        assert!(s.replace_char_n('x', 3));
+        assert_eq!(s.buf.to_string(), "xxxlo");
+        // cursor lands on last replaced char
+        assert_eq!(cur_col(&s), 2);
+    }
+
+    #[test]
+    fn replace_char_n_count_clamps_at_line_end() {
+        let mut s = mk("hi\nworld");
+        // count 5 on a 2-char line only consumes 2 chars; the next line
+        // is untouched.
+        assert!(s.replace_char_n('z', 5));
+        assert_eq!(s.buf.to_string(), "zz\nworld");
+        assert_eq!(cur_col(&s), 1);
+    }
+
+    #[test]
+    fn replace_char_n_on_empty_line_is_noop() {
+        let mut s = mk("\nrest");
+        assert!(!s.replace_char_n('x', 1));
+        assert_eq!(s.buf.to_string(), "\nrest");
+    }
+
+    #[test]
+    fn replace_char_n_undo_restores_original() {
+        let mut s = mk("hello");
+        s.replace_char_n('x', 3);
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "hello");
+    }
+
+    // ---- overwrite_char (vim Replace-mode keystroke) -----------------
+
+    #[test]
+    fn overwrite_char_replaces_and_advances() {
+        let mut s = mk("hello");
+        s.mode = EditingMode::Replace;
+        s.overwrite_char('H');
+        assert_eq!(s.buf.to_string(), "Hello");
+        assert_eq!(cur_col(&s), 1);
+    }
+
+    #[test]
+    fn overwrite_char_at_eol_extends_line() {
+        let mut s = mk("hi");
+        s.mode = EditingMode::Replace;
+        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.overwrite_char('!');
+        assert_eq!(s.buf.to_string(), "hi!");
+        assert_eq!(cur_col(&s), 3);
+    }
+
+    #[test]
+    fn overwrite_char_run_replaces_in_place() {
+        let mut s = mk("hello");
+        s.mode = EditingMode::Replace;
+        s.overwrite_char('H');
+        s.overwrite_char('E');
+        s.overwrite_char('L');
+        assert_eq!(s.buf.to_string(), "HELlo");
+        assert_eq!(cur_col(&s), 3);
+    }
+
+    #[test]
+    fn overwrite_char_undo_restores_original() {
+        let mut s = mk("hello");
+        s.mode = EditingMode::Replace;
+        s.overwrite_char('X');
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "hello");
+    }
 }

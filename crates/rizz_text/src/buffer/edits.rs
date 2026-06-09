@@ -410,6 +410,84 @@ impl Buffer {
         self.delete_range(s, e)
     }
 
+    /// Vim `r<char>` — replace up to `count` chars starting at the cursor
+    /// with `c`, recorded as a single tracked edit. Stops at the trailing
+    /// newline (so the line's length never changes) and cursor lands on the
+    /// last replaced char. Returns whether anything changed.
+    pub fn replace_char_n(&mut self, c: char, count: u32) -> bool {
+        self.close_insert_batch();
+        let n = count.max(1) as usize;
+        let abs = self.abs_pos();
+        let line = self.buf.line(abs.row);
+        let line_len = line.len_chars();
+        let has_trailing_nl = line_len > 0 && line.char(line_len - 1) == '\n';
+        let usable = if has_trailing_nl { line_len - 1 } else { line_len };
+        if abs.col >= usable {
+            return false;
+        }
+        let take = n.min(usable - abs.col);
+        let line_start = self.buf.line_to_char(abs.row);
+        let s = line_start + abs.col;
+        let e = s + take;
+        let removed = self.buf.slice(s..e).to_string();
+        let inserted: String = std::iter::repeat(c).take(take).collect();
+        let abs_before = abs;
+
+        self.buf.remove(s..e);
+        self.buf.insert(s, &inserted);
+        self.invalidate_wrap_cache();
+
+        // Land cursor on the last replaced char.
+        self.land_cursor_at(abs.row, abs.col + take - 1);
+        let abs_after = self.abs_pos();
+
+        self.changetree.track_change(Delta {
+            at: s,
+            removed: Rc::from(removed),
+            inserted: Rc::from(inserted),
+            cursor_before: (abs_before.row, abs_before.col),
+            cursor_after: (abs_after.row, abs_after.col),
+        });
+        true
+    }
+
+    /// Vim Replace-mode keystroke — overwrite the char under the cursor with
+    /// `c` and advance by one. At end-of-line (or on the trailing newline)
+    /// the char is inserted instead, extending the line. Recorded as a
+    /// single tracked edit.
+    pub fn overwrite_char(&mut self, c: char) {
+        self.close_insert_batch();
+        let abs = self.abs_pos();
+        let line = self.buf.line(abs.row);
+        let line_len = line.len_chars();
+        let has_trailing_nl = line_len > 0 && line.char(line_len - 1) == '\n';
+        let usable = if has_trailing_nl { line_len - 1 } else { line_len };
+        if abs.col >= usable {
+            self.insert_char(c);
+            return;
+        }
+        let line_start = self.buf.line_to_char(abs.row);
+        let cidx = line_start + abs.col;
+        let removed_ch = self.buf.char(cidx);
+        let abs_before = abs;
+
+        self.buf.remove(cidx..cidx + 1);
+        let inserted = String::from(c);
+        self.buf.insert(cidx, &inserted);
+        self.invalidate_wrap_cache();
+
+        self.land_cursor_at(abs.row, abs.col + 1);
+        let abs_after = self.abs_pos();
+
+        self.changetree.track_change(Delta {
+            at: cidx,
+            removed: Rc::from(String::from(removed_ch)),
+            inserted: Rc::from(inserted),
+            cursor_before: (abs_before.row, abs_before.col),
+            cursor_after: (abs_after.row, abs_after.col),
+        });
+    }
+
     pub fn delete_char_at(&mut self, Position { col, row }: Position<usize>) {
         self.close_insert_batch();
         if row >= self.buf.len_lines() {

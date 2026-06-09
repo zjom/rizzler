@@ -22,6 +22,15 @@ pub enum Action {
     SetMode(EditingMode),
 
     InsertChar(char),
+    /// Vim `r<char>` — replace the `count` chars at the cursor with `c` as a
+    /// single tracked edit. The cursor lands on the last replaced char.
+    /// Count comes from the pending count prefix at apply time, since the
+    /// action is emitted by the keymap's `on_char` after `r` descends.
+    ReplaceChar(char),
+    /// Vim Replace-mode keystroke — overwrite the char under the cursor with
+    /// `c` and advance. At end-of-line the char is inserted (extends the
+    /// line). Each call is a separate tracked edit.
+    OverwriteChar(char),
     /// Insert `char` speculatively while a chord prefix is in flight. The
     /// keymap emits this on `Descend` when the descending mode's `on_char`
     /// would have produced an `InsertChar`, so the user sees their typing

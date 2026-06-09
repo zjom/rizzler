@@ -286,7 +286,8 @@ impl Buffer {
             | EditingMode::Command
             | EditingMode::Visual
             | EditingMode::VisualLine
-            | EditingMode::VisualBlock => chars,
+            | EditingMode::VisualBlock
+            | EditingMode::Replace => chars,
         };
         let abs_col = self.abs_col().min(max_col);
         self.cursor_pos.col = abs_col.saturating_sub(self.file_pos.col) as u16;

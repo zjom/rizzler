@@ -1373,12 +1373,18 @@ impl State {
             ));
             return;
         };
-        // Open the target file (reuse if already open) and jump.
+        // Open the target file (reuse if already open) and jump. The buffer
+        // may be brand new — its viewport is `(0,0)` until layout runs, and
+        // cursor clamping / centering / syntax highlighting all bail when
+        // viewport row is zero. Refresh viewports first so the landing +
+        // centering operate on real dimensions.
         let dest_buf = self.open_or_focus_file(&path);
+        self.refresh_viewport();
         if let Some(b) = self.bufs.get_mut(dest_buf) {
             let row = target.range.start.row;
             let col = target.range.start.col;
             b.land_cursor_to(row, col);
+            b.move_cursor(rizz_text::MoveKind::Center);
         }
         if locations.len() > 1 {
             self.notify_via_lisp(&format!(

@@ -218,11 +218,24 @@ pub struct State {
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // some fields exist for future routing logic
 enum PendingLspKind {
-    Hover { buf: BufferId, anchor: Position<usize> },
-    GotoDefinition { buf: BufferId },
-    Completion { buf: BufferId, anchor: Position<usize> },
-    Format { buf: BufferId, deadline: Instant },
-    CodeAction { buf: BufferId },
+    Hover {
+        buf: BufferId,
+        anchor: Position<usize>,
+    },
+    GotoDefinition {
+        buf: BufferId,
+    },
+    Completion {
+        buf: BufferId,
+        anchor: Position<usize>,
+    },
+    Format {
+        buf: BufferId,
+        deadline: Instant,
+    },
+    CodeAction {
+        buf: BufferId,
+    },
 }
 
 fn resolve_workdir(path: Option<&Path>, cwd: &Path) -> PathBuf {
@@ -1071,11 +1084,7 @@ impl State {
         else {
             return;
         };
-        let Some(server_name) = self
-            .lsp_manifest
-            .server_for_ext(&ext)
-            .map(str::to_string)
-        else {
+        let Some(server_name) = self.lsp_manifest.server_for_ext(&ext).map(str::to_string) else {
             return;
         };
 
@@ -1114,8 +1123,8 @@ impl State {
         };
 
         // Compute workspace root and language id.
-        let root_dir =
-            find_workspace_root(&path, &installed.spec.root_markers).unwrap_or(self.workdir.to_path_buf());
+        let root_dir = find_workspace_root(&path, &installed.spec.root_markers)
+            .unwrap_or(self.workdir.to_path_buf());
         let root_uri = path_to_uri(&root_dir);
 
         let running = match self.lsp_registry.ensure_running(
@@ -1143,12 +1152,8 @@ impl State {
             .first()
             .cloned()
             .unwrap_or_else(|| ext.clone());
-        let attachment = LspBufferAttachment::new(
-            running.id,
-            uri.clone(),
-            language_id,
-            running.encoding,
-        );
+        let attachment =
+            LspBufferAttachment::new(running.id, uri.clone(), language_id, running.encoding);
         self.buf_by_uri.insert(uri, buf);
         self.bufs[buf].set_lsp_handle(Some(Box::new(attachment)));
     }
@@ -1165,7 +1170,13 @@ impl State {
     fn focused_lsp_context(
         &self,
         buf: BufferId,
-    ) -> Option<(LspClientId, String, LspEncoding, lsp_types::Position, Position<usize>)> {
+    ) -> Option<(
+        LspClientId,
+        String,
+        LspEncoding,
+        lsp_types::Position,
+        Position<usize>,
+    )> {
         let b = self.bufs.get(buf)?;
         let handle = b.lsp_handle()?;
         // Trait object: downcast won't work without manual support. Use
@@ -1184,9 +1195,11 @@ impl State {
         // ensure_running was indexed by name and the buffer's URI was
         // registered alongside, we look up *any* running client whose
         // name's manifest entry claims this extension.
-        let ext = b
-            .fs_path()
-            .and_then(|p| p.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()))?;
+        let ext = b.fs_path().and_then(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.to_ascii_lowercase())
+        })?;
         let name = self.lsp_manifest.server_for_ext(&ext)?;
         let running = self.lsp_registry.get(name)?;
         let lsp_pos = rizz_lsp::byte_to_lsp(b.rope(), abs.row, abs.col, running.encoding);
@@ -1313,7 +1326,9 @@ impl State {
                 .and_then(|ext| self.lsp_manifest.server_for_ext(&ext).map(str::to_string))
         });
         let Some(server_name) = resolved_name else {
-            self.notify_via_lisp("lsp restart: no server name and no LSP attached to focused buffer");
+            self.notify_via_lisp(
+                "lsp restart: no server name and no LSP attached to focused buffer",
+            );
             return;
         };
         // Drop attachments on every buffer that uses this server, then
@@ -1352,7 +1367,10 @@ impl State {
         }
         let target = &locations[0];
         let Some(path) = uri_to_path(&target.uri) else {
-            self.notify_via_lisp(&format!("definition target `{}` is not a local file", target.uri));
+            self.notify_via_lisp(&format!(
+                "definition target `{}` is not a local file",
+                target.uri
+            ));
             return;
         };
         // Open the target file (reuse if already open) and jump.
@@ -1387,10 +1405,7 @@ impl State {
         ));
     }
 
-    pub(crate) fn show_lsp_code_actions(
-        &mut self,
-        actions: Arc<[rizz_actions::CodeActionOwned]>,
-    ) {
+    pub(crate) fn show_lsp_code_actions(&mut self, actions: Arc<[rizz_actions::CodeActionOwned]>) {
         if actions.is_empty() {
             self.notify_via_lisp("no code actions");
             return;
@@ -1408,7 +1423,9 @@ impl State {
         edits: Arc<[rizz_actions::TextEditOwned]>,
         _label: Arc<str>,
     ) {
-        let Some(_b) = self.bufs.get_mut(buf) else { return };
+        let Some(_b) = self.bufs.get_mut(buf) else {
+            return;
+        };
         if edits.is_empty() {
             return;
         }
@@ -1454,7 +1471,7 @@ impl State {
             let Some(path) = uri_to_path(&doc.uri) else {
                 continue;
             };
-            let dest_buf = self.open_or_focus_file(&path);
+            let dest_buf = self.find_or_open_file(&path);
             self.apply_lsp_text_edits(dest_buf, doc.edits.clone(), label.clone());
         }
     }
@@ -1594,9 +1611,6 @@ impl State {
         }
     }
 
-    /// Open `path` in an existing buffer (if any) or create a new one,
-    /// attach a highlighter + LSP if applicable, focus the result, and
-    /// return its id.
     /// Drain any pending LSP events and apply the synthesized actions.
     /// Call this from the main loop after every event tick (and on the
     /// `event::poll` timeout branch) so server-pushed diagnostics surface
@@ -1611,8 +1625,14 @@ impl State {
     }
 
     fn open_or_focus_file(&mut self, path: &Path) -> BufferId {
+        let id = self.find_or_open_file(path);
+        self.windows.set_focused_buf(id);
+        id
+    }
+
+    fn find_or_open_file(&mut self, path: &Path) -> BufferId {
         let path: Rc<Path> = Rc::from(path);
-        let ids: Vec<BufferId> = self.bufs.file_ids().iter().copied().collect();
+        let ids: Vec<BufferId> = self.bufs.file_ids().to_vec();
         for id in ids {
             if self.bufs.get(id).and_then(|b| b.fs_path()).as_deref() == Some(&*path) {
                 return id;

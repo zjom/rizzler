@@ -13,8 +13,6 @@ use crossbeam_channel::Sender as CbSender;
 use futures_util::sink::SinkExt;
 use futures_util::stream::StreamExt;
 use lsp_types::{
-    notification::{Notification as _, *},
-    request::{Request as _, *},
     ClientCapabilities, ClientInfo, CompletionClientCapabilities, CompletionItemCapability,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     FormattingOptions, GeneralClientCapabilities, HoverClientCapabilities, HoverContents,
@@ -24,10 +22,12 @@ use lsp_types::{
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
     TextDocumentPositionParams, TextDocumentSyncClientCapabilities, Uri,
     VersionedTextDocumentIdentifier, WorkDoneProgressParams,
+    notification::{Notification as _, *},
+    request::{Request as _, *},
 };
 use rizz_actions::LspClientId;
 use rizz_lsp_install::ServerSpec;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
@@ -234,9 +234,9 @@ where
             let frame = frame?;
             let msg: IncomingMessage = serde_json::from_slice(&frame)?;
             match msg {
-                IncomingMessage::Response { id, result, error, .. }
-                    if id == RequestId::number(0) =>
-                {
+                IncomingMessage::Response {
+                    id, result, error, ..
+                } if id == RequestId::number(0) => {
                     if let Some(err) = error {
                         return Err(LspError::InitializeFailed {
                             name: name.to_string(),
@@ -444,7 +444,11 @@ where
             };
             send_notification::<DidOpenTextDocument>(&mut ctx.writer, params).await
         }
-        ClientCmd::DidChange { uri, version, changes } => {
+        ClientCmd::DidChange {
+            uri,
+            version,
+            changes,
+        } => {
             let entry = pending_changes.entry(uri).or_insert_with(|| PendingChange {
                 version,
                 changes: Vec::new(),
@@ -464,7 +468,8 @@ where
         }
         ClientCmd::Hover { seq, uri, position } => {
             flush_changes(ctx, pending_changes).await;
-            let id = *next_id; *next_id += 1;
+            let id = *next_id;
+            *next_id += 1;
             pending.by_lsp_id.insert(id, PendingKind::Hover(seq));
             let params = HoverParams {
                 text_document_position_params: TextDocumentPositionParams {
@@ -479,7 +484,8 @@ where
         }
         ClientCmd::GotoDefinition { seq, uri, position } => {
             flush_changes(ctx, pending_changes).await;
-            let id = *next_id; *next_id += 1;
+            let id = *next_id;
+            *next_id += 1;
             pending
                 .by_lsp_id
                 .insert(id, PendingKind::GotoDefinition(seq));
@@ -497,7 +503,8 @@ where
         }
         ClientCmd::Completion { seq, uri, position } => {
             flush_changes(ctx, pending_changes).await;
-            let id = *next_id; *next_id += 1;
+            let id = *next_id;
+            *next_id += 1;
             pending.by_lsp_id.insert(id, PendingKind::Completion(seq));
             let params = lsp_types::CompletionParams {
                 text_document_position: TextDocumentPositionParams {
@@ -519,7 +526,8 @@ where
             insert_spaces,
         } => {
             flush_changes(ctx, pending_changes).await;
-            let id = *next_id; *next_id += 1;
+            let id = *next_id;
+            *next_id += 1;
             pending.by_lsp_id.insert(id, PendingKind::Format(seq));
             let params = lsp_types::DocumentFormattingParams {
                 text_document: TextDocumentIdentifier {
@@ -536,7 +544,8 @@ where
         }
         ClientCmd::CodeAction { seq, uri, range } => {
             flush_changes(ctx, pending_changes).await;
-            let id = *next_id; *next_id += 1;
+            let id = *next_id;
+            *next_id += 1;
             pending.by_lsp_id.insert(id, PendingKind::CodeAction(seq));
             let params = lsp_types::CodeActionParams {
                 text_document: TextDocumentIdentifier {
@@ -554,7 +563,8 @@ where
             command,
             arguments,
         } => {
-            let id = *next_id; *next_id += 1;
+            let id = *next_id;
+            *next_id += 1;
             pending
                 .by_lsp_id
                 .insert(id, PendingKind::ExecuteCommand(seq));
@@ -625,9 +635,7 @@ async fn flush_changes<R, W>(
                 })
                 .collect(),
         };
-        if let Err(e) =
-            send_notification::<DidChangeTextDocument>(&mut ctx.writer, params).await
-        {
+        if let Err(e) = send_notification::<DidChangeTextDocument>(&mut ctx.writer, params).await {
             warn!(error = %e, "didChange send failed");
         }
     }
@@ -647,10 +655,12 @@ where
         IncomingMessage::Notification { method, params, .. } => {
             handle_notification(ctx, &method, params).await
         }
-        IncomingMessage::Request { id, method, params, .. } => {
-            handle_request(ctx, id, &method, params).await
-        }
-        IncomingMessage::Response { id, result, error, .. } => {
+        IncomingMessage::Request {
+            id, method, params, ..
+        } => handle_request(ctx, id, &method, params).await,
+        IncomingMessage::Response {
+            id, result, error, ..
+        } => {
             let RequestId::Number(n) = id else {
                 trace!("ignoring string-id response");
                 return Ok(());
@@ -785,8 +795,7 @@ where
     let empty = ropey::Rope::new();
     match kind {
         PendingKind::Hover(seq) => {
-            let parsed: Option<lsp_types::Hover> =
-                serde_json::from_value(result).ok().flatten();
+            let parsed: Option<lsp_types::Hover> = serde_json::from_value(result).ok().flatten();
             let contents = parsed.map(|h| render_hover(h.contents));
             let _ = ctx.events_tx.send(LspEvent::HoverResponse {
                 client: ctx.id,
@@ -809,7 +818,9 @@ where
         PendingKind::Completion(seq) => {
             let resp: Option<lsp_types::CompletionResponse> =
                 serde_json::from_value(result).ok().flatten();
-            let items = resp.map(action_bridge::completion_items).unwrap_or_default();
+            let items = resp
+                .map(action_bridge::completion_items)
+                .unwrap_or_default();
             let _ = ctx.events_tx.send(LspEvent::CompletionResponse {
                 client: ctx.id,
                 seq,

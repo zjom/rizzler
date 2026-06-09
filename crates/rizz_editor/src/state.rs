@@ -35,6 +35,7 @@ use rizz_ui::{
 use crate::buffer_list::{BufferList, CycleDir};
 use crate::journal::Journal;
 use crate::lisp::{EditorGuard, LispRuntime, RenderPhaseGuard};
+use crate::search::{self, Search, SearchDir};
 
 pub use rizz_core::{FocusDir, SplitDir};
 
@@ -172,6 +173,10 @@ pub struct State {
     /// register name instead of the unnamed one. Cleared after the next
     /// consuming action so the next operation falls back to the defaults.
     pending_register: Option<char>,
+    /// Last `/` pattern + direction + the overlays painted for the most
+    /// recent search, so `n`/`N` can repeat and the next `/` can clear
+    /// stale highlights.
+    search: Search,
 }
 
 fn resolve_workdir(path: Option<&Path>, cwd: &Path) -> PathBuf {
@@ -303,6 +308,7 @@ impl State {
             pending_notifications: Vec::new(),
             registers: Registers::new(),
             pending_register: None,
+            search: Search::default(),
         };
         if let Some(path) = config.edit_path
             && !path.is_dir()
@@ -1038,6 +1044,15 @@ impl State {
     pub fn apply(&mut self, actions: &[Rc<Action>]) -> io::Result<()> {
         for action in actions {
             trace!(action = ?action.as_ref(), "applying action");
+            // Only mutating actions against the minibuffer text trigger a
+            // refresh; arrows / `<esc>` / submit handle themselves.
+            let edits_minibuffer_text = matches!(
+                action.as_ref(),
+                Action::InsertChar(_)
+                    | Action::DeleteChar
+                    | Action::DeleteCharAt(_)
+                    | Action::InsertMany(_)
+            );
             match action.as_ref() {
                 Action::Noop => {}
                 Action::Quit => {
@@ -1261,6 +1276,48 @@ impl State {
                     debug!("Action::CommandCancel");
                     self.exit_minibuffer();
                 }
+                Action::SearchSubmit => {
+                    let pattern = self.bufs.minibuffer().text();
+                    debug!(pattern, "Action::SearchSubmit");
+                    if pattern.is_empty() {
+                        // Empty submit → repeat last search forward from
+                        // wherever live search left the cursor (vim's
+                        // "/<enter>" semantic). The origin is no longer
+                        // useful at this point.
+                        self.search.take_origin();
+                        self.exit_minibuffer();
+                        if self.search.last_pattern().is_some() {
+                            self.repeat_search(SearchDir::Forward);
+                        }
+                    } else {
+                        // Live search already placed the cursor and painted
+                        // overlays; just commit by recording the pattern in
+                        // the `/` register and dropping the origin so cancel
+                        // can't fire afterwards. Center the viewport on the
+                        // match — vim's `nzz` flow, applied to the initial
+                        // submit as well as `n`/`N` repeats.
+                        self.search.take_origin();
+                        self.registers.record_search(&*pattern);
+                        self.exit_minibuffer();
+                        let target_id = self.windows.focused_buf();
+                        if let Some(b) = self.bufs.get_mut(target_id) {
+                            b.move_cursor(rizz_text::MoveKind::Center);
+                        }
+                    }
+                }
+                Action::SearchCancel => {
+                    debug!("Action::SearchCancel");
+                    self.cancel_live_search();
+                    self.exit_minibuffer();
+                }
+                Action::SearchNext => {
+                    debug!("Action::SearchNext");
+                    self.repeat_search(SearchDir::Forward);
+                }
+                Action::SearchPrev => {
+                    debug!("Action::SearchPrev");
+                    self.repeat_search(SearchDir::Backward);
+                }
                 Action::BufCreate { path, set_active } => {
                     info!(?path, set_active, "Action::BufCreate");
                     self.create_buf(*set_active, path.clone())?;
@@ -1317,17 +1374,36 @@ impl State {
                     }
                 }
             }
+            // Live-`/`-search: after any minibuffer-text-mutating action,
+            // re-anchor the search at origin and re-run with the freshly
+            // typed pattern. Skipped for the action arms that handle search
+            // explicitly (Submit/Cancel/Next/Prev).
+            if edits_minibuffer_text
+                && self.bufs.minibuffer().mode() == EditingMode::Search
+            {
+                self.refresh_live_search();
+            }
         }
         Ok(())
     }
 
     fn set_mode(&mut self, mode: EditingMode) {
-        if mode == EditingMode::Command {
-            debug!("entering command mode (focusing minibuffer)");
+        if matches!(mode, EditingMode::Command | EditingMode::Search) {
+            debug!(?mode, "entering minibuffer-backed mode");
+            // Stash the cursor + scroll position so cancel can restore it
+            // and so live search has a stable origin to search from.
+            if mode == EditingMode::Search {
+                let buf_id = self.windows.focused_buf();
+                let buf = &self.bufs[buf_id];
+                self.search.set_origin(crate::search::SearchOrigin {
+                    buf: buf_id,
+                    cursor: buf.abs_pos(),
+                });
+            }
             self.bufs.minibuffer_mut().clear();
-            self.bufs.minibuffer_mut().set_mode(EditingMode::Command);
+            self.bufs.minibuffer_mut().set_mode(mode);
             // Only push a fresh minibuffer panel if one isn't already on the
-            // stack — re-entering command mode while already there is a no-op.
+            // stack — re-entering while already there is a no-op.
             if !self.panels.iter().any(|p| p.is_minibuffer()) {
                 let mb = self.bufs.minibuffer_id();
                 self.panels.push(Panel::minibuffer(mb));
@@ -1337,6 +1413,166 @@ impl State {
             debug!(buf = ?f, ?mode, "setting buffer mode");
             self.bufs[f].set_mode(mode);
         }
+    }
+
+    /// Execute a single forward/backward search against the window-focused
+    /// buffer. `from_char` is the rope char index the match search anchors
+    /// to; `inclusive` decides whether a match starting exactly at
+    /// `from_char` counts. `notify_on_miss` toggles the "Pattern not found"
+    /// toast — off for the live-search path so every partial keystroke
+    /// doesn't spam notifications.
+    fn run_search_from(
+        &mut self,
+        pattern: &str,
+        dir: SearchDir,
+        from_char: usize,
+        inclusive: bool,
+        notify_on_miss: bool,
+    ) -> Result<bool, regex::Error> {
+        let target_id = self.windows.focused_buf();
+        let result = {
+            let bufs = &mut self.bufs;
+            let Some(target) = bufs.get_mut(target_id) else {
+                return Ok(false);
+            };
+            let mut other_clears: Vec<(BufferId, rizz_text::OverlayId)> = Vec::new();
+            let r = search::run(
+                &mut self.search,
+                target,
+                target_id,
+                pattern,
+                dir,
+                from_char,
+                inclusive,
+                |bid, ov| other_clears.push((bid, ov)),
+            );
+            (r, other_clears)
+        };
+        let (r, other_clears) = result;
+        for (bid, ov) in other_clears {
+            if let Some(b) = self.bufs.get_mut(bid) {
+                b.props_mut().delete_overlay(ov);
+            }
+        }
+        match &r {
+            Ok(false) if notify_on_miss => {
+                self.notify_via_lisp(&format!("Pattern not found: {pattern}"));
+            }
+            Err(e) if notify_on_miss => {
+                self.notify_via_lisp(&format!("Invalid pattern: {e}"));
+            }
+            _ => {}
+        }
+        r
+    }
+
+    /// Re-run the last `/` pattern in `dir`. `n` always means forward,
+    /// `N` always means backward — independent of how the pattern was
+    /// entered. Notifies when no previous pattern has been stored.
+    /// Centers the viewport on the destination match (vim's `nzz` flow).
+    fn repeat_search(&mut self, dir: SearchDir) {
+        let Some(pattern) = self.search.last_pattern().cloned() else {
+            self.notify_via_lisp("No previous search pattern");
+            return;
+        };
+        // Advance past the current match — vim's `n`/`N` semantic.
+        let cursor_char = self.window_cursor_char();
+        let found = self
+            .run_search_from(pattern.as_ref(), dir, cursor_char, false, true)
+            .unwrap_or(false);
+        if found {
+            let target_id = self.windows.focused_buf();
+            if let Some(b) = self.bufs.get_mut(target_id) {
+                b.move_cursor(rizz_text::MoveKind::Center);
+            }
+        }
+    }
+
+    /// Re-paint the live search against the current minibuffer pattern,
+    /// anchored at the origin captured on `/` entry. Empty pattern (or an
+    /// invalid partial regex like `[`) clears highlights and rewinds the
+    /// cursor to origin so the user sees the original buffer back.
+    fn refresh_live_search(&mut self) {
+        let Some(origin) = self.search.origin() else {
+            return;
+        };
+        let pattern = self.bufs.minibuffer().text();
+        // Always restart from origin: cursor sits there before the run,
+        // and `run` jumps to the next match from there if the regex
+        // compiles + matches at least once.
+        self.restore_origin(origin);
+        if pattern.is_empty() {
+            self.clear_live_overlays();
+            return;
+        }
+        let from_char = self.char_idx_in_buf(origin.buf, origin.cursor);
+        let r = self.run_search_from(&pattern, SearchDir::Forward, from_char, true, false);
+        match r {
+            Ok(true) => {
+                // Center the viewport on the live match as the user types,
+                // matching vim's `set scrolloff=999` feel without the
+                // overshoot when the pattern stops matching (`restore_origin`
+                // above already snapped back).
+                if let Some(b) = self.bufs.get_mut(origin.buf) {
+                    b.move_cursor(rizz_text::MoveKind::Center);
+                }
+            }
+            Err(_) => {
+                // Partial regex — drop any stale paint but don't fight the user.
+                self.clear_live_overlays();
+            }
+            _ => {}
+        }
+    }
+
+    /// Drop every overlay the current Search has painted across buffers.
+    fn clear_live_overlays(&mut self) {
+        let mut other_clears: Vec<(BufferId, rizz_text::OverlayId)> = Vec::new();
+        {
+            let bufs = &mut self.bufs;
+            let prefer_id = self
+                .search
+                .origin()
+                .map(|o| o.buf)
+                .or_else(|| Some(self.windows.focused_buf()));
+            let prefer = prefer_id.and_then(|id| bufs.get_mut(id));
+            search::clear_overlays(&mut self.search, prefer, |bid, ov| {
+                other_clears.push((bid, ov))
+            });
+        }
+        for (bid, ov) in other_clears {
+            if let Some(b) = self.bufs.get_mut(bid) {
+                b.props_mut().delete_overlay(ov);
+            }
+        }
+    }
+
+    /// `<esc>` while typing a `/` pattern: drop highlights and put the
+    /// cursor + scroll back where the user pressed `/`.
+    fn cancel_live_search(&mut self) {
+        if let Some(origin) = self.search.take_origin() {
+            self.restore_origin(origin);
+        }
+        self.clear_live_overlays();
+    }
+
+    fn restore_origin(&mut self, origin: crate::search::SearchOrigin) {
+        if let Some(buf) = self.bufs.get_mut(origin.buf) {
+            let cidx = buf.rope().line_to_char(origin.cursor.row) + origin.cursor.col;
+            buf.move_cursor_to_char(cidx);
+        }
+    }
+
+    fn window_cursor_char(&self) -> usize {
+        let buf_id = self.windows.focused_buf();
+        let buf = &self.bufs[buf_id];
+        let p = buf.abs_pos();
+        buf.rope().line_to_char(p.row) + p.col
+    }
+
+    fn char_idx_in_buf(&self, buf_id: BufferId, pos: Position<usize>) -> usize {
+        let buf = &self.bufs[buf_id];
+        buf.rope().line_to_char(pos.row) + pos.col
     }
 
     fn exit_minibuffer(&mut self) {

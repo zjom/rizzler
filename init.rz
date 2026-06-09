@@ -195,6 +195,9 @@
 ;; (shift), `<m-x>` (meta/alt). Whitespace / function keys: `<esc>`,
 ;; `<enter>`, `<backspace>`, `<up>`, `<pageup>`, etc.
 (map 'normal ":"      '(set-mode 'command))
+(map 'normal "/"      '(set-mode 'search))
+(map 'normal "n"      '(search-next))
+(map 'normal "N"      '(search-prev))
 (map 'normal "v"      '(set-mode 'visual))
 (map 'normal "V"      '(set-mode 'visual-line))
 (map 'normal "<c-v>"  '(set-mode 'visual-block))
@@ -489,6 +492,22 @@
 (map 'command "<right>"     '(move-cursor 'right))
 
 ;; ============================================================================
+;; Search mode (`/` — minibuffer)
+;; ============================================================================
+;;
+;; Search mode reuses the minibuffer the same way command mode does: typed
+;; chars go in as a regex pattern, `<enter>` runs it against the focused
+;; window's buffer (highlights every match and jumps the cursor forward),
+;; `<esc>` cancels without changing the buffer. `n` / `N` outside search
+;; repeat the last pattern forward / backward.
+(map 'search "<enter>"     '(search-submit))
+(map 'search "<backspace>" '(delete-char))
+(map 'search "<esc>"       '(search-cancel))
+(map 'normal "<esc>"       '(search-cancel))
+(map 'search "<left>"      '(move-cursor 'left))
+(map 'search "<right>"     '(move-cursor 'right))
+
+;; ============================================================================
 ;; Text Objects (`i<x>` / `a<x>`)
 ;; ============================================================================
 ;;
@@ -647,7 +666,13 @@
 (face-define "vague.mode.visual-line"  {"fg": pal-parameter   "bold": 1 "italic": 1})
 (face-define "vague.mode.visual-block" {"fg": pal-parameter   "bold": 1 "underline": 1})
 (face-define "vague.mode.command"      {"fg": pal-hint        "bold": 1})
+(face-define "vague.mode.search"       {"fg": pal-warning     "bold": 1})
 (face-define "vague.mode.replace"      {"fg": pal-error       "bold": 1})
+
+;; `/` search match highlight. Reuses the dim navy from the vague palette so
+;; it pops against the default background without drowning out the cursor
+;; line.
+(face-define 'search-match             {"bg": pal-search})
 
 ;; dim for the rest of the buffer, fg for the active row.
 (face-define "vague.gutter"          {"fg": pal-comment})
@@ -813,8 +838,9 @@
   (if (= m "visual-line")  "vague.mode.visual-line"
   (if (= m "visual-block") "vague.mode.visual-block"
   (if (= m "command")      "vague.mode.command"
+  (if (= m "search")       "vague.mode.search"
   (if (= m "replace")      "vague.mode.replace"
-                           "vague.muted"))))))))
+                           "vague.muted")))))))))
 
 ;; Tiny lookup tables expressed as `cond`.
 (fn _mode-glyph (m)
@@ -825,6 +851,7 @@
     ((= m "visual-line")      "L")
     ((= m "visual-block")     "B")
     ((= m "command")          "C")
+    ((= m "search")           "/")
     ((= m "replace")          "R")
     (else                     "?")))
 

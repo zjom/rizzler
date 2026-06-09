@@ -696,6 +696,7 @@ dependencies = [
  "crossterm 0.29.0",
  "im",
  "ratatui",
+ "regex",
  "rizz",
  "rizz_actions",
  "rizz_core",

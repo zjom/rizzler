@@ -284,6 +284,7 @@ impl Buffer {
             EditingMode::Normal => chars.saturating_sub(1),
             EditingMode::Insert
             | EditingMode::Command
+            | EditingMode::Search
             | EditingMode::Visual
             | EditingMode::VisualLine
             | EditingMode::VisualBlock
@@ -300,6 +301,16 @@ impl Buffer {
         let cidx = self.buf.line_to_char(abs.row) + abs.col;
         let new = motion(&self.buf, cidx, big);
         self.set_abs_char(new);
+    }
+
+    /// Place the cursor at the absolute char index `cidx` in the rope.
+    /// Updates the viewport only when the target falls outside it — distinct
+    /// from `MoveKind::Absolute`, which forces the viewport to start at the
+    /// target position.
+    pub fn move_cursor_to_char(&mut self, cidx: usize) {
+        self.close_insert_batch();
+        self.set_abs_char(cidx);
+        self.clamp_cursor();
     }
 
     /// Place the cursor at absolute char index `cidx` in the rope.

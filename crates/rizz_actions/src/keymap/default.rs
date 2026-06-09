@@ -40,7 +40,8 @@ pub fn default_keymaps() -> HashMap<Rc<str>, Rc<Trie>> {
     });
     HashMap::from([
         (EditingMode::Insert.as_str().into(), typing_node.clone()),
-        (EditingMode::Command.as_str().into(), typing_node),
+        (EditingMode::Command.as_str().into(), typing_node.clone()),
+        (EditingMode::Search.as_str().into(), typing_node),
         (EditingMode::Normal.as_str().into(), normal_node),
         (EditingMode::Replace.as_str().into(), overwrite_node),
     ])

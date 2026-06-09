@@ -21,6 +21,7 @@ pub mod buffer_list;
 pub mod completion;
 pub mod journal;
 pub mod lisp;
+pub mod search;
 pub mod state;
 
 pub use buffer_list::{BufferList, CycleDir};

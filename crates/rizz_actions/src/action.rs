@@ -136,6 +136,21 @@ pub enum Action {
 
     CommandCancel,
 
+    /// Vim `/` — read the minibuffer text as a regex, find every match in
+    /// the focused buffer, highlight them, and jump the cursor to the first
+    /// match at or after the current position. Wraps to the start of the
+    /// buffer if there is no match after the cursor.
+    SearchSubmit,
+    /// Vim `<esc>` while typing a `/` pattern — drop the minibuffer without
+    /// changing the cursor or highlights.
+    SearchCancel,
+    /// Vim `n` — jump to the next match of the most recently submitted
+    /// pattern in the same direction. No-op + notify when there is none.
+    SearchNext,
+    /// Vim `N` — jump to the next match in the reverse of the most recently
+    /// submitted direction.
+    SearchPrev,
+
     BufCreate {
         set_active: bool,
         path: Option<Rc<Path>>,

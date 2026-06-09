@@ -16,6 +16,9 @@ pub enum EditingMode {
     VisualLine,
     VisualBlock,
     Command,
+    /// Vim `/` — typed characters land in the minibuffer as a search
+    /// pattern; `<enter>` runs the search and `<esc>` cancels.
+    Search,
     /// Vim `R` — typed characters overwrite the char under the cursor and
     /// advance. At end-of-line the typed char extends the line.
     Replace,
@@ -34,6 +37,7 @@ impl EditingMode {
             Self::VisualLine => "visual-line",
             Self::VisualBlock => "visual-block",
             Self::Command => "command",
+            Self::Search => "search",
             Self::Replace => "replace",
         }
     }
@@ -47,6 +51,7 @@ impl EditingMode {
             Self::VisualLine => "V",
             Self::VisualBlock => "^V",
             Self::Command => "c",
+            Self::Search => "/",
             Self::Replace => "R",
         }
     }
@@ -62,6 +67,7 @@ impl FromStr for EditingMode {
             "visual-line" => EditingMode::VisualLine,
             "visual-block" => EditingMode::VisualBlock,
             "command" => EditingMode::Command,
+            "search" => EditingMode::Search,
             "replace" => EditingMode::Replace,
             _ => return Err("unknown EditingMode"),
         })

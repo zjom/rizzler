@@ -661,13 +661,34 @@
 (face-define "vague.menu"          {"fg": pal-fg "bg": pal-line})
 (face-define "vague.menu-selected" {"fg": pal-bg "bg": pal-warning "bold": 1})
 
+;; Popup faces, reused by `notify` / `messages` / `popup-help` / `popup-files`
+(face-define "popup.default"     {"fg": pal-fg       "bg": pal-bg})
+(face-define "popup.border"      {"fg": pal-border   "bg": pal-bg})
+(face-define "popup.title"       {"fg": pal-warning  "bg": pal-bg "bold": 1})
+(face-define "popup.dir"         {"fg": pal-hint     "bold": 1})
+(face-define "popup.file"        {"fg": pal-fg})
 
 ;; Tree-sitter syntax faces. The precompute pass looks up
 ;; `syntax.<capture>` for each highlight capture emitted by the bundled
 ;; grammars. Dotted captures (`function.method`) fall back to the parent
 ;; (`function`) when the more specific face is undefined, so only override
 ;; what you want different — everything else still gets styled.
-;;
+(face-define "syntax.keyword"      {"fg": pal-keyword     "bold": 1})
+(face-define "syntax.string"       {"fg": pal-string    "italic": 1})
+(face-define "syntax.escape"       {"fg": pal-keyword})
+(face-define "syntax.number"       {"fg": pal-number})
+(face-define "syntax.comment"      {"fg": pal-comment   "italic": 1})
+(face-define "syntax.function"     {"fg": pal-func})
+(face-define "syntax.constructor"  {"fg": pal-constant})
+(face-define "syntax.type"         {"fg": pal-type})
+(face-define "syntax.constant"     {"fg": pal-constant})
+(face-define "syntax.variable"     {"fg": pal-fg})
+(face-define "syntax.property"     {"fg": pal-property})
+(face-define "syntax.attribute"    {"fg": pal-parameter "italic": 1})
+(face-define "syntax.label"        {"fg": pal-keyword})
+(face-define "syntax.operator"     {"fg": pal-operator})
+(face-define "syntax.punctuation"  {"fg": pal-fg})
+
 ;; ── Installing grammars ──
 ;;
 ;; `(grammar-install 'name)` resolves <name> against the curated table in
@@ -693,30 +714,6 @@
 ;;
 ;; The low-level `(grammar-register lib scm ext)` is still available for
 ;; users building parsers by hand — see `(show grammar-register)`.
-(face-define "syntax.keyword"      {"fg": pal-keyword     "bold": 1})
-(face-define "syntax.string"       {"fg": pal-string    "italic": 1})
-(face-define "syntax.escape"       {"fg": pal-keyword})
-(face-define "syntax.number"       {"fg": pal-number})
-(face-define "syntax.comment"      {"fg": pal-comment   "italic": 1})
-(face-define "syntax.function"     {"fg": pal-func})
-(face-define "syntax.constructor"  {"fg": pal-constant})
-(face-define "syntax.type"         {"fg": pal-type})
-(face-define "syntax.constant"     {"fg": pal-constant})
-(face-define "syntax.variable"     {"fg": pal-fg})
-(face-define "syntax.property"     {"fg": pal-property})
-(face-define "syntax.attribute"    {"fg": pal-parameter "italic": 1})
-(face-define "syntax.label"        {"fg": pal-keyword})
-(face-define "syntax.operator"     {"fg": pal-operator})
-(face-define "syntax.punctuation"  {"fg": pal-fg})
-
-
-;; Popup faces, reused by `notify` / `messages` / `popup-help` / `popup-files`
-(face-define "popup.default"     {"fg": pal-fg       "bg": pal-bg})
-(face-define "popup.border"      {"fg": pal-border   "bg": pal-bg})
-(face-define "popup.title"       {"fg": pal-warning  "bg": pal-bg "bold": 1})
-(face-define "popup.dir"         {"fg": pal-hint     "bold": 1})
-(face-define "popup.file"        {"fg": pal-fg})
-
 
 ;; ============================================================================
 ;; Widgets — the building blocks of the UI

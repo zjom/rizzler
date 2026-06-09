@@ -15,6 +15,24 @@ use tracing::{debug, error, info, instrument, warn};
 
 use super::State;
 
+/// Filesystem roots the editor reads from. `workdir` is what relative paths
+/// resolve against (cwd, or the parent of an edit target passed on the
+/// command line); `config_dir` is where `init.rz`, `grammars.toml`, and
+/// `lsp.toml` live and where the lisp basedir points during init eval.
+pub(super) struct Workspace {
+    pub workdir: Rc<Path>,
+    pub config_dir: Rc<Path>,
+}
+
+impl Workspace {
+    pub(super) fn new(workdir: Rc<Path>, config_dir: Rc<Path>) -> Self {
+        Self {
+            workdir,
+            config_dir,
+        }
+    }
+}
+
 pub(super) const INIT_SCRIPT_NAME: &str = "init.rz";
 pub(super) const EMBEDDED_INIT_SCRIPT: &str = include_str!("../../../../init.rz");
 pub(super) const GRAMMARS_MANIFEST_NAME: &str = "grammars.toml";
@@ -175,17 +193,22 @@ impl State {
     /// template if missing, and eval it with the lisp basedir pointed at the
     /// config dir (so `(open "foo.rz")` inside `init.rz` resolves relative to
     /// it). Restores the basedir to the editor workdir on the way out.
-    #[instrument(skip(self), fields(config_dir = %self.config_dir.display()))]
+    #[instrument(skip(self), fields(config_dir = %self.workspace.config_dir.display()))]
     pub(super) fn run_init_script(&mut self) -> anyhow::Result<()> {
-        let src = load_init_script_at(&self.config_dir)?;
+        let src = load_init_script_at(&self.workspace.config_dir)?;
         debug!(bytes = src.len(), "loaded init.rz");
-        let config_dir = self.config_dir.clone();
-        self.lisp.as_mut().unwrap().set_basedir(config_dir.as_ref());
-        let eval_result = self.eval_lisp_script(&src);
-        self.lisp
+        let config_dir = self.workspace.config_dir.clone();
+        self.scripting
+            .lisp
             .as_mut()
             .unwrap()
-            .set_basedir(self.workdir.as_ref());
+            .set_basedir(config_dir.as_ref());
+        let eval_result = self.eval_lisp_script(&src);
+        self.scripting
+            .lisp
+            .as_mut()
+            .unwrap()
+            .set_basedir(self.workspace.workdir.as_ref());
         if let Err(e) = &eval_result {
             error!(error = %e, "init.rz eval failed");
         } else {
@@ -199,18 +222,18 @@ impl State {
     /// re-entering `eval_lisp_script`, since the runtime is already on the
     /// stack when a builtin runs.
     pub fn load_init_script(&self) -> anyhow::Result<String> {
-        load_init_script_at(&self.config_dir)
+        load_init_script_at(&self.workspace.config_dir)
     }
 
     pub fn config_dir(&self) -> Rc<Path> {
-        self.config_dir.clone()
+        self.workspace.config_dir.clone()
     }
 
     pub fn init_script_path(&self) -> PathBuf {
-        self.config_dir.join(INIT_SCRIPT_NAME)
+        self.workspace.config_dir.join(INIT_SCRIPT_NAME)
     }
 
     pub fn workdir(&self) -> Rc<Path> {
-        self.workdir.clone()
+        self.workspace.workdir.clone()
     }
 }

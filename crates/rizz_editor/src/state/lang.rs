@@ -336,7 +336,7 @@ impl State {
         };
 
         let root_dir = find_workspace_root(&path, &installed.spec.root_markers)
-            .unwrap_or(self.workdir.to_path_buf());
+            .unwrap_or(self.workspace.workdir.to_path_buf());
         let root_uri = path_to_uri(&root_dir);
 
         let running = match self.lang.lsp_registry.ensure_running(
@@ -366,7 +366,7 @@ impl State {
             .unwrap_or_else(|| ext.clone());
         let attachment =
             LspBufferAttachment::new(running.id, uri.clone(), language_id, running.encoding);
-        self.buf_by_uri.insert(uri, buf);
+        self.bufs.register_uri(uri, buf);
         self.bufs[buf].set_lsp_handle(Some(Box::new(attachment)));
     }
 }

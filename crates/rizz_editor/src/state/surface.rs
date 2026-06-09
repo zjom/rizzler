@@ -9,10 +9,31 @@ use std::rc::Rc;
 use rizz_core::{EditingMode, Position};
 use rizz_search::SearchOrigin;
 use rizz_text::BufferId;
-use rizz_ui::panel::{Panel, PanelKind};
+use rizz_ui::{
+    WindowTree,
+    panel::{Panel, PanelKind, PanelStack},
+};
 use tracing::{debug, info, instrument, trace};
 
 use super::{PopupSpec, State};
+
+/// The arrangement of editor windows + the panel stack stacked above them.
+/// Windows form a layout tree of buffer leaves; panels (minibuffer when a
+/// `Command` / `Search` mode is active, popups, …) steal focus from the
+/// underlying window when present.
+pub(super) struct Surface {
+    pub windows: WindowTree,
+    pub panels: PanelStack,
+}
+
+impl Surface {
+    pub(super) fn new(focused_buf: BufferId) -> Self {
+        Self {
+            windows: WindowTree::new(focused_buf),
+            panels: PanelStack::new(),
+        }
+    }
+}
 
 /// Bottom-of-screen reservation: one row for the status line, one for the
 /// minibuffer. Subtracted from the terminal height when sizing the editor
@@ -24,7 +45,7 @@ impl State {
     /// Topmost keymap layer of the topmost *overlay* panel, if any. Used by
     /// the `popup-mode` lisp builtin to detect "am I inside a popup of kind X?"
     pub fn top_popup_mode(&self) -> Option<Rc<str>> {
-        self.panels
+        self.surface.panels
             .top_overlay()
             .and_then(|p| p.keymap_layers.last().cloned())
     }
@@ -41,7 +62,7 @@ impl State {
         wrap_mode = ?spec.wrap_mode,
     ))]
     pub fn show_popup(&mut self, name: Rc<str>, spec: PopupSpec) -> BufferId {
-        if let Some(mut existing) = self.panels.remove_overlay_by_name(&name) {
+        if let Some(mut existing) = self.surface.panels.remove_overlay_by_name(&name) {
             let id = existing.buf;
             let buf = &mut self.bufs[id];
             if let Some(text) = spec.initial_text {
@@ -58,7 +79,7 @@ impl State {
                 show_cursor: spec.show_cursor,
                 name,
             };
-            self.panels.push(existing);
+            self.surface.panels.push(existing);
             self.refresh_viewport();
             info!(?id, "overlay panel updated");
             return id;
@@ -72,7 +93,7 @@ impl State {
         buf.set_wrap_column(spec.wrap_column);
         buf.set_breakindent(spec.breakindent);
         let id = self.bufs.push_panel(buf);
-        self.panels.push(Panel {
+        self.surface.panels.push(Panel {
             buf: id,
             keymap_layers: spec.mode_layers,
             widget: Some(spec.widget),
@@ -92,7 +113,7 @@ impl State {
     /// minibuffer).
     #[instrument(skip(self))]
     pub fn hide_popup(&mut self, name: &str) -> bool {
-        let Some(panel) = self.panels.remove_overlay_by_name(name) else {
+        let Some(panel) = self.surface.panels.remove_overlay_by_name(name) else {
             trace!(name, "no overlay with that name");
             return false;
         };
@@ -107,7 +128,7 @@ impl State {
     /// need to know which popup they're closing.
     #[instrument(skip(self))]
     pub fn close_popup(&mut self) -> bool {
-        let Some(panel) = self.panels.pop_top_overlay() else {
+        let Some(panel) = self.surface.panels.pop_top_overlay() else {
             trace!("no overlay to close");
             return false;
         };
@@ -123,7 +144,7 @@ impl State {
         if !self.bufs.is_file_buf(removed) && removed != self.bufs.minibuffer_id() {
             self.bufs.remove(removed);
             let first = self.bufs.first_file_buf();
-            self.windows.for_each_leaf_mut(|b| {
+            self.surface.windows.for_each_leaf_mut(|b| {
                 if *b == removed {
                     *b = first;
                 }
@@ -132,20 +153,20 @@ impl State {
     }
 
     pub fn top_popup_buf(&self) -> Option<BufferId> {
-        self.panels.top_overlay().map(|p| p.buf)
+        self.surface.panels.top_overlay().map(|p| p.buf)
     }
 
     /// Look up a named popup's backing buffer. Returns `None` if no popup
     /// with that name is currently on the stack.
     pub fn popup_buf_by_name(&self, name: &str) -> Option<BufferId> {
-        self.panels.iter().find_map(|p| match &p.kind {
+        self.surface.panels.iter().find_map(|p| match &p.kind {
             PanelKind::Overlay { name: n, .. } if n.as_ref() == name => Some(p.buf),
             _ => None,
         })
     }
 
     pub fn has_popup(&self) -> bool {
-        self.panels.any_overlay()
+        self.surface.panels.any_overlay()
     }
 
     /// Update viewports of all buffers currently displayed in a window,
@@ -156,9 +177,9 @@ impl State {
         };
         let editor_h = rows.saturating_sub(STATUS_LINE_ROWS + MINIBUFFER_ROWS);
         let editor_area = ratatui::layout::Rect::new(0, 0, cols, editor_h);
-        let focused_path = self.windows.focused_path().clone();
+        let focused_path = self.surface.windows.focused_path().clone();
         let mut cursor_anchor: Option<rizz_ui::panel::CursorAnchor> = None;
-        for leaf in self.windows.layout(editor_area) {
+        for leaf in self.surface.windows.layout(editor_area) {
             if let Some(buf) = self.bufs.get_mut(leaf.buf) {
                 buf.viewport = Position::new(leaf.area.width, leaf.area.height);
             }
@@ -178,6 +199,7 @@ impl State {
         }
         self.bufs.minibuffer_mut().viewport = Position::new(cols, MINIBUFFER_ROWS);
         let overlay_viewports: Vec<(BufferId, Position<u16>)> = self
+            .surface
             .panels
             .overlays()
             .filter_map(|p| {
@@ -211,9 +233,9 @@ impl State {
             self.bufs.minibuffer_mut().clear();
             self.bufs.minibuffer_mut().set_mode(mode);
             // Re-entering while already in a minibuffer mode is a no-op.
-            if !self.panels.iter().any(|p| p.is_minibuffer()) {
+            if !self.surface.panels.iter().any(|p| p.is_minibuffer()) {
                 let mb = self.bufs.minibuffer_id();
-                self.panels.push(Panel::minibuffer(mb));
+                self.surface.panels.push(Panel::minibuffer(mb));
             }
         } else {
             let f = self.focused_buf_id();
@@ -226,8 +248,8 @@ impl State {
         debug!("exiting minibuffer");
         self.bufs.minibuffer_mut().clear();
         self.bufs.minibuffer_mut().set_mode(EditingMode::Command);
-        self.panels.pop_minibuffer();
-        let editor = self.windows.focused_buf();
+        self.surface.panels.pop_minibuffer();
+        let editor = self.surface.windows.focused_buf();
         self.bufs[editor].set_mode(EditingMode::Normal);
     }
 }

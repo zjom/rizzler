@@ -7,47 +7,46 @@
 //!
 //! # Layout
 //!
-//! `State` originally lived in one 3,300-line file. It's now split by concern:
+//! `State` itself is a thin facade. Each long-lived concern lives in its own
+//! subsystem struct; cross-cutting methods stay on `impl State` (split across
+//! these files) but they reach into one subsystem at a time:
 //!
-//! - [`buffers`] — buffer list / window / file open-write-delete / cycle
-//! - [`surface`] — popups, panel stack, viewport sizing, mode switching
-//! - [`input`] — keymap resolution, key event ring, count prefix
-//! - [`render`] — renderer, theme, frame/gutter callbacks, render pass
-//! - [`scripting`] — lisp runtime + notifications + journal hooks
-//! - [`workspace`] — workdir / config dir / init script / manifest seeding
-//! - [`lang`] — tree-sitter and LSP install / attach (duplicated; PR2 dedupes)
-//! - [`lsp_session`] — in-flight LSP requests + callbacks + per-tick drain
+//! - [`buffers`] — buffer list, focused-buffer accessors, file open/edit/
+//!   write/delete, window split/close, `:bn`/`:bp` cycle
+//! - [`surface`] — `Surface` (windows + panel stack); popup show/hide,
+//!   viewport sizing, minibuffer mode switching
+//! - [`input`] — `Input` (keymap, key-event ring, count prefix);
+//!   `handle_key_event` resolution
+//! - [`render`] — `Render` (renderer, theme, frame/gutter callbacks);
+//!   per-tick render pass
+//! - [`scripting`] — `Scripting` (lisp runtime + notification queue);
+//!   `with_lisp` checkout, eval / notify
+//! - [`workspace`] — `Workspace` (workdir + config dir); init script,
+//!   manifest seeding, URI conversion
+//! - [`lang`] — `LangIntegration` (two `LanguageBackend` instances + runtime
+//!   registries); install / attach for tree-sitter and LSP
+//! - [`lsp_session`] — `LspSession` (pending requests, sequence counter,
+//!   completion / code-action callbacks); request/response routing
 //! - [`apply`] — the single-funnel `Action::apply` match
 //!
 //! `State`'s fields are private; all child modules can see them because they
 //! are descendants of this module.
 
-use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use rizz::runtime::Value;
-use rizz_ringbuffer::RingBuffer;
 use tracing::info;
 
-use rizz_actions::KeymapRegistry;
 use rizz_core::EditingMode;
-use rizz_input::{CountPrefix, KeyEvent};
-use rizz_lsp::RequestSeq;
 use rizz_registers::Registers;
 use rizz_search::{Search, SearchHost};
 use rizz_text::{Buffer, BufferId, WrapMode, io as buffer_io};
-use rizz_ui::{
-    RatatuiRenderer, Renderer, ThemeCell, Widget, WindowTree,
-    panel::{PanelStack, Placement},
-    render::GutterWidth,
-};
+use rizz_ui::{RatatuiRenderer, Renderer, Widget, panel::Placement};
 
 use crate::buffer_list::BufferList;
 use crate::journal::Journal;
-use crate::lisp::LispRuntime;
 
 pub use rizz_core::{FocusDir, SplitDir};
 
@@ -64,9 +63,15 @@ mod workspace;
 #[cfg(test)]
 mod tests;
 
+use input::Input;
 use lang::LangIntegration;
-use lsp_session::{PendingCodeActions, PendingCompletion, PendingLspKind};
-use workspace::{default_config_dir, load_grammar_manifest, load_lsp_manifest, resolve_workdir};
+use lsp_session::LspSession;
+use render::Render;
+use scripting::Scripting;
+use surface::Surface;
+use workspace::{
+    Workspace, default_config_dir, load_grammar_manifest, load_lsp_manifest, resolve_workdir,
+};
 
 const KEYCOMBO_TIMEOUT: Duration = Duration::from_millis(1000);
 
@@ -134,43 +139,30 @@ impl PopupSpec {
 
 pub struct State {
     bufs: BufferList,
-    windows: WindowTree,
     journal: Journal,
-    /// Stack of input/overlay panels above the window tree. Includes the
-    /// minibuffer (pushed on `set-mode 'command`) and any open popups.
-    /// When empty, focus falls through to the focused window leaf.
-    panels: PanelStack,
+    /// Editor window tree + the panel stack stacked above it (minibuffer +
+    /// popups). When the panel stack is empty, focus falls through to the
+    /// focused window leaf. See [`surface::Surface`].
+    surface: Surface,
     quit: bool,
-    keymap: KeymapRegistry,
-    keyevents: RingBuffer<(KeyEvent, Instant), 100>,
-    keycombo_timeout: Duration,
-    count_prefix: CountPrefix,
-    renderer: Box<dyn Renderer>,
-    /// Embedded lisp runtime. Held as `Option` so `eval_lisp*` can `take` it
-    /// for the duration of an eval — this also blocks re-entrant evaluation.
-    lisp: Option<LispRuntime>,
-    /// Named styles registered by lisp (`face-define`). `RefCell` so render
-    /// callbacks can introspect without holding `&mut State`.
-    theme: ThemeCell,
-    /// Lisp callable that builds the frame's widget tree each render.
-    frame_fn: Option<Rc<Value>>,
-    /// Lisp callable + width policy that renders the per-row gutter for every
-    /// file buffer. `gutter_fn = None` = no gutter. Set by the lisp
-    /// `set-gutter` builtin and consumed by the precompute pass. Width
-    /// defaults to [`GutterWidth::Fit`].
-    gutter_fn: Option<Rc<Value>>,
-    gutter_width: GutterWidth,
-    workdir: Rc<Path>,
-    /// Directory holding `init.rz`. Stored so `reload-config` (and any
-    /// future config-path query from lisp) can locate the script after init.
-    config_dir: Rc<Path>,
+    /// Keymap dispatch + the inputs feeding it (key event ring, count
+    /// prefix, chord timeout). See [`input::Input`].
+    input: Input,
+    /// Rendering plumbing: terminal renderer, theme, frame + gutter
+    /// callbacks. See [`render::Render`].
+    render: Render,
+    /// Embedded lisp runtime + the notification queue that buffers messages
+    /// emitted while the runtime is checked out by `with_lisp`. See
+    /// [`scripting::Scripting`].
+    scripting: Scripting,
+    /// Filesystem roots: workdir (relative-path base) + config dir (where
+    /// `init.rz` / `grammars.toml` / `lsp.toml` live). See
+    /// [`workspace::Workspace`].
+    workspace: Workspace,
     /// Tree-sitter + LSP install state, grouped behind one struct. Each
     /// half holds a [`rizz_install::LanguageBackend`] (manifest + auto-install
     /// flag + warn / failed-install sets) plus its runtime registry handle.
     lang: LangIntegration,
-    /// Notifications queued while `self.lisp` was checked out by an outer
-    /// `with_lisp` call. Drained on the way out of that call.
-    pending_notifications: Vec<String>,
     /// Vim-style named registers — fed by yank/delete/paste actions and the
     /// lisp `(register-*)` builtins.
     registers: Registers,
@@ -180,25 +172,10 @@ pub struct State {
     /// Last `/` pattern + direction + the overlays painted for the most
     /// recent search.
     search: Search,
-    /// In-flight LSP requests: maps sequence id → what to do with the
-    /// response when it arrives.
-    pending_lsp_requests: HashMap<RequestSeq, PendingLspKind>,
-    /// `uri → buffer id` so server-pushed notifications (diagnostics,
-    /// applyEdit, …) can find the right buffer.
-    buf_by_uri: HashMap<String, BufferId>,
-    /// Monotonic sequence counter for LSP request routing.
-    next_lsp_seq: RequestSeq,
-    /// Lisp callable invoked with the items array + anchor when a
-    /// `textDocument/completion` response arrives.
-    lsp_completion_fn: Option<Rc<Value>>,
-    /// Lisp callable invoked with the actions array when a
-    /// `textDocument/codeAction` response arrives.
-    lsp_code_action_fn: Option<Rc<Value>>,
-    /// The most recently surfaced completion batch. Keyed by id so lisp can
-    /// invoke an item without round-tripping the insert-text back to Rust.
-    lsp_pending_completion: Option<PendingCompletion>,
-    /// The most recently surfaced code-action batch.
-    lsp_pending_code_actions: Option<PendingCodeActions>,
+    /// In-flight LSP request bookkeeping (pending request map, sequence
+    /// counter, response callbacks, last completion + code-action batch).
+    /// See [`lsp_session::LspSession`].
+    lsp_session: LspSession,
 }
 
 impl State {
@@ -219,34 +196,18 @@ impl State {
         let lsp_manifest = load_lsp_manifest(&config_dir);
         let mut state = Self {
             bufs,
-            windows: WindowTree::new(first_file),
             journal: Journal::new(),
-            panels: PanelStack::new(),
+            surface: Surface::new(first_file),
             quit: false,
-            keymap: KeymapRegistry::new(),
-            keyevents: RingBuffer::new(),
-            keycombo_timeout: config.keycombo_timeout,
-            count_prefix: CountPrefix::new(),
-            renderer: config.renderer,
-            lisp: Some(LispRuntime::new()),
-            theme: ThemeCell::default(),
-            frame_fn: None,
-            gutter_fn: None,
-            gutter_width: GutterWidth::Fit,
-            workdir: workdir.into(),
-            config_dir: config_dir.into(),
+            input: Input::new(config.keycombo_timeout),
+            render: Render::new(config.renderer),
+            scripting: Scripting::new(),
+            workspace: Workspace::new(workdir.into(), config_dir.into()),
             lang: LangIntegration::new(grammar_manifest, lsp_manifest),
-            pending_notifications: Vec::new(),
             registers: Registers::new(),
             pending_register: None,
             search: Search::default(),
-            pending_lsp_requests: HashMap::new(),
-            buf_by_uri: HashMap::new(),
-            next_lsp_seq: 1,
-            lsp_completion_fn: None,
-            lsp_code_action_fn: None,
-            lsp_pending_completion: None,
-            lsp_pending_code_actions: None,
+            lsp_session: LspSession::new(),
         };
         if let Some(path) = config.edit_path
             && !path.is_dir()
@@ -266,9 +227,9 @@ impl State {
     /// stack (popups + minibuffer-when-focused) before falling through to
     /// the focused editor window leaf.
     pub fn focused_buf_id(&self) -> BufferId {
-        match self.panels.top_buf() {
+        match self.surface.panels.top_buf() {
             Some(id) => id,
-            None => self.windows.focused_buf(),
+            None => self.surface.windows.focused_buf(),
         }
     }
 
@@ -313,7 +274,7 @@ impl SearchHost for State {
         {
             return id;
         }
-        self.windows.focused_buf()
+        self.surface.windows.focused_buf()
     }
 
     fn buf(&self, id: BufferId) -> Option<&Buffer> {

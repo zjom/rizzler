@@ -37,22 +37,24 @@ For paste events, the keymap is bypassed entirely: `Event::Paste(text)` becomes 
 
 ## `State`
 
-[`State`](../crates/rizz_editor/src/state/mod.rs) is the editor process. It owns every long-lived field and is the single mutator. It's a thin top-level struct that delegates to per-concern subsystems.
+[`State`](../crates/rizz_editor/src/state/mod.rs) is the editor process. It owns every long-lived field and is the single mutator. The struct is a thin facade — 13 top-level fields, most of them per-concern subsystem structs:
 
-The fields you'll see, grouped by responsibility:
-
-| Concern               | Field(s)                                                                                                | Lives in                                                                                                                                                                                         |
-| --------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Buffer + window state | `bufs: BufferList`, `windows: WindowTree`, `panels: PanelStack`                                         | [`buffer_list.rs`](../crates/rizz_editor/src/buffer_list.rs), [`state/buffers.rs`](../crates/rizz_editor/src/state/buffers.rs), [`state/surface.rs`](../crates/rizz_editor/src/state/surface.rs) |
-| Key input             | `keymap`, `keyevents`, `keycombo_timeout`, `count_prefix`                                               | [`state/input.rs`](../crates/rizz_editor/src/state/input.rs)                                                                                                                                     |
-| Render config         | `renderer`, `theme`, `frame_fn`, `gutter_fn`, `gutter_width`                                            | [`state/render.rs`](../crates/rizz_editor/src/state/render.rs)                                                                                                                                   |
-| Scripting             | `lisp`, `pending_notifications`                                                                         | [`state/scripting.rs`](../crates/rizz_editor/src/state/scripting.rs)                                                                                                                             |
-| Workspace paths       | `workdir`, `config_dir`                                                                                 | [`state/workspace.rs`](../crates/rizz_editor/src/state/workspace.rs)                                                                                                                             |
-| Lang integration      | `lang: LangIntegration` (TS + LSP installers + registries)                                              | [`state/lang.rs`](../crates/rizz_editor/src/state/lang.rs)                                                                                                                                       |
-| LSP session           | `pending_lsp_requests`, `next_lsp_seq`, completion/code-action callbacks, pending batches, `buf_by_uri` | [`state/lsp_session.rs`](../crates/rizz_editor/src/state/lsp_session.rs)                                                                                                                         |
-| Other                 | `journal`, `search`, `registers`, `pending_register`, `quit`                                            | scripting / search / yank-paste flows                                                                                                                                                            |
+| Concern                | Field on `State`               | Subsystem fields                                                                                          | Lives in                                                                       |
+| ---------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Buffer registry        | `bufs: BufferList`             | `bufs: SlotMap`, `file_order`, `minibuffer`, `by_uri`                                                     | [`buffer_list.rs`](../crates/rizz_editor/src/buffer_list.rs)                   |
+| Surface (windows+UI)   | `surface: Surface`             | `windows: WindowTree`, `panels: PanelStack`                                                               | [`state/surface.rs`](../crates/rizz_editor/src/state/surface.rs)               |
+| Key input              | `input: Input`                 | `keymap`, `keyevents`, `keycombo_timeout`, `count_prefix`                                                 | [`state/input.rs`](../crates/rizz_editor/src/state/input.rs)                   |
+| Render config          | `render: Render`               | `renderer`, `theme`, `frame_fn`, `gutter_fn`, `gutter_width`                                              | [`state/render.rs`](../crates/rizz_editor/src/state/render.rs)                 |
+| Scripting              | `scripting: Scripting`         | `lisp`, `pending_notifications`                                                                           | [`state/scripting.rs`](../crates/rizz_editor/src/state/scripting.rs)           |
+| Workspace paths        | `workspace: Workspace`         | `workdir`, `config_dir`                                                                                   | [`state/workspace.rs`](../crates/rizz_editor/src/state/workspace.rs)           |
+| Lang integration       | `lang: LangIntegration`        | `ts: LanguageBackend<GrammarSpec>`, `ts_registry`, `lsp: LanguageBackend<ServerSpec>`, `lsp_registry`     | [`state/lang.rs`](../crates/rizz_editor/src/state/lang.rs)                     |
+| LSP session            | `lsp_session: LspSession`      | `pending_requests`, `next_seq`, `completion_fn`, `code_action_fn`, `pending_completion`, `pending_code_actions` | [`state/lsp_session.rs`](../crates/rizz_editor/src/state/lsp_session.rs) |
+| Yank/paste registers   | `registers: Registers`, `pending_register: Option<char>` | —                                                                                       | yank-paste flows                                                               |
+| Other top-level fields | `journal: Journal`, `search: Search`, `quit: bool`       | —                                                                                       | scripting / search / quit flag                                                 |
 
 `State`'s methods live in sibling files under [`state/`](../crates/rizz_editor/src/state) — `mod.rs` declares each as a child module. Rust treats child modules as having full access to the parent's private fields, so every subsystem file can read and mutate `State`'s private state directly. This keeps the split mechanical: no `pub(crate)` field plumbing.
+
+Each subsystem struct is a `pub(super)` plain-old-data grouping that's constructed once in `State::with_config`. Methods stay on `impl State` and reach in via `self.input.keymap`, `self.lang.ts.manifest`, etc. — keeping the public API on `State` stable while the field grouping documents what belongs together.
 
 When `State::apply` arms need to touch fields from two or more subsystems at once (e.g. `Action::BufCreate` touches `bufs`, `lang`, `lsp_session`, `scripting`), prefer free functions that take field-disjoint `&mut` references over `&mut self` methods. The latter hits `E0499` when you split borrows; the former is the same pattern rustc itself uses (`rustc_borrowck`-style).
 
@@ -90,7 +92,7 @@ rizz_input             rizz_text ──→ rizz_changetree   rizz_registers
 
 - **`rizz_actions`** is the closed enum of every behaviour. It depends only on data crates (`rizz_core`, `rizz_text`, `rizz_input`, `rizz_registers`) — no UI or LSP transport — so it stays the universal currency between input sources and `State::apply`.
 - **`rizz_install`** is shared installer plumbing (manifest parsing, ext index, cache helpers, `LanguageBackend<S>` workflow state). Both `rizz_ts_install` and `rizz_lsp_install` consume it.
-- **`rizz_editor`** depends on most of the others. That's intentional — it's the orchestration crate; everything below is "subsystem code that knows its own job". If `rizz_editor` ever feels like it's doing too much, the right move is to grow the subsystems, not to fork a new top-level crate.
+- **`rizz_editor`** depends on most of the others. That's intentional — it's the orchestration crate; everything below is "subsystem code that knows its own job". If `rizz_editor` ever feels like it's doing too much, the right move is to grow a subsystem under [`state/`](../crates/rizz_editor/src/state), not to fork a new top-level crate.
 
 ## Language backends: the `LanguageBackend<S>` pattern
 
@@ -141,7 +143,7 @@ The LSP integration is split between three pieces:
 
 - [`rizz_lsp`](../crates/rizz_lsp/) — async runtime, codec, registry of spawned clients, event channel. No state knowledge.
 - [`rizz_lsp_install`](../crates/rizz_lsp_install/) — manifest + cache + shell recipe runner. No runtime knowledge.
-- `State::lang.lsp` (workflow) and `State`'s LSP session fields (in-flight requests, callbacks, pending batches) — editor-side bookkeeping.
+- `State::lang.lsp` (workflow) and `State::lsp_session` (in-flight requests, sequence counter, completion / code-action callbacks, pending batches) — editor-side bookkeeping. URI ↔ buffer routing for server-pushed notifications is owned by `State::bufs` (`BufferList::register_uri` / `id_for_uri` / `unregister_uris_for`), so a buffer carries its LSP URI with it for the lifetime of the attachment.
 
 The request/response shape mirrors the LSP protocol: `Action::LspHover` etc. _request_, the runtime emits `LspEvent::HoverResponse`, [`State::tick`](../crates/rizz_editor/src/state/lsp_session.rs) drains the events and re-enters `apply` with response Actions like `Action::LspShowHover`. The request side and the response side are different Action variants on purpose — they cross an async boundary.
 

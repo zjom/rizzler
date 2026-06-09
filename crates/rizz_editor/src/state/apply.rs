@@ -47,7 +47,7 @@ impl State {
                     self.bufs[f].insert_char(*c);
                 }
                 Action::ReplaceChar(c) => {
-                    let count = self.count_prefix.or_one();
+                    let count = self.input.count_prefix.or_one();
                     let f = self.focused_buf_id();
                     debug!(buf = ?f, ch = %c, count, "Action::ReplaceChar");
                     self.bufs[f].replace_char_n(*c, count);
@@ -281,7 +281,7 @@ impl State {
                         self.search.take_origin();
                         self.registers.record_search(&*pattern);
                         self.exit_minibuffer();
-                        let target_id = self.windows.focused_buf();
+                        let target_id = self.surface.windows.focused_buf();
                         if let Some(b) = self.bufs.get_mut(target_id) {
                             b.move_cursor(rizz_text::MoveKind::Center);
                         }
@@ -305,7 +305,7 @@ impl State {
                     self.create_buf(*set_active, path.clone())?;
                 }
                 Action::BufDelete => {
-                    let editor = self.windows.focused_buf();
+                    let editor = self.surface.windows.focused_buf();
                     info!(buf = ?editor, "Action::BufDelete");
                     self.delete_buf(editor);
                 }
@@ -335,19 +335,19 @@ impl State {
                 }
                 Action::WindowFocusNext => {
                     debug!("Action::WindowFocusNext");
-                    self.windows.focus_next();
+                    self.surface.windows.focus_next();
                 }
                 Action::WindowFocus(d) => {
                     debug!(dir = ?d, "Action::WindowFocus");
-                    self.windows.focus_dir(*d);
+                    self.surface.windows.focus_dir(*d);
                 }
                 Action::KeymapSet { mode, lhs, rhs } => {
                     debug!(%mode, keys = lhs.len(), "Action::KeymapSet");
-                    self.keymap.set(mode.clone(), lhs, rhs.clone());
+                    self.input.keymap.set(mode.clone(), lhs, rhs.clone());
                 }
                 Action::KeymapRemove { mode, lhs } => {
                     debug!(%mode, keys = lhs.len(), "Action::KeymapRemove");
-                    self.keymap.remove(mode.clone(), lhs);
+                    self.input.keymap.remove(mode.clone(), lhs);
                 }
                 Action::EvalLisp(form) => {
                     if let Err(e) = self.eval_lisp_value(form.clone()) {

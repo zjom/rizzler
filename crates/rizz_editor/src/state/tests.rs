@@ -98,7 +98,7 @@ fn default_precompute_produces_expected_frame() {
     let mut s = test_state();
     let (frame, err) = s.precompute_frame();
     assert!(err.is_none(), "no frame errors expected: {err:?}");
-    let id = s.windows.focused_buf();
+    let id = s.surface.windows.focused_buf();
     let bf = &frame.per_buf[id];
     assert!(bf.gutter.is_some(), "expected a gutter");
     assert!(bf.decorators.len() >= 3, "expected the 3 built-in passes");
@@ -148,17 +148,17 @@ fn notify_via_lisp_queues_when_lisp_taken() {
     // queue, and then fire through the user's `(notify …)` fn when the
     // outer `with_lisp` puts the runtime back.
     let mut s = test_state();
-    let lisp = s.lisp.take();
+    let lisp = s.scripting.lisp.take();
     s.notify_via_lisp("queued notification");
     assert_eq!(
-        s.pending_notifications.len(),
+        s.scripting.pending_notifications.len(),
         1,
         "expected the message to be queued, not eval'd or dropped"
     );
-    s.lisp = lisp;
+    s.scripting.lisp = lisp;
     s.drain_pending_notifications();
     assert!(
-        s.pending_notifications.is_empty(),
+        s.scripting.pending_notifications.is_empty(),
         "queue must be empty after drain"
     );
     // The user's `(notify …)` runs `notify-record`, which appends to the
@@ -184,7 +184,7 @@ fn with_lisp_drains_queued_notifications() {
         Ok(())
     });
     r.unwrap();
-    assert!(s.pending_notifications.is_empty());
+    assert!(s.scripting.pending_notifications.is_empty());
     let found = s
         .message_history()
         .any(|m| m.as_ref() == "drained via with_lisp");

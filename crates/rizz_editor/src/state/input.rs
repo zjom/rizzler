@@ -7,33 +7,56 @@
 
 use std::io;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crossterm::event::KeyEvent as CTKeyEvent;
 use rizz_actions::KeymapRegistry;
 use rizz_core::EditingMode;
-use rizz_input::KeyEvent;
+use rizz_input::{CountPrefix, KeyEvent};
+use rizz_ringbuffer::RingBuffer;
 use tracing::{debug, instrument, trace};
 
 use super::State;
 
+/// Keymap dispatch + the inputs feeding it. Owns the keymap registry, the
+/// rolling key-event buffer (for `:keys` / debugging), the count prefix that
+/// scales motions and operators, and the chord-timeout knob.
+pub(super) struct Input {
+    pub keymap: KeymapRegistry,
+    pub keyevents: RingBuffer<(KeyEvent, Instant), 100>,
+    pub keycombo_timeout: Duration,
+    pub count_prefix: CountPrefix,
+}
+
+impl Input {
+    pub(super) fn new(keycombo_timeout: Duration) -> Self {
+        Self {
+            keymap: KeymapRegistry::new(),
+            keyevents: RingBuffer::new(),
+            keycombo_timeout,
+            count_prefix: CountPrefix::new(),
+        }
+    }
+}
+
 impl State {
     pub fn last_key(&self) -> Option<KeyEvent> {
-        self.keyevents.peek_back().map(|(e, _)| e.to_owned())
+        self.input.keyevents.peek_back().map(|(e, _)| e.to_owned())
     }
 
     pub fn pending_count_or_one(&self) -> u32 {
-        self.count_prefix.or_one()
+        self.input.count_prefix.or_one()
     }
 
     pub fn keymap_registry(&self) -> &KeymapRegistry {
-        &self.keymap
+        &self.input.keymap
     }
 
     /// Active keymap modes for the focused input context, most-specific
     /// first: the top panel's named layers, then the buffer's [`EditingMode`].
     pub(super) fn active_modes(&self) -> Vec<Rc<str>> {
         let mut v: Vec<Rc<str>> = self
+            .surface
             .panels
             .top_keymap_layers()
             .iter()
@@ -49,13 +72,14 @@ impl State {
     pub fn handle_key_event(&mut self, event: CTKeyEvent) -> io::Result<()> {
         let now = Instant::now();
         let timedout = self
+            .input
             .keyevents
             .peek_back()
-            .is_some_and(|(_, earlier)| now.duration_since(*earlier) > self.keycombo_timeout);
-        self.keyevents.push_back((event.into(), now));
+            .is_some_and(|(_, earlier)| now.duration_since(*earlier) > self.input.keycombo_timeout);
+        self.input.keyevents.push_back((event.into(), now));
 
         let ke: KeyEvent = event.into();
-        if self.count_prefix.feed(ke, self.count_eligible()) {
+        if self.input.count_prefix.feed(ke, self.count_eligible()) {
             trace!(?ke, "key consumed by count prefix");
             self.refresh_viewport();
             return self.render();
@@ -63,13 +87,13 @@ impl State {
 
         let modes = self.active_modes();
         debug!(?ke, ?modes, timedout, "resolving key against keymap");
-        if let Some(action) = self.keymap.resolve(&modes, ke, timedout) {
+        if let Some(action) = self.input.keymap.resolve(&modes, ke, timedout) {
             debug!(
                 actions = action.len(),
                 "keymap resolved -> applying actions"
             );
             self.apply(&action)?;
-            self.count_prefix.clear();
+            self.input.count_prefix.clear();
         } else {
             trace!(?ke, "no action resolved (descent or miss)");
         }
@@ -97,10 +121,10 @@ impl State {
     pub(super) fn count_eligible(&self) -> bool {
         // A panel on the stack steals input (popup/minibuffer); digits
         // should pass through verbatim.
-        if !self.panels.is_empty() {
+        if !self.surface.panels.is_empty() {
             return false;
         }
-        if !self.keymap.is_idle() {
+        if !self.input.keymap.is_idle() {
             return false;
         }
         matches!(

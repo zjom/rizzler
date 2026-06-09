@@ -6,6 +6,7 @@
 //! each outgoing request and dispatches the response back to the originating
 //! buffer (the buffer/cursor may have moved between request and reply).
 
+use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -42,7 +43,7 @@ pub(crate) struct PendingCodeActions {
 }
 
 /// What to do with an LSP response when it lands. Held in
-/// `State::pending_lsp_requests` so the asynchronous drain can route each
+/// `LspSession::pending_requests` so the asynchronous drain can route each
 /// reply back to the originating buffer / cursor anchor.
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // some fields exist for future routing logic
@@ -67,34 +68,65 @@ pub(super) enum PendingLspKind {
     },
 }
 
+/// In-flight LSP request bookkeeping. Tracks pending requests (so responses
+/// can route back to the originating buffer + cursor), the sequence
+/// counter, the lisp callbacks for completion + code-action responses, and
+/// the most-recent batches needed by `(lsp-apply-completion id)` /
+/// `(lsp-invoke-code-action id)`.
+pub(super) struct LspSession {
+    pub pending_requests: HashMap<RequestSeq, PendingLspKind>,
+    pub next_seq: RequestSeq,
+    pub completion_fn: Option<Rc<Value>>,
+    pub code_action_fn: Option<Rc<Value>>,
+    pub pending_completion: Option<PendingCompletion>,
+    pub pending_code_actions: Option<PendingCodeActions>,
+}
+
+impl LspSession {
+    pub(super) fn new() -> Self {
+        Self {
+            pending_requests: HashMap::new(),
+            next_seq: 1,
+            completion_fn: None,
+            code_action_fn: None,
+            pending_completion: None,
+            pending_code_actions: None,
+        }
+    }
+
+    /// Hand out the next request sequence and bump the counter. Wraps on
+    /// overflow — collisions only matter for in-flight requests, and the
+    /// pending-request map is bounded by the editor's concurrent request
+    /// count, well below `RequestSeq::MAX`.
+    pub(super) fn alloc_seq(&mut self) -> RequestSeq {
+        let s = self.next_seq;
+        self.next_seq = self.next_seq.wrapping_add(1);
+        s
+    }
+}
+
 impl State {
     /// Install the lisp callback for `textDocument/completion` responses.
     /// The fn receives `(items anchor)` — `items` is an array of maps with
     /// fields `id`, `label`, `detail`, `insert-text`, `kind`; `anchor` is a
     /// map with `row` / `col`. Pass `None` to revert to the notify fallback.
     pub fn set_lsp_completion_fn(&mut self, f: Option<Rc<Value>>) {
-        self.lsp_completion_fn = f;
+        self.lsp_session.completion_fn = f;
     }
 
     pub fn lsp_completion_fn(&self) -> Option<&Rc<Value>> {
-        self.lsp_completion_fn.as_ref()
+        self.lsp_session.completion_fn.as_ref()
     }
 
     /// Install the lisp callback for `textDocument/codeAction` responses.
     /// The fn receives `(actions)` — an array of maps with fields `id`,
     /// `title`, `kind`, `has-edit`, `has-command`.
     pub fn set_lsp_code_action_fn(&mut self, f: Option<Rc<Value>>) {
-        self.lsp_code_action_fn = f;
+        self.lsp_session.code_action_fn = f;
     }
 
     pub fn lsp_code_action_fn(&self) -> Option<&Rc<Value>> {
-        self.lsp_code_action_fn.as_ref()
-    }
-
-    pub(super) fn next_lsp_seq(&mut self) -> RequestSeq {
-        let s = self.next_lsp_seq;
-        self.next_lsp_seq = self.next_lsp_seq.wrapping_add(1);
-        s
+        self.lsp_session.code_action_fn.as_ref()
     }
 
     /// Compute the LSP `Position` for the focused buffer's cursor, and
@@ -115,10 +147,7 @@ impl State {
         // The trait-object attachment can't be downcast for client+encoding,
         // so we look it up via `buf_by_uri` (every attached buffer is
         // registered there) and the manifest entry for the file's extension.
-        let uri = self
-            .buf_by_uri
-            .iter()
-            .find_map(|(uri, bid)| if *bid == buf { Some(uri.clone()) } else { None })?;
+        let uri = self.bufs.uri_for_id(buf)?;
         let _ = handle;
         let _attach_marker = b.diagnostics();
         let abs = b.abs_pos();
@@ -139,8 +168,8 @@ impl State {
             self.notify_via_lisp("lsp hover: no language server attached to this buffer");
             return;
         };
-        let seq = self.next_lsp_seq();
-        self.pending_lsp_requests
+        let seq = self.lsp_session.alloc_seq();
+        self.lsp_session.pending_requests
             .insert(seq, PendingLspKind::Hover { buf, anchor });
         rizz_lsp::runtime().send_cmd(RuntimeCmd::Hover {
             client,
@@ -156,8 +185,8 @@ impl State {
             self.notify_via_lisp("lsp goto-definition: no language server attached to this buffer");
             return;
         };
-        let seq = self.next_lsp_seq();
-        self.pending_lsp_requests
+        let seq = self.lsp_session.alloc_seq();
+        self.lsp_session.pending_requests
             .insert(seq, PendingLspKind::GotoDefinition { buf });
         rizz_lsp::runtime().send_cmd(RuntimeCmd::GotoDefinition {
             client,
@@ -173,8 +202,8 @@ impl State {
             self.notify_via_lisp("lsp completion: no language server attached to this buffer");
             return;
         };
-        let seq = self.next_lsp_seq();
-        self.pending_lsp_requests
+        let seq = self.lsp_session.alloc_seq();
+        self.lsp_session.pending_requests
             .insert(seq, PendingLspKind::Completion { buf, anchor });
         rizz_lsp::runtime().send_cmd(RuntimeCmd::Completion {
             client,
@@ -190,9 +219,9 @@ impl State {
             self.notify_via_lisp("lsp format: no language server attached to this buffer");
             return;
         };
-        let seq = self.next_lsp_seq();
+        let seq = self.lsp_session.alloc_seq();
         let deadline = Instant::now() + LSP_FORMAT_TIMEOUT;
-        self.pending_lsp_requests
+        self.lsp_session.pending_requests
             .insert(seq, PendingLspKind::Format { buf, deadline });
         rizz_lsp::runtime().send_cmd(RuntimeCmd::Format {
             client,
@@ -209,13 +238,13 @@ impl State {
             self.notify_via_lisp("lsp code-action: no language server attached to this buffer");
             return;
         };
-        let seq = self.next_lsp_seq();
+        let seq = self.lsp_session.alloc_seq();
         // TODO: support visual-selection-driven ranges.
         let range = lsp_types::Range {
             start: position,
             end: position,
         };
-        self.pending_lsp_requests
+        self.lsp_session.pending_requests
             .insert(seq, PendingLspKind::CodeAction { buf });
         rizz_lsp::runtime().send_cmd(RuntimeCmd::CodeAction {
             client,
@@ -235,7 +264,7 @@ impl State {
         if let Some(b) = self.bufs.get_mut(buf) {
             b.set_lsp_handle(None);
         }
-        self.buf_by_uri.retain(|_, bid| *bid != buf);
+        self.bufs.unregister_uris_for(buf);
     }
 
     pub(crate) fn lsp_restart(&mut self, name: Option<&str>) {
@@ -265,15 +294,15 @@ impl State {
         };
         // Detach every buffer using this server and shut down the client;
         // the next buffer open re-spawns it.
-        let uris: Vec<String> = self.buf_by_uri.keys().cloned().collect();
+        let uris: Vec<String> = self.bufs.uris();
         for uri in &uris {
-            if let Some(&bid) = self.buf_by_uri.get(uri)
+            if let Some(bid) = self.bufs.id_for_uri(uri)
                 && let Some(b) = self.bufs.get_mut(bid)
             {
                 b.set_lsp_handle(None);
             }
         }
-        self.buf_by_uri.clear();
+        self.bufs.clear_uris();
         self.lang.lsp_registry.shutdown(&server_name);
         self.notify_via_lisp(&format!("lsp `{server_name}` restarted"));
         self.install_lsp_client(buf);
@@ -329,10 +358,10 @@ impl State {
         anchor: Position<usize>,
     ) {
         if items.is_empty() {
-            self.lsp_pending_completion = None;
+            self.lsp_session.pending_completion = None;
             // Hand `[]` to the callback so the lisp side can dismiss any
             // open completion popup.
-            if self.lsp_completion_fn.is_some() {
+            if self.lsp_session.completion_fn.is_some() {
                 self.fire_lsp_completion_fn(&items, anchor);
             } else {
                 self.notify_via_lisp("no completions");
@@ -340,12 +369,12 @@ impl State {
             return;
         }
         let buf = self.focused_buf_id();
-        self.lsp_pending_completion = Some(PendingCompletion {
+        self.lsp_session.pending_completion = Some(PendingCompletion {
             buf,
             anchor,
             items: items.clone(),
         });
-        if self.lsp_completion_fn.is_some() {
+        if self.lsp_session.completion_fn.is_some() {
             self.fire_lsp_completion_fn(&items, anchor);
         } else {
             self.notify_via_lisp(&format!(
@@ -362,7 +391,7 @@ impl State {
         anchor: Position<usize>,
     ) {
         use crate::lisp::lsp_convert::{completion_items_to_value, position_to_value};
-        let Some(f) = self.lsp_completion_fn.clone() else {
+        let Some(f) = self.lsp_session.completion_fn.clone() else {
             return;
         };
         let items_val = completion_items_to_value(items);
@@ -380,8 +409,8 @@ impl State {
 
     pub(crate) fn show_lsp_code_actions(&mut self, actions: Arc<[rizz_actions::CodeActionOwned]>) {
         if actions.is_empty() {
-            self.lsp_pending_code_actions = None;
-            if self.lsp_code_action_fn.is_some() {
+            self.lsp_session.pending_code_actions = None;
+            if self.lsp_session.code_action_fn.is_some() {
                 self.fire_lsp_code_action_fn(&actions);
             } else {
                 self.notify_via_lisp("no code actions");
@@ -389,11 +418,11 @@ impl State {
             return;
         }
         let buf = self.focused_buf_id();
-        self.lsp_pending_code_actions = Some(PendingCodeActions {
+        self.lsp_session.pending_code_actions = Some(PendingCodeActions {
             buf,
             actions: actions.clone(),
         });
-        if self.lsp_code_action_fn.is_some() {
+        if self.lsp_session.code_action_fn.is_some() {
             self.fire_lsp_code_action_fn(&actions);
         } else {
             self.notify_via_lisp(&format!(
@@ -406,7 +435,7 @@ impl State {
 
     fn fire_lsp_code_action_fn(&mut self, actions: &Arc<[rizz_actions::CodeActionOwned]>) {
         use crate::lisp::lsp_convert::code_actions_to_value;
-        let Some(f) = self.lsp_code_action_fn.clone() else {
+        let Some(f) = self.lsp_session.code_action_fn.clone() else {
             return;
         };
         let actions_val = code_actions_to_value(actions);
@@ -427,7 +456,7 @@ impl State {
     /// (with notify) when the id is out of range. Called by
     /// `(lsp-apply-completion id)`.
     pub(crate) fn apply_lsp_completion_by_id(&mut self, id: usize) {
-        let Some(pending) = self.lsp_pending_completion.clone() else {
+        let Some(pending) = self.lsp_session.pending_completion.clone() else {
             self.notify_via_lisp("lsp-apply-completion: no pending completion");
             return;
         };
@@ -460,7 +489,7 @@ impl State {
     /// workspace edit if present, then forward its command (if any) through
     /// `workspace/executeCommand`. Called by `(lsp-invoke-code-action id)`.
     pub(crate) fn invoke_lsp_code_action_by_id(&mut self, id: usize) {
-        let Some(pending) = self.lsp_pending_code_actions.clone() else {
+        let Some(pending) = self.lsp_session.pending_code_actions.clone() else {
             self.notify_via_lisp("lsp-invoke-code-action: no pending code action");
             return;
         };
@@ -543,7 +572,7 @@ impl State {
         client: LspClientId,
         command: rizz_actions::CommandOwned,
     ) {
-        let seq = self.next_lsp_seq();
+        let seq = self.lsp_session.alloc_seq();
         let arguments: Vec<serde_json::Value> = command
             .arguments_json
             .iter()
@@ -571,7 +600,7 @@ impl State {
     fn handle_lsp_event(&mut self, ev: LspEvent, out: &mut Vec<Rc<Action>>) {
         match ev {
             LspEvent::Diagnostics { uri, items, .. } => {
-                if let Some(&bid) = self.buf_by_uri.get(&uri)
+                if let Some(bid) = self.bufs.id_for_uri(&uri)
                     && let Some(b) = self.bufs.get_mut(bid)
                     && let Some(h) = b.lsp_handle_mut()
                 {
@@ -580,7 +609,7 @@ impl State {
             }
             LspEvent::HoverResponse { seq, contents, .. } => {
                 let Some(PendingLspKind::Hover { anchor, .. }) =
-                    self.pending_lsp_requests.remove(&seq)
+                    self.lsp_session.pending_requests.remove(&seq)
                 else {
                     return;
                 };
@@ -593,7 +622,7 @@ impl State {
                 }
             }
             LspEvent::DefinitionResponse { seq, locations, .. } => {
-                if self.pending_lsp_requests.remove(&seq).is_none() {
+                if self.lsp_session.pending_requests.remove(&seq).is_none() {
                     return;
                 }
                 if locations.is_empty() {
@@ -608,7 +637,7 @@ impl State {
             }
             LspEvent::CompletionResponse { seq, items, .. } => {
                 let Some(PendingLspKind::Completion { anchor, .. }) =
-                    self.pending_lsp_requests.remove(&seq)
+                    self.lsp_session.pending_requests.remove(&seq)
                 else {
                     return;
                 };
@@ -619,7 +648,7 @@ impl State {
             }
             LspEvent::FormattingResponse { seq, edits, .. } => {
                 let Some(PendingLspKind::Format { buf, deadline }) =
-                    self.pending_lsp_requests.remove(&seq)
+                    self.lsp_session.pending_requests.remove(&seq)
                 else {
                     return;
                 };
@@ -634,7 +663,7 @@ impl State {
                 }));
             }
             LspEvent::CodeActionResponse { seq, actions, .. } => {
-                if self.pending_lsp_requests.remove(&seq).is_none() {
+                if self.lsp_session.pending_requests.remove(&seq).is_none() {
                     return;
                 }
                 out.push(Rc::new(Action::LspShowCodeActions {
@@ -667,7 +696,7 @@ impl State {
                 }
             }
             LspEvent::RequestError { seq, message, .. } => {
-                self.pending_lsp_requests.remove(&seq);
+                self.lsp_session.pending_requests.remove(&seq);
                 warn!(seq, %message, "lsp request error");
             }
         }

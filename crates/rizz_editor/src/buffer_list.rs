@@ -6,6 +6,7 @@
 //! minibuffer is excluded) so the `:bn`/`:bp` cycle has a deterministic next
 //! buffer.
 
+use std::collections::HashMap;
 use std::ops::{Index, IndexMut};
 use std::path::Path;
 use std::rc::Rc;
@@ -20,6 +21,10 @@ pub struct BufferList {
     /// File buffers in creation order. Used by `cycle` and `first_file_buf`.
     /// The minibuffer and panel-backing buffers are not in this list.
     file_order: Vec<BufferId>,
+    /// `uri → buffer id`, populated by `install_lsp_client`. Server-pushed
+    /// notifications (diagnostics, applyEdit, …) arrive with only a URI;
+    /// this index routes them back to the right buffer.
+    by_uri: HashMap<String, BufferId>,
 }
 
 impl BufferList {
@@ -33,6 +38,7 @@ impl BufferList {
             bufs,
             minibuffer,
             file_order: vec![first],
+            by_uri: HashMap::new(),
         }
     }
 
@@ -115,7 +121,48 @@ impl BufferList {
             return false;
         }
         self.file_order.retain(|&i| i != id);
+        self.by_uri.retain(|_, bid| *bid != id);
         true
+    }
+
+    /// Map `uri` to `buf` so server-pushed LSP notifications can find the
+    /// right buffer. Used by `install_lsp_client` on attach.
+    pub fn register_uri(&mut self, uri: String, buf: BufferId) {
+        self.by_uri.insert(uri, buf);
+    }
+
+    /// Buffer attached to `uri`, or `None` if no LSP client is bound to it.
+    pub fn id_for_uri(&self, uri: &str) -> Option<BufferId> {
+        self.by_uri.get(uri).copied()
+    }
+
+    /// URI attached to `buf`, or `None` if the buffer has no LSP binding.
+    /// O(n) scan — every attached buffer has a URI, so this is bounded by
+    /// the open-file count.
+    pub fn uri_for_id(&self, buf: BufferId) -> Option<String> {
+        self.by_uri
+            .iter()
+            .find_map(|(uri, bid)| (*bid == buf).then(|| uri.clone()))
+    }
+
+    /// Drop every URI binding (server restart). Buffers themselves are
+    /// untouched — the caller is responsible for clearing the attached
+    /// `LspBufferHandle`s.
+    pub fn clear_uris(&mut self) {
+        self.by_uri.clear();
+    }
+
+    /// Drop the URI binding for `buf`, if any. Used when a buffer's LSP
+    /// attachment is detached without removing the buffer itself
+    /// (e.g. `LspDidCloseFocused`).
+    pub fn unregister_uris_for(&mut self, buf: BufferId) {
+        self.by_uri.retain(|_, bid| *bid != buf);
+    }
+
+    /// All currently-bound URIs. Returned as owned strings since the
+    /// returned vec usually outlives an `&mut self` borrow on `BufferList`.
+    pub fn uris(&self) -> Vec<String> {
+        self.by_uri.keys().cloned().collect()
     }
 
     /// Replace the buffer at `id` with a fresh scratch buffer in place. Keeps

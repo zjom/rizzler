@@ -84,7 +84,7 @@ impl State {
 
     pub(super) fn open_or_focus_file(&mut self, path: &Path) -> BufferId {
         let id = self.find_or_open_file(path);
-        self.windows.set_focused_buf(id);
+        self.surface.windows.set_focused_buf(id);
         id
     }
 
@@ -117,7 +117,7 @@ impl State {
         self.install_highlighter(id);
         self.install_lsp_client(id);
         if set_active {
-            self.windows.set_focused_buf(id);
+            self.surface.windows.set_focused_buf(id);
         }
         info!(buf = ?id, set_active, "created buffer");
         Ok(id)
@@ -138,13 +138,13 @@ impl State {
                 pushed
             }
         };
-        self.windows.set_focused_buf(id);
+        self.surface.windows.set_focused_buf(id);
         Ok(id)
     }
 
     #[instrument(skip(self))]
     pub(super) fn write_buf(&mut self, path: Option<Rc<Path>>) -> io::Result<()> {
-        let editor = self.windows.focused_buf();
+        let editor = self.surface.windows.focused_buf();
         let r = buffer_io::write(&mut self.bufs[editor], path);
         if let Err(e) = &r {
             error_event(editor, e);
@@ -168,13 +168,13 @@ impl State {
         if self.bufs.file_buf_count() == 1 {
             debug!(?buf, "delete_buf: last file buffer -> resetting");
             self.bufs.reset(buf);
-            self.windows.for_each_leaf_mut(|b| *b = buf);
+            self.surface.windows.for_each_leaf_mut(|b| *b = buf);
             return;
         }
 
         self.bufs.remove(buf);
         let first = self.bufs.first_file_buf();
-        self.windows.for_each_leaf_mut(|b| {
+        self.surface.windows.for_each_leaf_mut(|b| {
             if *b == buf {
                 *b = first;
             }
@@ -184,19 +184,19 @@ impl State {
 
     pub(super) fn window_split(&mut self, dir: SplitDir) {
         let new_buf = self.bufs.push_file(Buffer::new());
-        self.windows.split(dir, new_buf);
+        self.surface.windows.split(dir, new_buf);
         info!(?dir, ?new_buf, "window split");
     }
 
     pub(super) fn window_close(&mut self) {
         debug!("closing focused window");
-        self.windows.close_focused();
+        self.surface.windows.close_focused();
     }
 
     pub(super) fn cycle_buffer(&mut self, dir: CycleDir) {
-        if let Some(id) = self.bufs.cycle(self.windows.focused_buf(), dir) {
+        if let Some(id) = self.bufs.cycle(self.surface.windows.focused_buf(), dir) {
             debug!(?dir, buf = ?id, "cycled buffer");
-            self.windows.set_focused_buf(id);
+            self.surface.windows.set_focused_buf(id);
         } else {
             trace!(?dir, "cycle_buffer: no cycle (single file buffer)");
         }

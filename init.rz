@@ -655,7 +655,7 @@
 ;; redefining these here drives the always-on built-in decorator passes.
 (face-define 'default                  {"fg": pal-fg            "bg": pal-bg})
 (face-define 'selection                {"bg": pal-visual})
-(face-define 'cursor-line              {"bg": pal-line          "fg": pal-fg})
+(face-define 'cursor-line              {"bg": pal-line          })
 (face-define "vague.muted"             {"fg": pal-comment   "italic": 1})
 (face-define "vague.accent"            {"fg": pal-constant    "bold": 1})
 (face-define "vague.error"             {"fg": pal-error       "bold": 1 "underline": 1})

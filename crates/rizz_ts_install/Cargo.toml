@@ -1,0 +1,11 @@
+[package]
+name = "rizz_ts_install"
+version = "0.1.0"
+edition = "2024"
+description = "Declarative installer for tree-sitter grammars: parses the curated `grammars.toml` manifest, clones grammar sources via `git`, drives the `tree-sitter` CLI to build a shared library, and caches artefacts under `$XDG_DATA_HOME/rizz/grammars/<name>/` for `rizz_ts::TsRegistry` to load."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = { workspace = true }
+toml = "0.8"
+tracing = { workspace = true }

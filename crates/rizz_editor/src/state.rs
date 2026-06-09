@@ -5,6 +5,7 @@
 //! sends it through here. The single-funnel invariant is what makes undo,
 //! scripting, and tests tractable.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
@@ -22,6 +23,7 @@ use rizz_input::{CountPrefix, KeyEvent};
 use rizz_registers::{RegisterEntry, Registers};
 use rizz_text::{Buffer, BufferId, WrapMode, io as buffer_io};
 use rizz_ts::TsRegistry;
+use rizz_ts_install::{InstallOpts, Manifest as GrammarManifest};
 
 use rizz_ui::{
     RatatuiRenderer, Renderer, StateSnapshot, ThemeCell, Widget, WindowTree,
@@ -141,6 +143,20 @@ pub struct State {
     /// builtin; consulted by [`Self::install_dynamic_highlighter`] when a
     /// buffer with a matching extension is opened.
     ts_registry: TsRegistry,
+    /// Curated grammar manifest, seeded from `<config_dir>/grammars.toml` on
+    /// first launch. Drives `(grammar-install)` lookups and the auto-load
+    /// pass that registers a cached grammar on first buffer open.
+    grammar_manifest: GrammarManifest,
+    /// Names we've already surfaced a "grammar not installed" notify for, so
+    /// opening many `.py` files doesn't spam the user with one popup per
+    /// buffer. Cleared on `reload-config`.
+    warned_missing_grammars: HashSet<Rc<str>>,
+    /// Notifications queued while `self.lisp` was checked out by an outer
+    /// `with_lisp` call. Drained on the way out of that call so the user's
+    /// `(notify …)` lisp fn still runs and produces the popup they expect,
+    /// even when the originating Rust code (e.g. the auto-load hook in
+    /// [`Self::install_highlighter`]) ran mid-lisp-eval.
+    pending_notifications: Vec<String>,
     /// Vim-style named registers — fed by yank/delete/paste actions and the
     /// lisp `(register-*)` builtins. See [`rizz_registers`].
     registers: Registers,
@@ -185,19 +201,47 @@ fn default_config_dir() -> PathBuf {
 
 const INIT_SCRIPT_NAME: &str = "init.rz";
 const EMBEDDED_INIT_SCRIPT: &str = include_str!("../../../init.rz");
+const GRAMMARS_MANIFEST_NAME: &str = "grammars.toml";
+const EMBEDDED_GRAMMARS_MANIFEST: &str = include_str!("../../../grammars.toml");
 
-/// Read `<config_dir>/init.rz`, seeding it from the embedded template if it
-/// doesn't exist yet so first-run users land on a working config.
-fn load_init_script(config_dir: &Path) -> anyhow::Result<String> {
+/// Read `<config_dir>/<name>`, seeding it from `embedded` if missing so
+/// first-run users land on a working file. Used for both `init.rz` and
+/// `grammars.toml`.
+fn load_or_seed(config_dir: &Path, name: &str, embedded: &str) -> anyhow::Result<String> {
     use std::fs;
-    let path = config_dir.join(INIT_SCRIPT_NAME);
+    let path = config_dir.join(name);
     if !path.exists() {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&path, EMBEDDED_INIT_SCRIPT)?;
+        fs::write(&path, embedded)?;
     }
     Ok(fs::read_to_string(&path)?)
+}
+
+/// Read `<config_dir>/init.rz`, seeding it from the embedded template if it
+/// doesn't exist yet so first-run users land on a working config.
+fn load_init_script(config_dir: &Path) -> anyhow::Result<String> {
+    load_or_seed(config_dir, INIT_SCRIPT_NAME, EMBEDDED_INIT_SCRIPT)
+}
+
+/// Read `<config_dir>/grammars.toml`, seeding it from the embedded copy if
+/// missing. A failure to read or parse falls back to an empty manifest with
+/// a logged warning — a broken file should never keep the editor from boot.
+fn load_grammar_manifest(config_dir: &Path) -> GrammarManifest {
+    match load_or_seed(config_dir, GRAMMARS_MANIFEST_NAME, EMBEDDED_GRAMMARS_MANIFEST) {
+        Ok(text) => match GrammarManifest::parse(&text) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!(error = %e, "grammars.toml parse failed — falling back to empty manifest");
+                GrammarManifest::default()
+            }
+        },
+        Err(e) => {
+            warn!(error = %e, "grammars.toml load failed — falling back to empty manifest");
+            GrammarManifest::default()
+        }
+    }
 }
 
 #[cfg(any(test, debug_assertions))]
@@ -224,6 +268,7 @@ impl State {
 
         let bufs = BufferList::new();
         let first_file = bufs.first_file_buf();
+        let grammar_manifest = load_grammar_manifest(&config_dir);
         let mut state = Self {
             bufs,
             windows: WindowTree::new(first_file),
@@ -243,6 +288,9 @@ impl State {
             workdir: workdir.into(),
             config_dir: config_dir.into(),
             ts_registry: TsRegistry::new(),
+            grammar_manifest,
+            warned_missing_grammars: HashSet::new(),
+            pending_notifications: Vec::new(),
             registers: Registers::new(),
             pending_register: None,
         };
@@ -300,7 +348,10 @@ impl State {
     }
 
     /// Install an [`EditorGuard`] and run `f` against the editor's lisp
-    /// runtime.
+    /// runtime. On the way out, drain any notifications that were queued
+    /// while the runtime was checked out (see [`Self::notify_via_lisp`]) —
+    /// each one fires through the user's lisp `(notify …)` definition so the
+    /// popup chrome stays under their control.
     fn with_lisp<R>(&mut self, f: impl FnOnce(&mut LispRuntime) -> R) -> R {
         let mut lisp = self
             .lisp
@@ -311,7 +362,33 @@ impl State {
             f(&mut lisp)
         };
         self.lisp = Some(lisp);
+        self.drain_pending_notifications();
         result
+    }
+
+    /// Fire every queued notification through the lisp `(notify …)` fn now
+    /// that `self.lisp` is owned again. A cap keeps a buggy `notify`
+    /// definition from looping forever — anything past the cap falls back
+    /// to the message journal so it's still recoverable via `:messages`.
+    fn drain_pending_notifications(&mut self) {
+        const MAX_DRAIN_PER_CALL: usize = 32;
+        let mut drained = 0;
+        while let Some(msg) = self.pending_notifications.pop() {
+            if drained >= MAX_DRAIN_PER_CALL {
+                warn!(
+                    remaining = self.pending_notifications.len() + 1,
+                    "notification drain cap hit — recording remainder to journal"
+                );
+                let remainder: Vec<String> =
+                    std::iter::once(msg).chain(self.pending_notifications.drain(..)).collect();
+                for m in remainder {
+                    self.record_message(&m);
+                }
+                return;
+            }
+            drained += 1;
+            self.notify_via_lisp(&msg);
+        }
     }
 
     #[instrument(skip(self, src), fields(bytes = src.len()))]
@@ -406,8 +483,20 @@ impl State {
 
     /// Bridge from Rust-internal failure paths (eval errors, render-callback
     /// errors) to the lisp-side `notify` fn defined in `default.lisp`.
+    ///
+    /// Safe to call from inside a lisp builtin: when the runtime has already
+    /// been checked out via `with_lisp`, the message is queued and drained
+    /// on the way out of that call, so the user still gets their popup —
+    /// just one tick later. Without the queue we'd either crash on a
+    /// recursive `lisp.take()` or have to fall back to a silent
+    /// `record_message`, which is invisible until the user opens `:messages`.
     pub fn notify_via_lisp(&mut self, msg: &str) {
         debug!(msg, "notify_via_lisp");
+        if self.lisp.is_none() {
+            debug!("notify_via_lisp queued — lisp runtime checked out");
+            self.pending_notifications.push(msg.to_string());
+            return;
+        }
         let src = format!("(notify {})", crate::lisp::quote_for_lisp(msg));
         if let Err(e) = self.eval_lisp(&src) {
             error!(error = %e, "notify-via-lisp failed");
@@ -618,9 +707,46 @@ impl State {
         Ok(())
     }
 
+    /// Declarative grammar install. Resolves the name against the curated
+    /// manifest plus per-call opts, fetches the source (via `git`) and builds
+    /// it (via the user's `tree-sitter` CLI) when no matching cache stamp is
+    /// present, then registers the resulting library with [`Self::register_grammar`].
+    /// Idempotent: a matching cache short-circuits the shell-outs.
+    #[instrument(skip(self, opts), fields(name = name))]
+    pub fn install_grammar(&mut self, name: &str, opts: InstallOpts) -> anyhow::Result<()> {
+        let installed = rizz_ts_install::install(name, &opts, &self.grammar_manifest)
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let highlights = rizz_ts_install::read_highlights(&installed)?;
+        self.register_grammar(
+            &installed.language,
+            &installed.extensions,
+            &installed.library,
+            &highlights,
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
+        // Clear any one-shot warning we've shown for this grammar so a later
+        // uninstall+reinstall cycle can warn again if needed.
+        self.warned_missing_grammars.remove(&Rc::<str>::from(name));
+        Ok(())
+    }
+
+    /// True when the grammar cache holds a parser library + highlights query
+    /// for `name`. Pure local check; never touches the network. Useful for
+    /// `(if (not (grammar-installed? 'rust)) (grammar-install 'rust))`.
+    pub fn grammar_installed(&self, name: &str) -> bool {
+        rizz_ts_install::try_load_cached(name, &InstallOpts::default(), &self.grammar_manifest)
+            .is_some()
+    }
+
     /// If `buf` is a file buffer whose extension matches a registered
     /// dynamic grammar and no highlighter is currently attached, install one.
     /// A buffer that already has a (native) highlighter is left alone.
+    ///
+    /// When the extension is unknown to the registry but the curated manifest
+    /// names a grammar for it, try to register it from the on-disk cache (no
+    /// network). If the cache is empty, surface a one-time notify pointing
+    /// the user at `(grammar-install '<name>)`. This deliberately never
+    /// shells out from the buffer-open path — installs are explicit.
     fn install_highlighter(&mut self, buf: BufferId) {
         if !self.bufs.contains(buf) {
             return;
@@ -633,6 +759,47 @@ impl State {
         };
         if let Some(h) = self.ts_registry.highlighter_for_path(&path) {
             self.bufs[buf].set_highlighter(Some(h));
+            return;
+        }
+        let Some(ext) = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+        else {
+            return;
+        };
+        let Some(grammar_name) = self.grammar_manifest.grammar_for_ext(&ext).map(str::to_string)
+        else {
+            return;
+        };
+        if let Some(installed) = rizz_ts_install::try_load_cached(
+            &grammar_name,
+            &InstallOpts::default(),
+            &self.grammar_manifest,
+        ) {
+            match rizz_ts_install::read_highlights(&installed) {
+                Ok(highlights) => {
+                    if let Err(e) = self.register_grammar(
+                        &installed.language,
+                        &installed.extensions,
+                        &installed.library,
+                        &highlights,
+                    ) {
+                        warn!(error = %e, name = grammar_name, "auto-load from cache failed");
+                    } else if let Some(h) = self.ts_registry.highlighter_for_path(&path) {
+                        self.bufs[buf].set_highlighter(Some(h));
+                    }
+                }
+                Err(e) => warn!(error = %e, "could not read cached highlights"),
+            }
+            return;
+        }
+        let key: Rc<str> = Rc::from(grammar_name.as_str());
+        if self.warned_missing_grammars.insert(key) {
+            let msg = format!(
+                "grammar `{grammar_name}` not installed — run `(grammar-install '{grammar_name})`"
+            );
+            self.notify_via_lisp(&msg);
         }
     }
 
@@ -1434,6 +1601,72 @@ mod tests {
         );
         assert!(err.is_err(), "expected library load failure, got Ok");
         assert!(s.ts_registry.is_empty(), "registry must stay empty");
+    }
+
+    #[test]
+    fn install_grammar_returns_helpful_error_for_unknown_name() {
+        let mut s = test_state();
+        let err = s
+            .install_grammar("definitely-not-in-the-manifest", InstallOpts::default())
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("definitely-not-in-the-manifest"),
+            "error should name the unknown grammar; got: {msg}"
+        );
+        assert!(s.ts_registry.is_empty(), "registry must stay empty");
+    }
+
+    #[test]
+    fn grammar_installed_is_false_for_unknown() {
+        let s = test_state();
+        assert!(!s.grammar_installed("definitely-not-in-the-manifest"));
+    }
+
+    #[test]
+    fn notify_via_lisp_queues_when_lisp_taken() {
+        // `install_highlighter`'s auto-load path runs inside lisp actions
+        // (`(edit "foo.rs")` → BufCreate → install_highlighter). At that
+        // point `self.lisp` has been taken by `with_lisp`, so a re-entrant
+        // `eval_lisp("(notify ...)")` would panic. Instead the message must
+        // queue, and then fire through the user's `(notify …)` fn when the
+        // outer `with_lisp` puts the runtime back.
+        let mut s = test_state();
+        let lisp = s.lisp.take();
+        s.notify_via_lisp("queued notification");
+        assert_eq!(
+            s.pending_notifications.len(),
+            1,
+            "expected the message to be queued, not eval'd or dropped"
+        );
+        s.lisp = lisp;
+        s.drain_pending_notifications();
+        assert!(s.pending_notifications.is_empty(), "queue must be empty after drain");
+        // The user's `(notify …)` runs `notify-record`, which appends to the
+        // message history — so a successful drain leaves the message there.
+        let found = s
+            .message_history()
+            .any(|m| m.as_ref() == "queued notification");
+        assert!(found, "drain should have routed the message through `(notify …)`");
+    }
+
+    #[test]
+    fn with_lisp_drains_queued_notifications() {
+        // End-to-end: anything that queues during the body of a `with_lisp`
+        // call fires through `(notify …)` on the way out.
+        let mut s = test_state();
+        let r: Result<_, RizzError> = s.with_lisp(|_| {
+            // Inside the closure `self.lisp` is None — simulate the auto-load
+            // path by reaching back through the editor bridge.
+            crate::lisp::with_editor_mut(|st| st.notify_via_lisp("drained via with_lisp"));
+            Ok(())
+        });
+        r.unwrap();
+        assert!(s.pending_notifications.is_empty());
+        let found = s
+            .message_history()
+            .any(|m| m.as_ref() == "drained via with_lisp");
+        assert!(found, "with_lisp must drain queued notifications on exit");
     }
 
     #[test]

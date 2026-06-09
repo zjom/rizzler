@@ -13,6 +13,7 @@ rizz = { workspace = true }
 rizz_actions = { path = "../rizz_actions" }
 rizz_core = { path = "../rizz_core" }
 rizz_ts = { path = "../rizz_ts" }
+rizz_ts_install = { path = "../rizz_ts_install" }
 rizz_input = { path = "../rizz_input" }
 rizz_registers = { path = "../rizz_registers" }
 rizz_ringbuffer = { path = "../rizz_ringbuffer" }

@@ -668,8 +668,31 @@
 ;; (`function`) when the more specific face is undefined, so only override
 ;; what you want different — everything else still gets styled.
 ;;
-;; TODO: register your own tree-sitter grammar with `(grammar-register …)`
-;; — see `(show grammar-register)` from command mode for the full signature.
+;; ── Installing grammars ──
+;;
+;; `(grammar-install 'name)` resolves <name> against the curated table in
+;; `grammars.toml` (seeded next to this file on first launch), clones the
+;; grammar repo with `git`, compiles it with the `tree-sitter` CLI, and
+;; caches the result under `$XDG_DATA_HOME/rizz/grammars/<name>/`. Calls are
+;; idempotent: once a grammar is cached, subsequent installs just register
+;; the on-disk artefacts and return immediately.
+;;
+;; Open a file whose extension is in the manifest but not yet installed and
+;; you'll get a one-time popup pointing at the install form below.
+;;
+;; TODO: uncomment the grammars you want.
+;; (grammar-install 'rust)
+;; (grammar-install 'python)
+;; (grammar-install 'typescript)
+;;
+;; Want a one-off from a local checkout? Pass {"path": …}:
+;;   (grammar-install 'mylang {"path": "/path/to/tree-sitter-mylang"})
+;;
+;; Need a different repo or rev than the manifest ships? Override per-call:
+;;   (grammar-install 'rust {"rev": "abc123" "force": 1})
+;;
+;; The low-level `(grammar-register lib scm ext)` is still available for
+;; users building parsers by hand — see `(show grammar-register)`.
 (face-define "syntax.keyword"      {"fg": pal-keyword     "bold": 1})
 (face-define "syntax.string"       {"fg": pal-string    "italic": 1})
 (face-define "syntax.escape"       {"fg": pal-keyword})
@@ -1059,14 +1082,11 @@
 ;;    minibuffer      (cells 1)
 ;;    selection badge (overlay)       ← floats over everything when active
 
-(let! F
-    [(w-size 'min   1 (w-vstack [(w-editor-tree)
+(fn _frame () (w-vstack [(w-size 'min   1 (w-vstack [(w-editor-tree)
                                  (_menu-overlay)]))
      (w-size 'cells 1 (_status-line))
      (w-size 'cells 1 (w-minibuffer))
-     (_selection-badge)])
-
-(fn _frame () (w-vstack (deref F)))
+     (_selection-badge)]))
 
 (set-frame _frame)
 (set-gutter _gutter 5)

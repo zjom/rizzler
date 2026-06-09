@@ -1,0 +1,105 @@
+# =============================================================================
+# grammars.toml — curated tree-sitter grammar manifest
+# =============================================================================
+#
+# This file is seeded into your config directory on first launch (right next to
+# init.rz). After that it's yours: edit, add entries, pin revs. The editor
+# reads it on startup to resolve names like `(grammar-install 'rust)` to a
+# repo URL + per-grammar quirks.
+#
+# Each table key is the grammar's symbolic name (the one you pass to
+# `grammar-install`). Fields:
+#
+#   repo        git URL to clone (required unless you pass `path` to the
+#               builtin)
+#   rev         git ref to check out — a commit SHA, tag, or branch name.
+#               Floating refs like "main" silently break when a grammar's
+#               query files change shape upstream; prefer pinning a SHA.
+#   branch      optional branch passed to `git clone --branch`
+#   subdir      sub-directory inside the repo where `parser.c` lives.
+#               Used by repos that vendor multiple grammars (TS/TSX, etc).
+#   extensions  file extensions this grammar should highlight (no leading
+#               dot, lowercase). The auto-load pass uses this index to find
+#               a grammar by the buffer's extension.
+#   language    C-symbol suffix the parser library exports — overrides the
+#               table key when the on-disk symbol doesn't match the name.
+#               Defaults to the table key.
+#   queries     path to the highlights query relative to the source root.
+#               Defaults to `queries/highlights.scm` (or
+#               `<subdir>/queries/highlights.scm` when `subdir` is set).
+#
+# Workflow:
+#   * Install/refresh:     (grammar-install 'rust)
+#   * Idempotent guard:    (if (not (grammar-installed? 'rust))
+#                              (grammar-install 'rust))
+#   * Local checkout:      (grammar-install 'mylang
+#                            {"path": "/path/to/tree-sitter-mylang"})
+#   * Force rebuild:       (grammar-install 'rust {"force": 1})
+#
+# `git` and the `tree-sitter` CLI must be on $PATH. Artefacts cache to
+# $XDG_DATA_HOME/rizz/grammars/<name>/.
+# =============================================================================
+
+[rust]
+repo = "https://github.com/tree-sitter/tree-sitter-rust"
+extensions = ["rs"]
+
+[python]
+repo = "https://github.com/tree-sitter/tree-sitter-python"
+extensions = ["py", "pyi"]
+
+[javascript]
+repo = "https://github.com/tree-sitter/tree-sitter-javascript"
+extensions = ["js", "mjs", "cjs", "jsx"]
+
+[typescript]
+repo = "https://github.com/tree-sitter/tree-sitter-typescript"
+subdir = "typescript"
+extensions = ["ts"]
+
+[tsx]
+repo = "https://github.com/tree-sitter/tree-sitter-typescript"
+subdir = "tsx"
+language = "tsx"
+extensions = ["tsx"]
+
+[go]
+repo = "https://github.com/tree-sitter/tree-sitter-go"
+extensions = ["go"]
+
+[bash]
+repo = "https://github.com/tree-sitter/tree-sitter-bash"
+extensions = ["sh", "bash"]
+
+[json]
+repo = "https://github.com/tree-sitter/tree-sitter-json"
+extensions = ["json"]
+
+[html]
+repo = "https://github.com/tree-sitter/tree-sitter-html"
+extensions = ["html", "htm"]
+
+[css]
+repo = "https://github.com/tree-sitter/tree-sitter-css"
+extensions = ["css"]
+
+[c]
+repo = "https://github.com/tree-sitter/tree-sitter-c"
+extensions = ["c", "h"]
+
+[cpp]
+repo = "https://github.com/tree-sitter/tree-sitter-cpp"
+extensions = ["cc", "cpp", "cxx", "hpp", "hh", "hxx"]
+
+[lua]
+repo = "https://github.com/tree-sitter-grammars/tree-sitter-lua"
+extensions = ["lua"]
+
+[markdown]
+repo = "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
+subdir = "tree-sitter-markdown"
+extensions = ["md", "markdown"]
+
+[toml]
+repo = "https://github.com/tree-sitter-grammars/tree-sitter-toml"
+extensions = ["toml"]

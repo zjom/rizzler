@@ -1,21 +1,47 @@
 //! Tree-sitter grammar and LSP server install / attach.
 //!
-//! The two paths mirror each other closely — both consult a manifest, both
-//! cache a one-time warn / failed-install marker per language. PR2 will
-//! extract the shared shape into a generic `LanguageBackend<I>` and a
-//! `rizz_install` crate; for now this module is the duplication's home.
+//! Each language backend (grammar, LSP) wraps a [`rizz_install::LanguageBackend`]
+//! that owns the manifest plus the one-shot warn/failed-install trackers.
+//! The two paths still differ in their side effects (git+tree-sitter vs.
+//! shell recipe), but the editor-side bookkeeping is now shared.
 
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 
-use rizz_lsp::LspBufferAttachment;
-use rizz_lsp_install::{InstallOpts as LspInstallOpts, install as install_lsp_server, try_load_cached as try_load_cached_lsp};
+use rizz_install::LanguageBackend;
+use rizz_lsp::{LspBufferAttachment, LspRegistry};
+use rizz_lsp_install::{
+    InstallOpts as LspInstallOpts, Manifest as LspManifest, ServerSpec,
+    install as install_lsp_server, try_load_cached as try_load_cached_lsp,
+};
 use rizz_text::BufferId;
-use rizz_ts_install::InstallOpts;
+use rizz_ts::TsRegistry;
+use rizz_ts_install::{GrammarSpec, InstallOpts, Manifest as GrammarManifest};
 use tracing::{error, info, instrument, warn};
 
-use super::workspace::{find_workspace_root, path_to_uri};
 use super::State;
+use super::workspace::{find_workspace_root, path_to_uri};
+
+/// Editor-side state for both language backends. The `ts` and `lsp` fields
+/// hold the shared workflow state (manifest + auto-install + warn/failed
+/// sets); `ts_registry` and `lsp_registry` hold the runtime handles
+/// `install_highlighter` / `install_lsp_client` populate.
+pub(super) struct LangIntegration {
+    pub ts: LanguageBackend<GrammarSpec>,
+    pub ts_registry: TsRegistry,
+    pub lsp: LanguageBackend<ServerSpec>,
+    pub lsp_registry: LspRegistry,
+}
+
+impl LangIntegration {
+    pub(super) fn new(grammar_manifest: GrammarManifest, lsp_manifest: LspManifest) -> Self {
+        Self {
+            ts: LanguageBackend::new(grammar_manifest),
+            ts_registry: TsRegistry::new(),
+            lsp: LanguageBackend::new(lsp_manifest),
+            lsp_registry: LspRegistry::new(),
+        }
+    }
+}
 
 impl State {
     /// Register a runtime-loaded tree-sitter grammar from a shared library
@@ -36,6 +62,7 @@ impl State {
         highlights_query: &str,
     ) -> Result<(), rizz_ts::TsError> {
         if let Err(e) = self
+            .lang
             .ts_registry
             .register(name, extensions, library_path, highlights_query)
         {
@@ -57,7 +84,7 @@ impl State {
     /// Idempotent: a matching cache short-circuits the shell-outs.
     #[instrument(skip(self, opts), fields(name = name))]
     pub fn install_grammar(&mut self, name: &str, opts: InstallOpts) -> anyhow::Result<()> {
-        let installed = rizz_ts_install::install(name, &opts, &self.grammar_manifest)
+        let installed = rizz_ts_install::install(name, &opts, &self.lang.ts.manifest)
             .map_err(|e| anyhow::anyhow!(e))?;
         let highlights = rizz_ts_install::read_highlights(&installed)?;
         self.register_grammar(
@@ -69,9 +96,7 @@ impl State {
         .map_err(|e| anyhow::anyhow!(e))?;
         // Reset one-shot warning + failed-install markers so a later
         // uninstall+reinstall cycle can warn or retry again.
-        let key = Rc::<str>::from(name);
-        self.warned_missing_grammars.remove(&key);
-        self.failed_auto_installs.remove(&key);
+        self.lang.ts.forget(name);
         Ok(())
     }
 
@@ -79,7 +104,7 @@ impl State {
     /// for `name`. Pure local check; never touches the network. Useful for
     /// `(if (not (grammar-installed? 'rust)) (grammar-install 'rust))`.
     pub fn grammar_installed(&self, name: &str) -> bool {
-        rizz_ts_install::try_load_cached(name, &InstallOpts::default(), &self.grammar_manifest)
+        rizz_ts_install::try_load_cached(name, &InstallOpts::default(), &self.lang.ts.manifest)
             .is_some()
     }
 
@@ -87,14 +112,14 @@ impl State {
     /// the corresponding tree-sitter grammar. Toggled via the lisp
     /// `(set-grammar-auto-install …)` builtin.
     pub fn grammar_auto_install(&self) -> bool {
-        self.grammar_auto_install
+        self.lang.ts.auto_install
     }
 
     /// Set the auto-install flag. When toggled off, opening a file whose
     /// grammar is not yet cached reverts to the old behavior — a one-time
     /// notify pointing the user at `(grammar-install '<name>)`.
     pub fn set_grammar_auto_install(&mut self, on: bool) {
-        self.grammar_auto_install = on;
+        self.lang.ts.auto_install = on;
     }
 
     /// If `buf` is a file buffer whose extension matches a registered
@@ -117,7 +142,7 @@ impl State {
         let Some(path) = self.bufs[buf].fs_path() else {
             return;
         };
-        if let Some(h) = self.ts_registry.highlighter_for_path(&path) {
+        if let Some(h) = self.lang.ts_registry.highlighter_for_path(&path) {
             self.bufs[buf].set_highlighter(Some(h));
             return;
         }
@@ -129,7 +154,9 @@ impl State {
             return;
         };
         let Some(grammar_name) = self
-            .grammar_manifest
+            .lang
+            .ts
+            .manifest
             .lookup_by_ext(&ext)
             .map(str::to_string)
         else {
@@ -138,7 +165,7 @@ impl State {
         if let Some(installed) = rizz_ts_install::try_load_cached(
             &grammar_name,
             &InstallOpts::default(),
-            &self.grammar_manifest,
+            &self.lang.ts.manifest,
         ) {
             match rizz_ts_install::read_highlights(&installed) {
                 Ok(highlights) => {
@@ -149,7 +176,7 @@ impl State {
                         &highlights,
                     ) {
                         warn!(error = %e, name = grammar_name, "auto-load from cache failed");
-                    } else if let Some(h) = self.ts_registry.highlighter_for_path(&path) {
+                    } else if let Some(h) = self.lang.ts_registry.highlighter_for_path(&path) {
                         self.bufs[buf].set_highlighter(Some(h));
                     }
                 }
@@ -157,8 +184,7 @@ impl State {
             }
             return;
         }
-        let key: Rc<str> = Rc::from(grammar_name.as_str());
-        if self.grammar_auto_install && !self.failed_auto_installs.contains(&key) {
+        if self.lang.ts.auto_install && !self.lang.ts.already_failed(&grammar_name) {
             let msg = format!("installing tree-sitter grammar `{grammar_name}`…");
             self.notify_via_lisp(&msg);
             match self.install_grammar(&grammar_name, InstallOpts::default()) {
@@ -167,7 +193,7 @@ impl State {
                     // the new highlighter to every open buffer.
                 }
                 Err(e) => {
-                    self.failed_auto_installs.insert(key);
+                    self.lang.ts.mark_failed(&grammar_name);
                     let msg = format!(
                         "auto-install of `{grammar_name}` failed: {e} — run `(grammar-install '{grammar_name})` manually or `(set-grammar-auto-install nil)` to silence this"
                     );
@@ -176,7 +202,7 @@ impl State {
             }
             return;
         }
-        if self.warned_missing_grammars.insert(key) {
+        if self.lang.ts.first_warn(&grammar_name) {
             let msg = format!(
                 "grammar `{grammar_name}` not installed — run `(grammar-install '{grammar_name})` or `(set-grammar-auto-install t)`"
             );
@@ -187,15 +213,15 @@ impl State {
     /// True when a server is cached locally (PATH or recipe-built) for
     /// `name`. Pure local check; never touches the network.
     pub fn lsp_installed(&self, name: &str) -> bool {
-        try_load_cached_lsp(name, &self.lsp_manifest).is_some()
+        try_load_cached_lsp(name, &self.lang.lsp.manifest).is_some()
     }
 
     pub fn lsp_auto_install(&self) -> bool {
-        self.lsp_auto_install
+        self.lang.lsp.auto_install
     }
 
     pub fn set_lsp_auto_install(&mut self, on: bool) {
-        self.lsp_auto_install = on;
+        self.lang.lsp.auto_install = on;
     }
 
     /// Register a server programmatically (low-level — bypasses lsp.toml).
@@ -217,7 +243,7 @@ impl State {
             root_markers,
             ..Default::default()
         };
-        self.lsp_manifest.insert(name.to_string(), spec);
+        self.lang.lsp.manifest.insert(name.to_string(), spec);
         let ids: Vec<BufferId> = self.bufs.iter().map(|(id, _)| id).collect();
         for id in ids {
             self.install_lsp_client(id);
@@ -233,7 +259,7 @@ impl State {
         name: &str,
         opts: LspInstallOpts,
     ) -> Result<PathBuf, String> {
-        let res = install_lsp_server(name, &opts, &self.lsp_manifest)
+        let res = install_lsp_server(name, &opts, &self.lang.lsp.manifest)
             .map(|i| i.binary)
             .map_err(|e| e.to_string());
         if res.is_ok() {
@@ -267,30 +293,29 @@ impl State {
         else {
             return;
         };
-        let Some(server_name) = self.lsp_manifest.lookup_by_ext(&ext).map(str::to_string) else {
+        let Some(server_name) = self.lang.lsp.manifest.lookup_by_ext(&ext).map(str::to_string) else {
             return;
         };
 
-        let mut installed = try_load_cached_lsp(&server_name, &self.lsp_manifest);
-        let key: Rc<str> = Rc::from(server_name.as_str());
+        let mut installed = try_load_cached_lsp(&server_name, &self.lang.lsp.manifest);
         if installed.is_none() {
-            if self.lsp_auto_install && !self.failed_lsp_auto_installs.contains(&key) {
+            if self.lang.lsp.auto_install && !self.lang.lsp.already_failed(&server_name) {
                 self.notify_via_lisp(&format!("installing lsp server `{server_name}`…"));
                 match install_lsp_server(
                     &server_name,
                     &LspInstallOpts::default(),
-                    &self.lsp_manifest,
+                    &self.lang.lsp.manifest,
                 ) {
                     Ok(i) => installed = Some(i),
                     Err(e) => {
-                        self.failed_lsp_auto_installs.insert(key.clone());
+                        self.lang.lsp.mark_failed(&server_name);
                         self.notify_via_lisp(&format!(
                             "auto-install of `{server_name}` failed: {e} — run `(lsp-install '{server_name})` manually or `(set-lsp-auto-install nil)` to silence this"
                         ));
                         return;
                     }
                 }
-            } else if self.warned_missing_servers.insert(key) {
+            } else if self.lang.lsp.first_warn(&server_name) {
                 self.notify_via_lisp(&format!(
                     "lsp server `{server_name}` not installed — run `(lsp-install '{server_name})` or `(set-lsp-auto-install t)`"
                 ));
@@ -308,7 +333,7 @@ impl State {
             .unwrap_or(self.workdir.to_path_buf());
         let root_uri = path_to_uri(&root_dir);
 
-        let running = match self.lsp_registry.ensure_running(
+        let running = match self.lang.lsp_registry.ensure_running(
             &server_name,
             installed.binary.clone(),
             installed.spec.clone(),

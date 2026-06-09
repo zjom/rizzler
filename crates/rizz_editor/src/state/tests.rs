@@ -115,7 +115,7 @@
             "; empty query",
         );
         assert!(err.is_err(), "expected library load failure, got Ok");
-        assert!(s.ts_registry.is_empty(), "registry must stay empty");
+        assert!(s.lang.ts_registry.is_empty(), "registry must stay empty");
     }
 
     #[test]
@@ -129,7 +129,7 @@
             msg.contains("definitely-not-in-the-manifest"),
             "error should name the unknown grammar; got: {msg}"
         );
-        assert!(s.ts_registry.is_empty(), "registry must stay empty");
+        assert!(s.lang.ts_registry.is_empty(), "registry must stay empty");
     }
 
     #[test]

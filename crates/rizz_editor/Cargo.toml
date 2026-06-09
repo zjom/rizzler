@@ -14,6 +14,7 @@ lsp-types = { workspace = true }
 serde_json = { workspace = true }
 rizz_actions = { path = "../rizz_actions" }
 rizz_core = { path = "../rizz_core" }
+rizz_install = { path = "../rizz_install" }
 rizz_lsp = { path = "../rizz_lsp" }
 rizz_lsp_install = { path = "../rizz_lsp_install" }
 rizz_ts = { path = "../rizz_ts" }

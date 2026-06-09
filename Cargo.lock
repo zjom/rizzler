@@ -823,6 +823,7 @@ dependencies = [
  "rizz_actions",
  "rizz_core",
  "rizz_input",
+ "rizz_install",
  "rizz_lsp",
  "rizz_lsp_install",
  "rizz_registers",

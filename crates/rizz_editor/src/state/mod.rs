@@ -22,7 +22,7 @@
 //! `State`'s fields are private; all child modules can see them because they
 //! are descendants of this module.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -35,13 +35,10 @@ use tracing::info;
 use rizz_actions::KeymapRegistry;
 use rizz_core::EditingMode;
 use rizz_input::{CountPrefix, KeyEvent};
-use rizz_lsp::{LspRegistry, RequestSeq};
-use rizz_lsp_install::Manifest as LspManifest;
+use rizz_lsp::RequestSeq;
 use rizz_registers::Registers;
 use rizz_search::{Search, SearchHost};
 use rizz_text::{Buffer, BufferId, WrapMode, io as buffer_io};
-use rizz_ts::TsRegistry;
-use rizz_ts_install::Manifest as GrammarManifest;
 use rizz_ui::{
     RatatuiRenderer, Renderer, ThemeCell, Widget, WindowTree,
     panel::{PanelStack, Placement},
@@ -67,6 +64,7 @@ mod workspace;
 #[cfg(test)]
 mod tests;
 
+use lang::LangIntegration;
 use lsp_session::{PendingCodeActions, PendingCompletion, PendingLspKind};
 use workspace::{default_config_dir, load_grammar_manifest, load_lsp_manifest, resolve_workdir};
 
@@ -166,23 +164,10 @@ pub struct State {
     /// Directory holding `init.rz`. Stored so `reload-config` (and any
     /// future config-path query from lisp) can locate the script after init.
     config_dir: Rc<Path>,
-    /// Runtime-registered tree-sitter grammars loaded from shared libraries,
-    /// indexed by file extension.
-    ts_registry: TsRegistry,
-    /// Curated grammar manifest, seeded from `<config_dir>/grammars.toml` on
-    /// first launch.
-    grammar_manifest: GrammarManifest,
-    /// Names we've already surfaced a "grammar not installed" notify for, so
-    /// opening many `.py` files doesn't spam the user with one popup per
-    /// buffer. Cleared on `reload-config`.
-    warned_missing_grammars: HashSet<Rc<str>>,
-    /// Names we've already tried to auto-install in this session and which
-    /// failed. Prevents retrying every time a new buffer of the same type is
-    /// opened.
-    failed_auto_installs: HashSet<Rc<str>>,
-    /// When true, opening a file whose extension matches a manifest entry but
-    /// whose grammar is not yet cached triggers a one-shot `(grammar-install)`.
-    grammar_auto_install: bool,
+    /// Tree-sitter + LSP install state, grouped behind one struct. Each
+    /// half holds a [`rizz_install::LanguageBackend`] (manifest + auto-install
+    /// flag + warn / failed-install sets) plus its runtime registry handle.
+    lang: LangIntegration,
     /// Notifications queued while `self.lisp` was checked out by an outer
     /// `with_lisp` call. Drained on the way out of that call.
     pending_notifications: Vec<String>,
@@ -195,19 +180,6 @@ pub struct State {
     /// Last `/` pattern + direction + the overlays painted for the most
     /// recent search.
     search: Search,
-    /// Editor-side handle to spawned LSP clients, indexed by symbolic name.
-    lsp_registry: LspRegistry,
-    /// Curated LSP server manifest, seeded from `<config_dir>/lsp.toml` on
-    /// first launch.
-    lsp_manifest: LspManifest,
-    /// When true, opening a file whose extension matches a manifest entry
-    /// but whose binary is missing from PATH triggers a one-shot install
-    /// recipe.
-    lsp_auto_install: bool,
-    /// Names we've already surfaced a "no lsp server" notify for.
-    warned_missing_servers: HashSet<Rc<str>>,
-    /// Names whose auto-install we already tried and failed.
-    failed_lsp_auto_installs: HashSet<Rc<str>>,
     /// In-flight LSP requests: maps sequence id → what to do with the
     /// response when it arrives.
     pending_lsp_requests: HashMap<RequestSeq, PendingLspKind>,
@@ -263,20 +235,11 @@ impl State {
             gutter_width: GutterWidth::Fit,
             workdir: workdir.into(),
             config_dir: config_dir.into(),
-            ts_registry: TsRegistry::new(),
-            grammar_manifest,
-            warned_missing_grammars: HashSet::new(),
-            failed_auto_installs: HashSet::new(),
-            grammar_auto_install: true,
+            lang: LangIntegration::new(grammar_manifest, lsp_manifest),
             pending_notifications: Vec::new(),
             registers: Registers::new(),
             pending_register: None,
             search: Search::default(),
-            lsp_registry: LspRegistry::new(),
-            lsp_manifest,
-            lsp_auto_install: true,
-            warned_missing_servers: HashSet::new(),
-            failed_lsp_auto_installs: HashSet::new(),
             pending_lsp_requests: HashMap::new(),
             buf_by_uri: HashMap::new(),
             next_lsp_seq: 1,

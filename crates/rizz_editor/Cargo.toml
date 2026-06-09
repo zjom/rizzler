@@ -9,7 +9,6 @@ anyhow = { workspace = true }
 crossterm = "0.29.0"
 im = "15.1.0"
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
-regex = "1"
 rizz = { workspace = true }
 rizz_actions = { path = "../rizz_actions" }
 rizz_core = { path = "../rizz_core" }
@@ -18,6 +17,7 @@ rizz_ts_install = { path = "../rizz_ts_install" }
 rizz_input = { path = "../rizz_input" }
 rizz_registers = { path = "../rizz_registers" }
 rizz_ringbuffer = { path = "../rizz_ringbuffer" }
+rizz_search = { path = "../rizz_search" }
 rizz_text = { path = "../rizz_text" }
 rizz_ui = { path = "../rizz_ui" }
 slotmap = { workspace = true }

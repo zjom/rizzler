@@ -1,0 +1,11 @@
+[package]
+name = "rizz_search"
+version = "0.1.0"
+edition = "2024"
+description = "Vim-style `/` search for the rizz editor: pattern matching, overlay paint, n/N repeat, and incsearch live-preview orchestration against a host that exposes buffers + a Search bookkeeper."
+
+[dependencies]
+regex = "1"
+rizz = { workspace = true }
+rizz_core = { path = "../rizz_core" }
+rizz_text = { path = "../rizz_text" }

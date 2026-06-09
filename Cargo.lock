@@ -696,13 +696,13 @@ dependencies = [
  "crossterm 0.29.0",
  "im",
  "ratatui",
- "regex",
  "rizz",
  "rizz_actions",
  "rizz_core",
  "rizz_input",
  "rizz_registers",
  "rizz_ringbuffer",
+ "rizz_search",
  "rizz_text",
  "rizz_ts",
  "rizz_ts_install",
@@ -727,6 +727,16 @@ version = "0.1.0"
 [[package]]
 name = "rizz_ringbuffer"
 version = "0.1.0"
+
+[[package]]
+name = "rizz_search"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "rizz",
+ "rizz_core",
+ "rizz_text",
+]
 
 [[package]]
 name = "rizz_text"

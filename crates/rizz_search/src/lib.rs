@@ -1,24 +1,31 @@
 //! Vim-style `/` search.
 //!
-//! Given a regex pattern and a target buffer, [`run`] finds every match,
-//! drops one overlay per match using the `search-match` face, and jumps the
-//! cursor to the destination match (the first match at-or-after the supplied
-//! origin for forward search, with wrap). The pattern and direction of the
-//! last successful run are kept on the [`Search`] so `n` / `N` can repeat
-//! without re-prompting.
+//! Two layers:
 //!
-//! Live (`incsearch`) flow: when the user enters Search mode the caller
-//! stashes the origin cursor on [`Search::set_origin`] and replays [`run`]
-//! after every minibuffer keystroke. [`clear_overlays`] drops the
-//! highlights when the pattern becomes empty or the user cancels — without
-//! needing a valid regex.
+//! - [`Search`] + [`run`] / [`clear_overlays`] are the pure mechanics — given a
+//!   pattern and a target `Buffer`, paint one overlay per match and jump the
+//!   cursor to the destination. The pattern + direction of the last successful
+//!   run are kept on [`Search`] so `n` / `N` can repeat without re-prompting.
+//! - [`SearchHost`] is the trait an editor (e.g. `rizz_editor::State`)
+//!   implements to expose the bits the high-level helpers
+//!   ([`run_search_from`], [`repeat_search`], [`refresh_live_search`],
+//!   [`clear_live_overlays`], [`cancel_live_search`], [`restore_origin`])
+//!   need: the [`Search`] field, the focused buffer id, the buffer storage,
+//!   the minibuffer text, and a notification sink.
+//!
+//! Live (`incsearch`) flow: when the user enters Search mode the host stashes
+//! the origin cursor on [`Search::set_origin`] and the editor replays
+//! [`refresh_live_search`] after every minibuffer keystroke. Empty pattern (or
+//! a partial regex like `[`) clears highlights and rewinds the cursor to
+//! origin so the user sees the original buffer back. `<esc>` invokes
+//! [`cancel_live_search`].
 
 use std::rc::Rc;
 
 use rizz::runtime::Value;
 use rizz_core::Position;
 use rizz_text::props::{OverlayId, PropEntry};
-use rizz_text::{Buffer, BufferId};
+use rizz_text::{Buffer, BufferId, MoveKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SearchDir {
@@ -46,7 +53,7 @@ pub struct SearchOrigin {
     pub cursor: Position<usize>,
 }
 
-/// Per-`State` search bookkeeping: last submitted pattern + direction (for
+/// Per-host search bookkeeping: last submitted pattern + direction (for
 /// `n`/`N`), the overlay ids painted by the previous run, and the live-mode
 /// origin used while the minibuffer is open.
 #[derive(Default)]
@@ -77,6 +84,23 @@ impl Search {
     pub fn take_origin(&mut self) -> Option<SearchOrigin> {
         self.origin.take()
     }
+}
+
+/// Editor surface the high-level helpers need.
+///
+/// `search_and_buf_mut` is the combined accessor that lets `run` get
+/// `&mut Search` and `&mut Buffer` at the same time — splitting them across
+/// two trait calls would force the impl into RefCell territory or runtime
+/// borrow checks.
+pub trait SearchHost {
+    fn search(&self) -> &Search;
+    fn search_mut(&mut self) -> &mut Search;
+    fn focused_buf_id(&self) -> BufferId;
+    fn buf(&self, id: BufferId) -> Option<&Buffer>;
+    fn buf_mut(&mut self, id: BufferId) -> Option<&mut Buffer>;
+    fn search_and_buf_mut(&mut self, id: BufferId) -> Option<(&mut Search, &mut Buffer)>;
+    fn minibuffer_text(&self) -> String;
+    fn notify(&mut self, msg: &str);
 }
 
 /// Drop every overlay this `Search` previously painted. Used by cancel and
@@ -191,6 +215,164 @@ where
     search.last_pattern = Some(pattern.into());
     search.last_dir = dir;
     Ok(!matches.is_empty())
+}
+
+/// Execute a single forward/backward search against the host's focused
+/// buffer. `from_char` is the rope char index the match search anchors to;
+/// `inclusive` decides whether a match starting exactly at `from_char`
+/// counts. `notify_on_miss` toggles the "Pattern not found" toast — off for
+/// the live-search path so every partial keystroke doesn't spam
+/// notifications.
+pub fn run_search_from<H: SearchHost + ?Sized>(
+    host: &mut H,
+    pattern: &str,
+    dir: SearchDir,
+    from_char: usize,
+    inclusive: bool,
+    notify_on_miss: bool,
+) -> Result<bool, regex::Error> {
+    let target_id = host.focused_buf_id();
+    let mut other_clears: Vec<(BufferId, OverlayId)> = Vec::new();
+    let r = {
+        let Some((search, target)) = host.search_and_buf_mut(target_id) else {
+            return Ok(false);
+        };
+        run(
+            search,
+            target,
+            target_id,
+            pattern,
+            dir,
+            from_char,
+            inclusive,
+            |bid, ov| other_clears.push((bid, ov)),
+        )
+    };
+    for (bid, ov) in other_clears {
+        if let Some(b) = host.buf_mut(bid) {
+            b.props_mut().delete_overlay(ov);
+        }
+    }
+    match &r {
+        Ok(false) if notify_on_miss => {
+            host.notify(&format!("Pattern not found: {pattern}"));
+        }
+        Err(e) if notify_on_miss => {
+            host.notify(&format!("Invalid pattern: {e}"));
+        }
+        _ => {}
+    }
+    r
+}
+
+/// Re-run the last `/` pattern in `dir`. `n` always means forward, `N`
+/// always means backward — independent of how the pattern was entered.
+/// Notifies when no previous pattern has been stored. Centers the viewport
+/// on the destination match (vim's `nzz` flow).
+pub fn repeat_search<H: SearchHost + ?Sized>(host: &mut H, dir: SearchDir) {
+    let Some(pattern) = host.search().last_pattern().cloned() else {
+        host.notify("No previous search pattern");
+        return;
+    };
+    let target_id = host.focused_buf_id();
+    let cursor_char = match host.buf(target_id) {
+        Some(buf) => {
+            let p = buf.abs_pos();
+            buf.rope().line_to_char(p.row) + p.col
+        }
+        None => return,
+    };
+    // Advance past the current match — vim's `n`/`N` semantic.
+    let found = run_search_from(host, pattern.as_ref(), dir, cursor_char, false, true)
+        .unwrap_or(false);
+    if found && let Some(b) = host.buf_mut(target_id) {
+        b.move_cursor(MoveKind::Center);
+    }
+}
+
+/// Re-paint the live search against the current minibuffer pattern,
+/// anchored at the origin captured on `/` entry. Empty pattern (or an
+/// invalid partial regex like `[`) clears highlights and rewinds the
+/// cursor to origin so the user sees the original buffer back.
+pub fn refresh_live_search<H: SearchHost + ?Sized>(host: &mut H) {
+    let Some(origin) = host.search().origin() else {
+        return;
+    };
+    let pattern = host.minibuffer_text();
+    // Always restart from origin: cursor sits there before the run, and
+    // `run` jumps to the next match from there if the regex compiles +
+    // matches at least once.
+    restore_origin(host, origin);
+    if pattern.is_empty() {
+        clear_live_overlays(host);
+        return;
+    }
+    let from_char = match host.buf(origin.buf) {
+        Some(buf) => buf.rope().line_to_char(origin.cursor.row) + origin.cursor.col,
+        None => return,
+    };
+    let r = run_search_from(host, &pattern, SearchDir::Forward, from_char, true, false);
+    match r {
+        Ok(true) => {
+            // Center the viewport on the live match as the user types,
+            // matching vim's `set scrolloff=999` feel without the
+            // overshoot when the pattern stops matching (`restore_origin`
+            // above already snapped back).
+            if let Some(b) = host.buf_mut(origin.buf) {
+                b.move_cursor(MoveKind::Center);
+            }
+        }
+        Err(_) => {
+            // Partial regex — drop any stale paint but don't fight the user.
+            clear_live_overlays(host);
+        }
+        _ => {}
+    }
+}
+
+/// Drop every overlay the host's `Search` has painted across buffers.
+pub fn clear_live_overlays<H: SearchHost + ?Sized>(host: &mut H) {
+    let mut other_clears: Vec<(BufferId, OverlayId)> = Vec::new();
+    let prefer_id = host
+        .search()
+        .origin()
+        .map(|o| o.buf)
+        .unwrap_or_else(|| host.focused_buf_id());
+    match host.search_and_buf_mut(prefer_id) {
+        Some((search, prefer)) => {
+            clear_overlays(search, Some(prefer), |bid, ov| {
+                other_clears.push((bid, ov))
+            });
+        }
+        None => {
+            clear_overlays(host.search_mut(), None, |bid, ov| {
+                other_clears.push((bid, ov))
+            });
+        }
+    }
+    for (bid, ov) in other_clears {
+        if let Some(b) = host.buf_mut(bid) {
+            b.props_mut().delete_overlay(ov);
+        }
+    }
+}
+
+/// `<esc>` while typing a `/` pattern: drop highlights and put the cursor +
+/// scroll back where the user pressed `/`.
+pub fn cancel_live_search<H: SearchHost + ?Sized>(host: &mut H) {
+    if let Some(origin) = host.search_mut().take_origin() {
+        restore_origin(host, origin);
+    }
+    clear_live_overlays(host);
+}
+
+/// Snap the cursor in `origin.buf` back to `origin.cursor`. The viewport
+/// re-clamps via `MoveKind::Absolute` semantics on `move_cursor_to_char`.
+pub fn restore_origin<H: SearchHost + ?Sized>(host: &mut H, origin: SearchOrigin) {
+    if let Some(buf) = host.buf_mut(origin.buf) {
+        let cidx = buf.rope().line_to_char(origin.cursor.row) + origin.cursor.col;
+        buf.move_cursor_to_char(cidx);
+    }
 }
 
 #[cfg(test)]

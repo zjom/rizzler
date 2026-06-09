@@ -154,7 +154,7 @@ pub fn install(
         (path.clone(), None)
     } else {
         let src = cache::source_dir(&cache_root, name);
-        let sha = sync_clone(&src, &resolved)?;
+        let sha = sync_clone(&src, &resolved, opts.force)?;
         (src, Some(sha))
     };
 
@@ -253,11 +253,17 @@ fn run_capture(cmd: &mut Command, tool: &'static str) -> Result<Output, InstallE
         .map_err(|source| InstallError::ToolNotFound { tool, source })
 }
 
-fn sync_clone(src: &Path, resolved: &Resolved) -> Result<String, InstallError> {
+fn sync_clone(src: &Path, resolved: &Resolved, force: bool) -> Result<String, InstallError> {
     let repo = resolved
         .repo
         .as_deref()
         .expect("sync_clone called without a repo");
+    if force && src.exists() {
+        std::fs::remove_dir_all(src).map_err(|source| InstallError::Io {
+            path: src.to_path_buf(),
+            source,
+        })?;
+    }
     if !src.exists() {
         std::fs::create_dir_all(src.parent().unwrap()).map_err(|source| InstallError::Io {
             path: src.to_path_buf(),

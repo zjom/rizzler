@@ -849,6 +849,11 @@ impl State {
                     trace!(buf = ?f, ch = %c, "Action::OverwriteChar");
                     self.bufs[f].overwrite_char(*c);
                 }
+                Action::ReplaceBackspace => {
+                    let f = self.focused_buf_id();
+                    trace!(buf = ?f, "Action::ReplaceBackspace");
+                    self.bufs[f].replace_backspace();
+                }
                 Action::SpeculativeInsertChar(c) => {
                     let f = self.focused_buf_id();
                     self.bufs[f].insert_speculative_char(*c);
@@ -1779,5 +1784,35 @@ mod tests {
         s.handle_key_event(CT::new(KeyCode::Char('?'), KeyModifiers::NONE))
             .unwrap();
         assert_eq!(s.bufs[b].text(), "hi!?");
+    }
+
+    #[test]
+    fn replace_mode_backspace_restores_original_chars() {
+        use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+        let mut s = test_state();
+        let b = primary(&s);
+        s.bufs[b].clear_with("hello");
+        s.handle_key_event(CT::new(KeyCode::Char('R'), KeyModifiers::SHIFT))
+            .unwrap();
+        s.handle_key_event(CT::new(KeyCode::Char('H'), KeyModifiers::SHIFT))
+            .unwrap();
+        s.handle_key_event(CT::new(KeyCode::Char('I'), KeyModifiers::SHIFT))
+            .unwrap();
+        assert_eq!(s.bufs[b].text(), "HIllo");
+        s.handle_key_event(CT::new(KeyCode::Backspace, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(s.bufs[b].text(), "Hello");
+        s.handle_key_event(CT::new(KeyCode::Backspace, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(s.bufs[b].text(), "hello");
+        // Past the session start: keymap-level no-op (cursor doesn't move,
+        // buffer doesn't change).
+        s.handle_key_event(CT::new(KeyCode::Backspace, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(s.bufs[b].text(), "hello");
+        s.handle_key_event(CT::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        // Nothing was committed — there's no edit to undo.
+        assert!(!s.bufs[b].undo());
     }
 }

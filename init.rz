@@ -459,13 +459,13 @@
 ;;
 ;; Each printable key overwrites the char under the cursor and advances by
 ;; one (the `on_char` wiring is in Rust — see `default_keymaps`). The
-;; bindings here are just the control keys that need to do something other
-;; than overwrite. `<backspace>` only walks the cursor back; restoring the
-;; original char on the way back (vim's full Replace-mode `<bs>` semantics)
-;; isn't tracked yet.
+;; whole session lands as one undo step on `<esc>`. `<backspace>` walks
+;; back over your edits and restores whatever was under the cursor before
+;; you typed (or deletes the inserted char if you extended past EOL) — the
+;; full vim Replace-mode restore behaviour.
 (map 'replace "<esc>"       '(set-mode 'normal))
 (map 'replace "<enter>"     '(newline))
-(map 'replace "<backspace>" '(move-cursor 'left))
+(map 'replace "<backspace>" '(replace-backspace))
 (map 'replace "<up>"        '(move-cursor 'up))
 (map 'replace "<down>"      '(move-cursor 'down))
 (map 'replace "<left>"      '(move-cursor 'left))

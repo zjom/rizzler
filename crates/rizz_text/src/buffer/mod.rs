@@ -35,7 +35,7 @@ use crate::{
 };
 
 pub use cursor::MoveKind;
-pub use edits::Speculation;
+pub use edits::{ReplaceBatch, Speculation};
 pub use text_object::TextObject;
 
 slotmap::new_key_type! {
@@ -93,6 +93,13 @@ pub struct Buffer {
     /// recorded as one delta) or `rollback_speculation` (chord completes →
     /// chars are unwound, leaving no trace in undo history).
     pub(crate) speculation: Option<Speculation>,
+    /// Active Replace-mode session. Set when the buffer enters
+    /// [`EditingMode::Replace`]; cleared on exit or whenever a non-overwrite
+    /// edit / cursor move forces a flush. Records, for each typed char,
+    /// whether it overwrote an existing char (`Some(orig)` — `<bs>` restores
+    /// orig) or was inserted past EOL (`None` — `<bs>` deletes it). The
+    /// whole session lands as a single tracked delta on commit.
+    pub(crate) replace_batch: Option<ReplaceBatch>,
     /// Optional syntax-highlighter. Installed by `State` after consulting
     /// the `TsRegistry` for a grammar matching the file extension. Edits
     /// flip its dirty flag via [`Buffer::invalidate_highlight`]; the
@@ -190,12 +197,16 @@ impl Buffer {
         }
     }
 
-    /// End the current insert-coalescing run AND drop the vertical-motion
-    /// sticky goal column. Called by anything that breaks either run: a
-    /// non-insert edit, a cursor move, a mode change, undo/redo. Callers
+    /// End every in-flight coalescing batch — the insert run, the sticky
+    /// goal column, and any Replace-mode session (which flushes to the
+    /// changetree). Called by anything that breaks one of those: a
+    /// non-insert edit, a cursor move, a mode change, undo/redo. The
+    /// `overwrite_char` / `replace_backspace` pair deliberately skips this
+    /// path so Replace-mode keystrokes coalesce into one delta. Callers
     /// that need to preserve the goal column across this call (notably
     /// vertical `move_cursor` steps) capture and restore it themselves.
     pub(crate) fn close_insert_batch(&mut self) {
+        self.commit_replace_batch();
         self.insert_batch_end = None;
         self.goal_col = None;
     }
@@ -1344,5 +1355,138 @@ mod tests {
         s.overwrite_char('X');
         assert!(s.undo());
         assert_eq!(s.buf.to_string(), "hello");
+    }
+
+    // ---- replace_backspace (vim Replace-mode `<bs>`) -----------------
+
+    #[test]
+    fn replace_backspace_restores_overwritten_char() {
+        let mut s = mk("hello");
+        s.set_mode(EditingMode::Replace);
+        s.overwrite_char('H');
+        s.overwrite_char('E');
+        assert_eq!(s.buf.to_string(), "HEllo");
+        assert!(s.replace_backspace());
+        assert_eq!(s.buf.to_string(), "Hello");
+        assert_eq!(cur_col(&s), 1);
+        assert!(s.replace_backspace());
+        assert_eq!(s.buf.to_string(), "hello");
+        assert_eq!(cur_col(&s), 0);
+    }
+
+    #[test]
+    fn replace_backspace_deletes_inserted_extension() {
+        let mut s = mk("hi");
+        s.set_mode(EditingMode::Insert);
+        s.move_cursor_n(MoveKind::LineEnd, 1);
+        s.set_mode(EditingMode::Replace);
+        s.overwrite_char('!');
+        s.overwrite_char('?');
+        assert_eq!(s.buf.to_string(), "hi!?");
+        assert!(s.replace_backspace());
+        assert_eq!(s.buf.to_string(), "hi!");
+        assert!(s.replace_backspace());
+        assert_eq!(s.buf.to_string(), "hi");
+        assert_eq!(cur_col(&s), 2);
+    }
+
+    #[test]
+    fn replace_backspace_handles_overwrite_then_extension_mix() {
+        let mut s = mk("hi");
+        s.set_mode(EditingMode::Replace);
+        s.overwrite_char('H');       // overwrite 'h'
+        s.overwrite_char('I');       // overwrite 'i'
+        s.overwrite_char('!');       // extends past EOL
+        s.overwrite_char('?');       // extends further
+        assert_eq!(s.buf.to_string(), "HI!?");
+        s.replace_backspace();       // deletes '?'
+        assert_eq!(s.buf.to_string(), "HI!");
+        s.replace_backspace();       // deletes '!'
+        assert_eq!(s.buf.to_string(), "HI");
+        s.replace_backspace();       // restores 'i'
+        assert_eq!(s.buf.to_string(), "Hi");
+        s.replace_backspace();       // restores 'h'
+        assert_eq!(s.buf.to_string(), "hi");
+        assert_eq!(cur_col(&s), 0);
+    }
+
+    #[test]
+    fn replace_backspace_past_session_start_is_noop() {
+        let mut s = mk("hello");
+        s.set_mode(EditingMode::Replace);
+        s.overwrite_char('H');
+        assert!(s.replace_backspace());
+        // history is now empty — another bs is a no-op
+        assert!(!s.replace_backspace());
+        assert_eq!(s.buf.to_string(), "hello");
+        assert_eq!(cur_col(&s), 0);
+    }
+
+    #[test]
+    fn replace_backspace_outside_replace_mode_is_noop() {
+        let mut s = mk("hello");
+        // No batch active → no-op.
+        assert!(!s.replace_backspace());
+        assert_eq!(s.buf.to_string(), "hello");
+    }
+
+    #[test]
+    fn replace_backspace_then_overwrite_records_correct_delta() {
+        // Overwrite, back up, overwrite something different. The committed
+        // delta should reflect the final state — not the intermediate one.
+        let mut s = mk("abcde");
+        s.set_mode(EditingMode::Replace);
+        s.overwrite_char('X');       // replaces 'a' → "Xbcde"
+        s.overwrite_char('Y');       // replaces 'b' → "XYcde"
+        s.replace_backspace();       // restores 'b'  → "Xbcde"
+        s.overwrite_char('Z');       // replaces 'b' → "XZcde"
+        s.set_mode(EditingMode::Normal); // commits batch
+        assert_eq!(s.buf.to_string(), "XZcde");
+        // One undo should revert the entire session.
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "abcde");
+    }
+
+    #[test]
+    fn replace_session_is_one_undo_step() {
+        let mut s = mk("hello world");
+        s.set_mode(EditingMode::Replace);
+        s.overwrite_char('H');
+        s.overwrite_char('E');
+        s.overwrite_char('L');
+        s.overwrite_char('L');
+        s.overwrite_char('O');
+        s.set_mode(EditingMode::Normal);
+        assert_eq!(s.buf.to_string(), "HELLO world");
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "hello world");
+        // And no more undos for that session.
+        assert!(!s.undo());
+    }
+
+    #[test]
+    fn replace_session_canceled_by_full_backspace_records_no_delta() {
+        let mut s = mk("hello");
+        s.set_mode(EditingMode::Replace);
+        s.overwrite_char('A');
+        s.overwrite_char('B');
+        s.replace_backspace();
+        s.replace_backspace();
+        s.set_mode(EditingMode::Normal);
+        assert_eq!(s.buf.to_string(), "hello");
+        // Nothing to undo — the cancelled session didn't touch the changetree.
+        assert!(!s.undo());
+    }
+
+    #[test]
+    fn cursor_move_mid_replace_commits_session() {
+        let mut s = mk("hello world");
+        s.set_mode(EditingMode::Replace);
+        s.overwrite_char('H');
+        s.overwrite_char('E');
+        s.move_cursor(MoveKind::Relative(Position::new(4, 0)));
+        // First session should be committed now; undo restores it alone.
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "hello world");
     }
 }

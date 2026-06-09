@@ -26,6 +26,27 @@ pub struct Speculation {
     pub(crate) inserted: String,
 }
 
+/// In-flight Replace-mode session — buffers up overwrites + extensions so
+/// vim's `<bs>` restoration semantics work, then lands the whole thing as
+/// one tracked delta on commit.
+///
+/// `history[i]` describes what happened at the i-th forward step starting
+/// at `start_cidx`: `Some(orig)` means a char `orig` was overwritten there,
+/// `None` means the cursor was past the original line end and a fresh char
+/// was inserted. `<bs>` pops the last entry and either restores `orig` or
+/// deletes the just-inserted char, keeping the rope and history in sync.
+///
+/// All None entries (if any) come after all Some entries within a single
+/// session, because the cursor only advances past EOL by typing — so any
+/// non-overwrite mutation (cursor move, `<enter>`, mode change) ends the
+/// session by flushing the batch.
+#[derive(Debug, Clone)]
+pub struct ReplaceBatch {
+    pub(crate) start_cidx: usize,
+    pub(crate) cursor_before: Position<usize>,
+    pub(crate) history: Vec<Option<char>>,
+}
+
 impl Buffer {
     pub fn insert_char(&mut self, c: char) {
         let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;
@@ -453,37 +474,105 @@ impl Buffer {
 
     /// Vim Replace-mode keystroke — overwrite the char under the cursor with
     /// `c` and advance by one. At end-of-line (or on the trailing newline)
-    /// the char is inserted instead, extending the line. Recorded as a
-    /// single tracked edit.
+    /// the char is inserted instead, extending the line. The rope is
+    /// mutated immediately but the change is buffered into
+    /// [`Buffer::replace_batch`]; the changetree only sees the final delta
+    /// when the batch commits (mode change, cursor move, foreign edit).
+    /// That batching is what makes vim's `<bs>` original-char restore
+    /// possible and keeps the whole session as one undo step.
     pub fn overwrite_char(&mut self, c: char) {
-        self.close_insert_batch();
+        if self.replace_batch.is_none() {
+            self.start_replace_batch();
+        }
         let abs = self.abs_pos();
         let line = self.buf.line(abs.row);
         let line_len = line.len_chars();
         let has_trailing_nl = line_len > 0 && line.char(line_len - 1) == '\n';
         let usable = if has_trailing_nl { line_len - 1 } else { line_len };
-        if abs.col >= usable {
-            self.insert_char(c);
+        let cidx = self.buf.line_to_char(abs.row) + abs.col;
+
+        let entry = if abs.col >= usable {
+            self.buf.insert_char(cidx, c);
+            None
+        } else {
+            let orig = self.buf.char(cidx);
+            self.buf.remove(cidx..cidx + 1);
+            self.buf.insert_char(cidx, c);
+            Some(orig)
+        };
+        self.invalidate_wrap_cache();
+        if let Some(batch) = self.replace_batch.as_mut() {
+            batch.history.push(entry);
+        }
+        self.land_cursor_at(abs.row, abs.col + 1);
+    }
+
+    /// Vim Replace-mode `<bs>` — walk back over the last `overwrite_char` and
+    /// undo its effect on the rope: restore the original char if the slot
+    /// was overwritten, delete the inserted char if it was an extension.
+    /// No-op (and returns `false`) when the batch is empty — `<bs>` past the
+    /// session's starting position is a beep in vim.
+    pub fn replace_backspace(&mut self) -> bool {
+        let Some(batch) = self.replace_batch.as_mut() else {
+            return false;
+        };
+        let Some(entry) = batch.history.pop() else {
+            return false;
+        };
+        let new_len = batch.history.len();
+        let target_cidx = batch.start_cidx + new_len;
+        let abs = self.abs_pos();
+        self.buf.remove(target_cidx..target_cidx + 1);
+        if let Some(orig) = entry {
+            self.buf.insert_char(target_cidx, orig);
+        }
+        self.invalidate_wrap_cache();
+        self.land_cursor_at(abs.row, abs.col.saturating_sub(1));
+        true
+    }
+
+    /// Begin a Replace-mode session at the cursor. Called from `set_mode`
+    /// on entry; also a safety net for `overwrite_char` if a caller managed
+    /// to set Replace mode behind its back. `close_insert_batch` flushes
+    /// any prior replace batch + insert batch as part of breaking them.
+    pub(crate) fn start_replace_batch(&mut self) {
+        self.close_insert_batch();
+        let abs = self.abs_pos();
+        let cidx = self.buf.line_to_char(abs.row) + abs.col;
+        self.replace_batch = Some(ReplaceBatch {
+            start_cidx: cidx,
+            cursor_before: abs,
+            history: Vec::new(),
+        });
+    }
+
+    /// Flush the in-flight Replace-mode session to the changetree as one
+    /// delta. No-op when no session is active, when the session typed
+    /// nothing, or when overwrites + backspaces cancelled each other out
+    /// (the rope is back to where it started). Called from `set_mode`,
+    /// `move_cursor`, and the rest of the rope-mutating methods so the
+    /// batch never outlives a state change that would invalidate its
+    /// `start_cidx` / `history` invariants.
+    pub(crate) fn commit_replace_batch(&mut self) {
+        let Some(batch) = self.replace_batch.take() else {
+            return;
+        };
+        let n = batch.history.len();
+        if n == 0 {
             return;
         }
-        let line_start = self.buf.line_to_char(abs.row);
-        let cidx = line_start + abs.col;
-        let removed_ch = self.buf.char(cidx);
-        let abs_before = abs;
-
-        self.buf.remove(cidx..cidx + 1);
-        let inserted = String::from(c);
-        self.buf.insert(cidx, &inserted);
-        self.invalidate_wrap_cache();
-
-        self.land_cursor_at(abs.row, abs.col + 1);
+        let removed: String = batch.history.iter().filter_map(|x| *x).collect();
+        let end = (batch.start_cidx + n).min(self.buf.len_chars());
+        let inserted = self.buf.slice(batch.start_cidx..end).to_string();
+        if removed == inserted {
+            return;
+        }
         let abs_after = self.abs_pos();
-
         self.changetree.track_change(Delta {
-            at: cidx,
-            removed: Rc::from(String::from(removed_ch)),
+            at: batch.start_cidx,
+            removed: Rc::from(removed),
             inserted: Rc::from(inserted),
-            cursor_before: (abs_before.row, abs_before.col),
+            cursor_before: (batch.cursor_before.row, batch.cursor_before.col),
             cursor_after: (abs_after.row, abs_after.col),
         });
     }

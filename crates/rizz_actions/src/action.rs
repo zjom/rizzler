@@ -29,8 +29,14 @@ pub enum Action {
     ReplaceChar(char),
     /// Vim Replace-mode keystroke — overwrite the char under the cursor with
     /// `c` and advance. At end-of-line the char is inserted (extends the
-    /// line). Each call is a separate tracked edit.
+    /// line). Buffered into the buffer's in-flight Replace-mode session
+    /// and committed as one delta on exit.
     OverwriteChar(char),
+    /// Vim Replace-mode `<bs>` — walk back over the last `OverwriteChar`,
+    /// restoring the original character if the slot was overwritten or
+    /// deleting the char if it was an extension. No-op past the start of
+    /// the session.
+    ReplaceBackspace,
     /// Insert `char` speculatively while a chord prefix is in flight. The
     /// keymap emits this on `Descend` when the descending mode's `on_char`
     /// would have produced an `InsertChar`, so the user sees their typing

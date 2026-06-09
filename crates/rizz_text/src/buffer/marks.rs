@@ -15,6 +15,8 @@ use super::Buffer;
 impl Buffer {
     pub fn set_mode(&mut self, mode: EditingMode) {
         if self.mode != mode {
+            // Flushes any in-flight Replace-mode session too, since
+            // `close_insert_batch` commits the replace batch on the way out.
             self.close_insert_batch();
         }
         let was_visual = self.mode.is_visual();
@@ -24,7 +26,11 @@ impl Buffer {
         } else if !is_visual {
             self.selection_anchor = None;
         }
+        let was_replace = self.mode == EditingMode::Replace;
         self.mode = mode;
+        if mode == EditingMode::Replace && !was_replace {
+            self.start_replace_batch();
+        }
     }
 
     /// Anchor of the current visual selection (absolute file position).

@@ -28,6 +28,10 @@ pub(super) fn register(b: &mut Builtins) {
         apply(Action::DeleteChar)?;
         Ok(unit())
     });
+    b.be("replace-backspace", 0, |_, _| {
+        apply(Action::ReplaceBackspace)?;
+        Ok(unit())
+    });
 
     b.be("delete-char-at", 2, |args, _| {
         let col = as_usize(&args[0], "delete-char-at")?;

@@ -698,10 +698,16 @@
 ;; idempotent: once a grammar is cached, subsequent installs just register
 ;; the on-disk artefacts and return immediately.
 ;;
-;; Open a file whose extension is in the manifest but not yet installed and
-;; you'll get a one-time popup pointing at the install form below.
+;; By default, opening a file whose extension is in the manifest will trigger
+;; this install on the spot — first open of a `.rs` file fetches the rust
+;; grammar, builds it, and caches it; later opens are instant from cache. You
+;; need `git` and the `tree-sitter` CLI on $PATH. Failures notify and don't
+;; retry until you `(grammar-install …)` manually or reload this file.
 ;;
-;; TODO: uncomment the grammars you want.
+;; Opt out — require explicit `(grammar-install …)` calls instead — with:
+;;   (set-grammar-auto-install 0)
+;;
+;; You can still install grammars eagerly here regardless:
 ;; (grammar-install 'rust)
 ;; (grammar-install 'python)
 ;; (grammar-install 'typescript)

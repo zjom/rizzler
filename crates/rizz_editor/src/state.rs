@@ -151,6 +151,14 @@ pub struct State {
     /// opening many `.py` files doesn't spam the user with one popup per
     /// buffer. Cleared on `reload-config`.
     warned_missing_grammars: HashSet<Rc<str>>,
+    /// Names we've already tried to auto-install in this session and which
+    /// failed. Prevents retrying every time a new buffer of the same type is
+    /// opened. Cleared on `reload-config` or a successful manual install.
+    failed_auto_installs: HashSet<Rc<str>>,
+    /// When true, opening a file whose extension matches a manifest entry but
+    /// whose grammar is not yet cached triggers a one-shot `(grammar-install)`.
+    /// Toggle via the `(set-grammar-auto-install)` lisp builtin. Default true.
+    grammar_auto_install: bool,
     /// Notifications queued while `self.lisp` was checked out by an outer
     /// `with_lisp` call. Drained on the way out of that call so the user's
     /// `(notify …)` lisp fn still runs and produces the popup they expect,
@@ -290,6 +298,8 @@ impl State {
             ts_registry: TsRegistry::new(),
             grammar_manifest,
             warned_missing_grammars: HashSet::new(),
+            failed_auto_installs: HashSet::new(),
+            grammar_auto_install: true,
             pending_notifications: Vec::new(),
             registers: Registers::new(),
             pending_register: None,
@@ -724,9 +734,12 @@ impl State {
             &highlights,
         )
         .map_err(|e| anyhow::anyhow!(e))?;
-        // Clear any one-shot warning we've shown for this grammar so a later
-        // uninstall+reinstall cycle can warn again if needed.
-        self.warned_missing_grammars.remove(&Rc::<str>::from(name));
+        // Clear any one-shot warning or failed-install marker we've recorded
+        // for this grammar so a later uninstall+reinstall cycle can warn or
+        // retry again if needed.
+        let key = Rc::<str>::from(name);
+        self.warned_missing_grammars.remove(&key);
+        self.failed_auto_installs.remove(&key);
         Ok(())
     }
 
@@ -738,15 +751,30 @@ impl State {
             .is_some()
     }
 
+    /// True when opening a file with a known extension should auto-install
+    /// the corresponding tree-sitter grammar. Toggled via the lisp
+    /// `(set-grammar-auto-install …)` builtin.
+    pub fn grammar_auto_install(&self) -> bool {
+        self.grammar_auto_install
+    }
+
+    /// Set the auto-install flag. When toggled off, opening a file whose
+    /// grammar is not yet cached reverts to the old behavior — a one-time
+    /// notify pointing the user at `(grammar-install '<name>)`.
+    pub fn set_grammar_auto_install(&mut self, on: bool) {
+        self.grammar_auto_install = on;
+    }
+
     /// If `buf` is a file buffer whose extension matches a registered
     /// dynamic grammar and no highlighter is currently attached, install one.
     /// A buffer that already has a (native) highlighter is left alone.
     ///
     /// When the extension is unknown to the registry but the curated manifest
     /// names a grammar for it, try to register it from the on-disk cache (no
-    /// network). If the cache is empty, surface a one-time notify pointing
-    /// the user at `(grammar-install '<name>)`. This deliberately never
-    /// shells out from the buffer-open path — installs are explicit.
+    /// network). If the cache is empty and `grammar_auto_install` is set,
+    /// shell out via [`Self::install_grammar`] to fetch and build it once.
+    /// Otherwise surface a one-time notify pointing the user at
+    /// `(grammar-install '<name>)`.
     fn install_highlighter(&mut self, buf: BufferId) {
         if !self.bufs.contains(buf) {
             return;
@@ -795,9 +823,28 @@ impl State {
             return;
         }
         let key: Rc<str> = Rc::from(grammar_name.as_str());
+        if self.grammar_auto_install && !self.failed_auto_installs.contains(&key) {
+            let msg = format!("installing tree-sitter grammar `{grammar_name}`…");
+            self.notify_via_lisp(&msg);
+            match self.install_grammar(&grammar_name, InstallOpts::default()) {
+                Ok(()) => {
+                    // `install_grammar` → `register_grammar` already loops
+                    // over open buffers and attaches the new highlighter, so
+                    // there's nothing left to do here.
+                }
+                Err(e) => {
+                    self.failed_auto_installs.insert(key);
+                    let msg = format!(
+                        "auto-install of `{grammar_name}` failed: {e} — run `(grammar-install '{grammar_name})` manually or `(set-grammar-auto-install nil)` to silence this"
+                    );
+                    self.notify_via_lisp(&msg);
+                }
+            }
+            return;
+        }
         if self.warned_missing_grammars.insert(key) {
             let msg = format!(
-                "grammar `{grammar_name}` not installed — run `(grammar-install '{grammar_name})`"
+                "grammar `{grammar_name}` not installed — run `(grammar-install '{grammar_name})` or `(set-grammar-auto-install t)`"
             );
             self.notify_via_lisp(&msg);
         }

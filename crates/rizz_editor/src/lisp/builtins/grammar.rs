@@ -85,6 +85,27 @@ params:
         },
         "(grammar-installed?/1)\ntrue when the local cache holds a parser library + highlights query for <name>.\npurely local — never touches the network.",
     );
+
+    b.be_doc(
+        "set-grammar-auto-install",
+        1,
+        |args, _| {
+            let on = args[0].is_truthy();
+            with_editor_mut(|st| st.set_grammar_auto_install(on));
+            Ok(unit())
+        },
+        "(set-grammar-auto-install/1)\ntoggle automatic grammar install on file open.\nwhen on (the default), opening a file whose extension matches an entry in grammars.toml shells out\nto `git` + `tree-sitter` once to install + cache the grammar. when off, the missing grammar surfaces\na one-time notify pointing at `(grammar-install '<name>)` instead.",
+    );
+
+    b.be_doc(
+        "grammar-auto-install?",
+        0,
+        |_, _| {
+            let on = with_editor_mut(|st| st.grammar_auto_install());
+            Ok(Rc::new(on.into()))
+        },
+        "(grammar-auto-install?/0)\ntrue when grammars are auto-installed on first file open (the default).",
+    );
 }
 
 /// Accept either a single extension string (`".py"`, `"py"`) or an array of

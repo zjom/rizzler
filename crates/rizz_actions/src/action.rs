@@ -8,12 +8,18 @@
 
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use rizz::runtime::Value;
 use rizz_core::{EditingMode, FocusDir, Position, SplitDir};
 use rizz_input::KeyEvent;
 use rizz_registers::RegisterKind;
-use rizz_text::{MoveKind, TextObject};
+use rizz_text::{BufferId, MoveKind, TextObject};
+
+use crate::lsp::{
+    CodeActionOwned, CommandOwned, CompletionItemOwned, LocationOwned, LspClientId,
+    TextEditOwned, WorkspaceEditOwned,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Action {
@@ -195,4 +201,72 @@ pub enum Action {
     /// arbitrary lisp expressions to keys: the form lives in the keymap and
     /// is re-evaluated on every keystroke.
     EvalLisp(Rc<Value>),
+
+    // ---- LSP, user-initiated ------------------------------------------
+
+    /// Request `textDocument/hover` at the focused buffer's cursor and
+    /// surface the response as a floating overlay near the cursor.
+    LspHover,
+    /// Request `textDocument/definition` at the cursor. Single-location
+    /// responses jump immediately; multi-location responses open a picker.
+    LspGotoDefinition,
+    /// Request `textDocument/completion` at the cursor and open a
+    /// completion popup. Reused from insert mode.
+    LspCompletion,
+    /// Request `textDocument/formatting` for the focused buffer and apply
+    /// the resulting edits as one tracked changetree node.
+    LspFormat,
+    /// Request `textDocument/codeAction` at the cursor (or visual range)
+    /// and open a picker for the user to choose from.
+    LspCodeAction,
+    /// Restart a language-server client. `None` restarts the client
+    /// attached to the focused buffer; otherwise the named one.
+    LspRestart { name: Option<Arc<str>> },
+    /// Send `textDocument/didOpen` for the focused buffer. Synthesized by
+    /// `BufEdit`/`BufCreate` paths after a fresh LSP attachment is wired.
+    LspDidOpenFocused,
+    /// Send `textDocument/didClose` for the focused buffer. Synthesized
+    /// by buffer-delete / file-path-changed paths.
+    LspDidCloseFocused,
+
+    // ---- LSP, asynchronous (synthesized from server responses) --------
+
+    /// Open a hover popup with the given contents anchored at the buffer's
+    /// `anchor` absolute position.
+    LspShowHover {
+        contents: Arc<str>,
+        anchor: Position<usize>,
+    },
+    /// Show a picker over multiple definition locations. Single-location
+    /// responses are converted to a direct `BufEdit` + cursor move and
+    /// never reach this variant.
+    LspShowDefinitionList { locations: Arc<[LocationOwned]> },
+    /// Open a completion popup with the given items, anchored at the
+    /// position the originating request was issued from.
+    LspShowCompletion {
+        items: Arc<[CompletionItemOwned]>,
+        anchor: Position<usize>,
+    },
+    /// Open a code-action picker.
+    LspShowCodeActions { actions: Arc<[CodeActionOwned]> },
+    /// Apply a sorted list of `TextEdit`s to `buf` as a single tracked
+    /// changetree node. Used for formatting responses and code-action
+    /// `WorkspaceEdit` payloads that target a single buffer.
+    LspApplyTextEdits {
+        buf: BufferId,
+        edits: Arc<[TextEditOwned]>,
+        label: Arc<str>,
+    },
+    /// Apply a multi-document `WorkspaceEdit`. Each entry is one
+    /// `LspApplyTextEdits` node under the hood; this variant exists so
+    /// the editor can group them under one undo label.
+    LspApplyWorkspaceEdit {
+        edit: Arc<WorkspaceEditOwned>,
+        label: Arc<str>,
+    },
+    /// Forward a server command back via `workspace/executeCommand`.
+    LspExecuteCommand {
+        client: LspClientId,
+        command: CommandOwned,
+    },
 }

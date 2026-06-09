@@ -12,6 +12,7 @@ mod fs;
 mod grammar;
 mod keymap;
 mod lifecycle;
+mod lsp;
 mod minibuffer;
 mod misc;
 mod motion;
@@ -47,4 +48,5 @@ pub(super) fn register_all(b: &mut Builtins) {
     misc::register(b);
     fs::register(b);
     grammar::register(b);
+    lsp::register(b);
 }

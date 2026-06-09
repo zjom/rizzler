@@ -1,0 +1,13 @@
+[package]
+name = "rizz_lsp_install"
+version = "0.1.0"
+edition = "2024"
+description = "Declarative installer for LSP servers: parses `lsp.toml`, resolves a server binary on $PATH, falls back to a per-entry shell install recipe that caches under `$XDG_DATA_HOME/rizz/lsp/<name>/`, then hands the resolved binary + spec to `rizz_lsp::LspRegistry` to spawn."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+thiserror = { workspace = true }
+toml = "0.8"
+tracing = { workspace = true }
+which = "6"

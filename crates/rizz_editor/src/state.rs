@@ -5,9 +5,10 @@
 //! sends it through here. The single-funnel invariant is what makes undo,
 //! scripting, and tests tractable.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 use std::{io, time::Duration};
 
@@ -17,9 +18,16 @@ use rizz::runtime::Value;
 use rizz_ringbuffer::RingBuffer;
 use tracing::{debug, error, info, instrument, trace, warn};
 
-use rizz_actions::{Action, KeymapRegistry};
+use rizz_actions::{Action, KeymapRegistry, LspClientId};
 use rizz_core::{EditingMode, Position};
 use rizz_input::{CountPrefix, KeyEvent};
+use rizz_lsp::{
+    Encoding as LspEncoding, LspBufferAttachment, LspEvent, LspRegistry, RequestSeq, RuntimeCmd,
+};
+use rizz_lsp_install::{
+    InstallOpts as LspInstallOpts, Manifest as LspManifest, install as install_lsp_server,
+    try_load_cached as try_load_cached_lsp,
+};
 use rizz_registers::{RegisterEntry, Registers};
 use rizz_search::{Search, SearchDir, SearchHost, SearchOrigin};
 use rizz_text::{Buffer, BufferId, WrapMode, io as buffer_io};
@@ -178,6 +186,43 @@ pub struct State {
     /// recent search, so `n`/`N` can repeat and the next `/` can clear
     /// stale highlights.
     search: Search,
+    /// Editor-side handle to spawned LSP clients, indexed by symbolic name.
+    /// The runtime owns the tokio tasks; this just remembers `ClientId +
+    /// encoding` so request dispatch can run synchronously.
+    lsp_registry: LspRegistry,
+    /// Curated LSP server manifest, seeded from `<config_dir>/lsp.toml` on
+    /// first launch. Used by [`Self::install_lsp_client`] to look up a
+    /// server matching a buffer's file extension.
+    lsp_manifest: LspManifest,
+    /// When true, opening a file whose extension matches a manifest entry
+    /// but whose binary is missing from PATH triggers a one-shot install
+    /// recipe. Toggle via `(set-lsp-auto-install)`.
+    lsp_auto_install: bool,
+    /// Names we've already surfaced a "no lsp server" notify for.
+    warned_missing_servers: HashSet<Rc<str>>,
+    /// Names whose auto-install we already tried and failed.
+    failed_lsp_auto_installs: HashSet<Rc<str>>,
+    /// In-flight LSP requests: maps sequence id → what to do with the
+    /// response when it arrives.
+    pending_lsp_requests: HashMap<RequestSeq, PendingLspKind>,
+    /// `uri → buffer id` so server-pushed notifications (diagnostics,
+    /// applyEdit, …) can find the right buffer.
+    buf_by_uri: HashMap<String, BufferId>,
+    /// Monotonic sequence counter for LSP request routing.
+    next_lsp_seq: RequestSeq,
+}
+
+/// What to do with an LSP response when it lands. Held in
+/// `State::pending_lsp_requests` so the asynchronous drain can route each
+/// reply back to the originating buffer / cursor anchor.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // some fields exist for future routing logic
+enum PendingLspKind {
+    Hover { buf: BufferId, anchor: Position<usize> },
+    GotoDefinition { buf: BufferId },
+    Completion { buf: BufferId, anchor: Position<usize> },
+    Format { buf: BufferId, deadline: Instant },
+    CodeAction { buf: BufferId },
 }
 
 fn resolve_workdir(path: Option<&Path>, cwd: &Path) -> PathBuf {
@@ -217,6 +262,9 @@ const INIT_SCRIPT_NAME: &str = "init.rz";
 const EMBEDDED_INIT_SCRIPT: &str = include_str!("../../../init.rz");
 const GRAMMARS_MANIFEST_NAME: &str = "grammars.toml";
 const EMBEDDED_GRAMMARS_MANIFEST: &str = include_str!("../../../grammars.toml");
+const LSP_MANIFEST_NAME: &str = "lsp.toml";
+const EMBEDDED_LSP_MANIFEST: &str = include_str!("../../../lsp.toml");
+const LSP_FORMAT_TIMEOUT: Duration = Duration::from_millis(2000);
 
 /// Read `<config_dir>/<name>`, seeding it from `embedded` if missing so
 /// first-run users land on a working file. Used for both `init.rz` and
@@ -262,6 +310,68 @@ fn load_grammar_manifest(config_dir: &Path) -> GrammarManifest {
     }
 }
 
+/// Read `<config_dir>/lsp.toml`, seeding it from the embedded copy if
+/// missing. Same degrade-to-empty semantics as the grammar manifest.
+fn load_lsp_manifest(config_dir: &Path) -> LspManifest {
+    match load_or_seed(config_dir, LSP_MANIFEST_NAME, EMBEDDED_LSP_MANIFEST) {
+        Ok(text) => match LspManifest::parse(&text) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!(error = %e, "lsp.toml parse failed — falling back to empty manifest");
+                LspManifest::default()
+            }
+        },
+        Err(e) => {
+            warn!(error = %e, "lsp.toml load failed — falling back to empty manifest");
+            LspManifest::default()
+        }
+    }
+}
+
+/// Turn an absolute filesystem path into a `file://` URI. Returns `None`
+/// when the path contains non-UTF-8 bytes we can't url-encode.
+fn path_to_uri(path: &Path) -> Option<String> {
+    let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let s = abs.to_str()?;
+    if cfg!(windows) {
+        Some(format!("file:///{}", s.replace('\\', "/")))
+    } else {
+        Some(format!("file://{s}"))
+    }
+}
+
+/// Convert a `file://...` URI back into a filesystem path. Returns `None`
+/// for non-`file` schemes (the editor can't open remote URIs).
+fn uri_to_path(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    let stripped = if cfg!(windows) {
+        rest.trim_start_matches('/').replace('/', "\\")
+    } else {
+        rest.to_string()
+    };
+    Some(PathBuf::from(stripped))
+}
+
+/// Walk upwards from `start` looking for the first directory that
+/// contains any of `markers`. Falls back to `start.parent()`.
+fn find_workspace_root(start: &Path, markers: &[String]) -> Option<PathBuf> {
+    let dir = if start.is_dir() {
+        start.to_path_buf()
+    } else {
+        start.parent()?.to_path_buf()
+    };
+    let mut current = Some(dir.as_path());
+    while let Some(d) = current {
+        for m in markers {
+            if d.join(m).exists() {
+                return Some(d.to_path_buf());
+            }
+        }
+        current = d.parent();
+    }
+    Some(dir)
+}
+
 #[cfg(any(test, debug_assertions))]
 fn init_eval_err(e: RizzError) -> anyhow::Error {
     panic!("init.rz eval failed: {e}");
@@ -287,6 +397,7 @@ impl State {
         let bufs = BufferList::new();
         let first_file = bufs.first_file_buf();
         let grammar_manifest = load_grammar_manifest(&config_dir);
+        let lsp_manifest = load_lsp_manifest(&config_dir);
         let mut state = Self {
             bufs,
             windows: WindowTree::new(first_file),
@@ -314,12 +425,21 @@ impl State {
             registers: Registers::new(),
             pending_register: None,
             search: Search::default(),
+            lsp_registry: LspRegistry::new(),
+            lsp_manifest,
+            lsp_auto_install: true,
+            warned_missing_servers: HashSet::new(),
+            failed_lsp_auto_installs: HashSet::new(),
+            pending_lsp_requests: HashMap::new(),
+            buf_by_uri: HashMap::new(),
+            next_lsp_seq: 1,
         };
         if let Some(path) = config.edit_path
             && !path.is_dir()
         {
             state.bufs[first_file] = buffer_io::with_path(Rc::<Path>::from(path));
             state.install_highlighter(first_file);
+            state.install_lsp_client(first_file);
         }
         state.refresh_viewport();
 
@@ -866,6 +986,645 @@ impl State {
         }
     }
 
+    // ---- LSP integration ----------------------------------------------
+
+    /// True when a server is cached locally (PATH or recipe-built) for
+    /// `name`. Pure local check; never touches the network.
+    pub fn lsp_installed(&self, name: &str) -> bool {
+        try_load_cached_lsp(name, &self.lsp_manifest).is_some()
+    }
+
+    pub fn lsp_auto_install(&self) -> bool {
+        self.lsp_auto_install
+    }
+
+    pub fn set_lsp_auto_install(&mut self, on: bool) {
+        self.lsp_auto_install = on;
+    }
+
+    /// Register a server programmatically (low-level — bypasses lsp.toml).
+    /// Used by the `(lsp-register)` lisp builtin. After registration, any
+    /// already-open buffer whose extension matches and has no LSP attached
+    /// gets attached in place — same pattern as `register_grammar`.
+    pub fn register_lsp_server(
+        &mut self,
+        name: &str,
+        command: String,
+        args: Vec<String>,
+        extensions: Vec<String>,
+        root_markers: Vec<String>,
+    ) {
+        let spec = rizz_lsp_install::ServerSpec {
+            command,
+            args,
+            extensions,
+            root_markers,
+            ..Default::default()
+        };
+        self.lsp_manifest.insert(name.to_string(), spec);
+        let ids: Vec<BufferId> = self.bufs.iter().map(|(id, _)| id).collect();
+        for id in ids {
+            self.install_lsp_client(id);
+        }
+    }
+
+    /// Shell out to the install recipe in `lsp.toml` (if any). Returns the
+    /// resolved binary path on success. Used by `(lsp-install)`. After
+    /// install, retroactively attaches any open buffer whose extension
+    /// matches and which has no LSP attached.
+    pub fn install_lsp_server(
+        &mut self,
+        name: &str,
+        opts: LspInstallOpts,
+    ) -> Result<PathBuf, String> {
+        let res = install_lsp_server(name, &opts, &self.lsp_manifest)
+            .map(|i| i.binary)
+            .map_err(|e| e.to_string());
+        if res.is_ok() {
+            let ids: Vec<BufferId> = self.bufs.iter().map(|(id, _)| id).collect();
+            for id in ids {
+                self.install_lsp_client(id);
+            }
+        }
+        res
+    }
+
+    /// If `buf` has a known file extension that matches an entry in the
+    /// LSP manifest, resolve the server binary, spawn it (or reuse an
+    /// existing client), and attach an `LspBufferAttachment` to the buffer.
+    /// A buffer that already has an attachment is left alone. Mirrors
+    /// [`Self::install_highlighter`] step-for-step.
+    pub(crate) fn install_lsp_client(&mut self, buf: BufferId) {
+        if !self.bufs.contains(buf) {
+            return;
+        }
+        if self.bufs[buf].lsp_handle().is_some() {
+            return;
+        }
+        let Some(path) = self.bufs[buf].fs_path() else {
+            return;
+        };
+        let Some(ext) = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+        else {
+            return;
+        };
+        let Some(server_name) = self
+            .lsp_manifest
+            .server_for_ext(&ext)
+            .map(str::to_string)
+        else {
+            return;
+        };
+
+        // Resolve the binary: PATH/cache first, then auto-install if enabled.
+        let mut installed = try_load_cached_lsp(&server_name, &self.lsp_manifest);
+        let key: Rc<str> = Rc::from(server_name.as_str());
+        if installed.is_none() {
+            if self.lsp_auto_install && !self.failed_lsp_auto_installs.contains(&key) {
+                self.notify_via_lisp(&format!("installing lsp server `{server_name}`…"));
+                match install_lsp_server(
+                    &server_name,
+                    &LspInstallOpts::default(),
+                    &self.lsp_manifest,
+                ) {
+                    Ok(i) => installed = Some(i),
+                    Err(e) => {
+                        self.failed_lsp_auto_installs.insert(key.clone());
+                        self.notify_via_lisp(&format!(
+                            "auto-install of `{server_name}` failed: {e} — run `(lsp-install '{server_name})` manually or `(set-lsp-auto-install nil)` to silence this"
+                        ));
+                        return;
+                    }
+                }
+            } else if self.warned_missing_servers.insert(key) {
+                self.notify_via_lisp(&format!(
+                    "lsp server `{server_name}` not installed — run `(lsp-install '{server_name})` or `(set-lsp-auto-install t)`"
+                ));
+                return;
+            } else {
+                return;
+            }
+        }
+        let installed = match installed {
+            Some(i) => i,
+            None => return,
+        };
+
+        // Compute workspace root and language id.
+        let root_dir =
+            find_workspace_root(&path, &installed.spec.root_markers).unwrap_or(self.workdir.to_path_buf());
+        let root_uri = path_to_uri(&root_dir);
+
+        let running = match self.lsp_registry.ensure_running(
+            &server_name,
+            installed.binary.clone(),
+            installed.spec.clone(),
+            root_uri,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(server = server_name, error = %e, "ensure_running failed");
+                self.notify_via_lisp(&format!("lsp `{server_name}` failed to start: {e}"));
+                return;
+            }
+        };
+
+        let Some(uri) = path_to_uri(&path) else {
+            warn!(?path, "buffer path is not utf-8; skipping lsp attach");
+            return;
+        };
+
+        let language_id = installed
+            .spec
+            .extensions
+            .first()
+            .cloned()
+            .unwrap_or_else(|| ext.clone());
+        let attachment = LspBufferAttachment::new(
+            running.id,
+            uri.clone(),
+            language_id,
+            running.encoding,
+        );
+        self.buf_by_uri.insert(uri, buf);
+        self.bufs[buf].set_lsp_handle(Some(Box::new(attachment)));
+    }
+
+    fn next_lsp_seq(&mut self) -> RequestSeq {
+        let s = self.next_lsp_seq;
+        self.next_lsp_seq = self.next_lsp_seq.wrapping_add(1);
+        s
+    }
+
+    /// Compute the LSP `Position` for the focused buffer's cursor, and
+    /// return `(client, uri, encoding, position, abs_pos)`. Returns
+    /// `None` if no LSP attachment is present.
+    fn focused_lsp_context(
+        &self,
+        buf: BufferId,
+    ) -> Option<(LspClientId, String, LspEncoding, lsp_types::Position, Position<usize>)> {
+        let b = self.bufs.get(buf)?;
+        let handle = b.lsp_handle()?;
+        // Trait object: downcast won't work without manual support. Use
+        // the buffer's URI cache instead — every attached buffer has a URI
+        // registered in `buf_by_uri`. We map back to it by searching.
+        let uri = self
+            .buf_by_uri
+            .iter()
+            .find_map(|(uri, bid)| if *bid == buf { Some(uri.clone()) } else { None })?;
+        let _ = handle; // suppress unused
+        let _attach_marker = b.diagnostics(); // ensure handle present
+        let abs = b.abs_pos();
+        // We don't actually have direct access to client+encoding without
+        // a typed attachment. Look them up via the registry by name —
+        // but we don't store name on the buffer. Instead, since each
+        // ensure_running was indexed by name and the buffer's URI was
+        // registered alongside, we look up *any* running client whose
+        // name's manifest entry claims this extension.
+        let ext = b
+            .fs_path()
+            .and_then(|p| p.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()))?;
+        let name = self.lsp_manifest.server_for_ext(&ext)?;
+        let running = self.lsp_registry.get(name)?;
+        let lsp_pos = rizz_lsp::byte_to_lsp(b.rope(), abs.row, abs.col, running.encoding);
+        Some((running.id, uri, running.encoding, lsp_pos, abs))
+    }
+
+    pub(crate) fn lsp_send_hover_focused(&mut self) {
+        let buf = self.focused_buf_id();
+        let Some((client, uri, _enc, position, anchor)) = self.focused_lsp_context(buf) else {
+            self.notify_via_lisp("lsp hover: no language server attached to this buffer");
+            return;
+        };
+        let seq = self.next_lsp_seq();
+        self.pending_lsp_requests
+            .insert(seq, PendingLspKind::Hover { buf, anchor });
+        rizz_lsp::runtime().send_cmd(RuntimeCmd::Hover {
+            client,
+            seq,
+            uri,
+            position,
+        });
+    }
+
+    pub(crate) fn lsp_send_goto_definition_focused(&mut self) {
+        let buf = self.focused_buf_id();
+        let Some((client, uri, _enc, position, _anchor)) = self.focused_lsp_context(buf) else {
+            self.notify_via_lisp("lsp goto-definition: no language server attached to this buffer");
+            return;
+        };
+        let seq = self.next_lsp_seq();
+        self.pending_lsp_requests
+            .insert(seq, PendingLspKind::GotoDefinition { buf });
+        rizz_lsp::runtime().send_cmd(RuntimeCmd::GotoDefinition {
+            client,
+            seq,
+            uri,
+            position,
+        });
+    }
+
+    pub(crate) fn lsp_send_completion_focused(&mut self) {
+        let buf = self.focused_buf_id();
+        let Some((client, uri, _enc, position, anchor)) = self.focused_lsp_context(buf) else {
+            self.notify_via_lisp("lsp completion: no language server attached to this buffer");
+            return;
+        };
+        let seq = self.next_lsp_seq();
+        self.pending_lsp_requests
+            .insert(seq, PendingLspKind::Completion { buf, anchor });
+        rizz_lsp::runtime().send_cmd(RuntimeCmd::Completion {
+            client,
+            seq,
+            uri,
+            position,
+        });
+    }
+
+    pub(crate) fn lsp_send_format_focused(&mut self) {
+        let buf = self.focused_buf_id();
+        let Some((client, uri, _enc, _position, _anchor)) = self.focused_lsp_context(buf) else {
+            self.notify_via_lisp("lsp format: no language server attached to this buffer");
+            return;
+        };
+        let seq = self.next_lsp_seq();
+        let deadline = Instant::now() + LSP_FORMAT_TIMEOUT;
+        self.pending_lsp_requests
+            .insert(seq, PendingLspKind::Format { buf, deadline });
+        rizz_lsp::runtime().send_cmd(RuntimeCmd::Format {
+            client,
+            seq,
+            uri,
+            tab_size: 4,
+            insert_spaces: true,
+        });
+    }
+
+    pub(crate) fn lsp_send_code_action_focused(&mut self) {
+        let buf = self.focused_buf_id();
+        let Some((client, uri, _enc, position, _anchor)) = self.focused_lsp_context(buf) else {
+            self.notify_via_lisp("lsp code-action: no language server attached to this buffer");
+            return;
+        };
+        let seq = self.next_lsp_seq();
+        // Single-position range is enough for MVP; visual-selection-driven
+        // ranges can be wired later.
+        let range = lsp_types::Range {
+            start: position,
+            end: position,
+        };
+        self.pending_lsp_requests
+            .insert(seq, PendingLspKind::CodeAction { buf });
+        rizz_lsp::runtime().send_cmd(RuntimeCmd::CodeAction {
+            client,
+            seq,
+            uri,
+            range,
+        });
+    }
+
+    pub(crate) fn lsp_send_did_open_focused(&mut self) {
+        // `set_lsp_handle` already fires `did_open` on installation. Kept
+        // as a hook so future paths that need to re-open have a slot.
+    }
+
+    pub(crate) fn lsp_send_did_close_focused(&mut self) {
+        let buf = self.focused_buf_id();
+        if let Some(b) = self.bufs.get_mut(buf) {
+            b.set_lsp_handle(None);
+        }
+        self.buf_by_uri.retain(|_, bid| *bid != buf);
+    }
+
+    pub(crate) fn lsp_restart(&mut self, name: Option<&str>) {
+        let buf = self.focused_buf_id();
+        let resolved_name = name.map(str::to_string).or_else(|| {
+            self.bufs
+                .get(buf)
+                .and_then(|b| b.fs_path())
+                .and_then(|p| {
+                    p.extension()
+                        .and_then(|e| e.to_str())
+                        .map(|s| s.to_ascii_lowercase())
+                })
+                .and_then(|ext| self.lsp_manifest.server_for_ext(&ext).map(str::to_string))
+        });
+        let Some(server_name) = resolved_name else {
+            self.notify_via_lisp("lsp restart: no server name and no LSP attached to focused buffer");
+            return;
+        };
+        // Drop attachments on every buffer that uses this server, then
+        // shut down the client; the next buffer open re-spawns.
+        let uris: Vec<String> = self.buf_by_uri.keys().cloned().collect();
+        for uri in &uris {
+            if let Some(&bid) = self.buf_by_uri.get(uri)
+                && let Some(b) = self.bufs.get_mut(bid)
+            {
+                b.set_lsp_handle(None);
+            }
+        }
+        self.buf_by_uri.clear();
+        self.lsp_registry.shutdown(&server_name);
+        self.notify_via_lisp(&format!("lsp `{server_name}` restarted"));
+        // Re-attach to the focused buffer eagerly.
+        self.install_lsp_client(buf);
+    }
+
+    pub(crate) fn show_lsp_hover(&mut self, contents: Arc<str>, _anchor: Position<usize>) {
+        // Minimal MVP: surface as a notify. A proper floating overlay is
+        // hooked up via the UI integration task.
+        let s: &str = &contents;
+        if !s.is_empty() {
+            self.notify_via_lisp(&format!("hover: {s}"));
+        }
+    }
+
+    pub(crate) fn show_lsp_definition_list(
+        &mut self,
+        locations: Arc<[rizz_actions::LocationOwned]>,
+    ) {
+        if locations.is_empty() {
+            self.notify_via_lisp("no definition found");
+            return;
+        }
+        let target = &locations[0];
+        let Some(path) = uri_to_path(&target.uri) else {
+            self.notify_via_lisp(&format!("definition target `{}` is not a local file", target.uri));
+            return;
+        };
+        // Open the target file (reuse if already open) and jump.
+        let dest_buf = self.open_or_focus_file(&path);
+        if let Some(b) = self.bufs.get_mut(dest_buf) {
+            let row = target.range.start.row;
+            let col = target.range.start.col;
+            b.land_cursor_to(row, col);
+        }
+        if locations.len() > 1 {
+            self.notify_via_lisp(&format!(
+                "jumped to first of {} definitions",
+                locations.len()
+            ));
+        }
+    }
+
+    pub(crate) fn show_lsp_completion(
+        &mut self,
+        items: Arc<[rizz_actions::CompletionItemOwned]>,
+        _anchor: Position<usize>,
+    ) {
+        if items.is_empty() {
+            self.notify_via_lisp("no completions");
+            return;
+        }
+        // Minimal MVP: surface the first item's label.
+        self.notify_via_lisp(&format!(
+            "completion: {} ({} more)",
+            items[0].label,
+            items.len().saturating_sub(1)
+        ));
+    }
+
+    pub(crate) fn show_lsp_code_actions(
+        &mut self,
+        actions: Arc<[rizz_actions::CodeActionOwned]>,
+    ) {
+        if actions.is_empty() {
+            self.notify_via_lisp("no code actions");
+            return;
+        }
+        self.notify_via_lisp(&format!(
+            "code action: {} ({} more)",
+            actions[0].title,
+            actions.len().saturating_sub(1)
+        ));
+    }
+
+    pub(crate) fn apply_lsp_text_edits(
+        &mut self,
+        buf: BufferId,
+        edits: Arc<[rizz_actions::TextEditOwned]>,
+        _label: Arc<str>,
+    ) {
+        let Some(_b) = self.bufs.get_mut(buf) else { return };
+        if edits.is_empty() {
+            return;
+        }
+        // Convert each TextEdit to a (char-range start, char-range end,
+        // new_text) tuple, sort in reverse order so applying earlier
+        // edits doesn't shift later positions, and dispatch as
+        // `delete_range` + `insert_many` pairs.
+        let mut sorted: Vec<&rizz_actions::TextEditOwned> = edits.iter().collect();
+        sorted.sort_by(|a, b| {
+            (b.range.start.row, b.range.start.col).cmp(&(a.range.start.row, a.range.start.col))
+        });
+        for edit in sorted {
+            let b = match self.bufs.get_mut(buf) {
+                Some(b) => b,
+                None => return,
+            };
+            let rope = b.rope().clone();
+            let start_line = rope.line_to_char(edit.range.start.row.min(rope.len_lines() - 1));
+            let start_idx = start_line + edit.range.start.col;
+            let end_line = rope.line_to_char(edit.range.end.row.min(rope.len_lines() - 1));
+            let end_idx = end_line + edit.range.end.col;
+            let start = start_idx.min(rope.len_chars());
+            let end = end_idx.min(rope.len_chars()).max(start);
+            // Position the cursor at the edit start, delete the old range,
+            // and insert the replacement.
+            b.land_cursor_to(edit.range.start.row, edit.range.start.col);
+            if end > start {
+                b.delete_range(start, end);
+            }
+            let s: &str = &edit.new_text;
+            if !s.is_empty() {
+                b.insert_many(s);
+            }
+        }
+    }
+
+    pub(crate) fn apply_lsp_workspace_edit(
+        &mut self,
+        edit: Arc<rizz_actions::WorkspaceEditOwned>,
+        label: Arc<str>,
+    ) {
+        for doc in edit.changes.iter() {
+            let Some(path) = uri_to_path(&doc.uri) else {
+                continue;
+            };
+            let dest_buf = self.open_or_focus_file(&path);
+            self.apply_lsp_text_edits(dest_buf, doc.edits.clone(), label.clone());
+        }
+    }
+
+    pub(crate) fn lsp_send_execute_command(
+        &mut self,
+        client: LspClientId,
+        command: rizz_actions::CommandOwned,
+    ) {
+        let seq = self.next_lsp_seq();
+        let arguments: Vec<serde_json::Value> = command
+            .arguments_json
+            .iter()
+            .filter_map(|s| serde_json::from_str(s).ok())
+            .collect();
+        rizz_lsp::runtime().send_cmd(RuntimeCmd::ExecuteCommand {
+            client,
+            seq,
+            command: command.command.to_string(),
+            arguments,
+        });
+    }
+
+    /// Drain pending LSP events and convert each to follow-up `Action`s.
+    /// Called from the editor's main loop on every tick.
+    pub fn drain_lsp_events(&mut self) -> Vec<Rc<Action>> {
+        let mut out: Vec<Rc<Action>> = Vec::new();
+        let rx = rizz_lsp::runtime().events_rx().clone();
+        while let Ok(ev) = rx.try_recv() {
+            self.handle_lsp_event(ev, &mut out);
+        }
+        out
+    }
+
+    fn handle_lsp_event(&mut self, ev: LspEvent, out: &mut Vec<Rc<Action>>) {
+        match ev {
+            LspEvent::Diagnostics { uri, items, .. } => {
+                if let Some(&bid) = self.buf_by_uri.get(&uri)
+                    && let Some(b) = self.bufs.get_mut(bid)
+                    && let Some(h) = b.lsp_handle_mut()
+                {
+                    h.replace_diagnostics(items);
+                }
+            }
+            LspEvent::HoverResponse { seq, contents, .. } => {
+                let Some(PendingLspKind::Hover { anchor, .. }) =
+                    self.pending_lsp_requests.remove(&seq)
+                else {
+                    return;
+                };
+                let contents = contents.unwrap_or_default();
+                if !contents.is_empty() {
+                    out.push(Rc::new(Action::LspShowHover {
+                        contents: Arc::from(contents.as_str()),
+                        anchor,
+                    }));
+                }
+            }
+            LspEvent::DefinitionResponse { seq, locations, .. } => {
+                if self.pending_lsp_requests.remove(&seq).is_none() {
+                    return;
+                }
+                if locations.is_empty() {
+                    out.push(Rc::new(Action::LspShowDefinitionList {
+                        locations: Arc::from([]),
+                    }));
+                } else {
+                    out.push(Rc::new(Action::LspShowDefinitionList {
+                        locations: Arc::from(locations),
+                    }));
+                }
+            }
+            LspEvent::CompletionResponse { seq, items, .. } => {
+                let Some(PendingLspKind::Completion { anchor, .. }) =
+                    self.pending_lsp_requests.remove(&seq)
+                else {
+                    return;
+                };
+                out.push(Rc::new(Action::LspShowCompletion {
+                    items: Arc::from(items),
+                    anchor,
+                }));
+            }
+            LspEvent::FormattingResponse { seq, edits, .. } => {
+                let Some(PendingLspKind::Format { buf, deadline }) =
+                    self.pending_lsp_requests.remove(&seq)
+                else {
+                    return;
+                };
+                if Instant::now() > deadline {
+                    self.notify_via_lisp("lsp format: timed out");
+                    return;
+                }
+                out.push(Rc::new(Action::LspApplyTextEdits {
+                    buf,
+                    edits: Arc::from(edits),
+                    label: Arc::from("lsp format"),
+                }));
+            }
+            LspEvent::CodeActionResponse { seq, actions, .. } => {
+                if self.pending_lsp_requests.remove(&seq).is_none() {
+                    return;
+                }
+                out.push(Rc::new(Action::LspShowCodeActions {
+                    actions: Arc::from(actions),
+                }));
+            }
+            LspEvent::WorkspaceApplyEdit { edit, .. } => {
+                out.push(Rc::new(Action::LspApplyWorkspaceEdit {
+                    edit: Arc::new(edit),
+                    label: Arc::from("workspace edit"),
+                }));
+            }
+            LspEvent::WorkspaceExecuteCommand { client, command } => {
+                out.push(Rc::new(Action::LspExecuteCommand { client, command }));
+            }
+            LspEvent::ServerExited {
+                client,
+                status,
+                stderr_tail,
+            } => {
+                self.lsp_registry.forget(client);
+                self.notify_via_lisp(&format!(
+                    "lsp server exited (status {status:?}): {stderr_tail}",
+                ));
+            }
+            LspEvent::Notify { kind, message, .. } => {
+                debug!(?kind, %message, "lsp notify");
+                if !message.is_empty() {
+                    self.notify_via_lisp(&message);
+                }
+            }
+            LspEvent::RequestError { seq, message, .. } => {
+                self.pending_lsp_requests.remove(&seq);
+                warn!(seq, %message, "lsp request error");
+            }
+        }
+    }
+
+    /// Open `path` in an existing buffer (if any) or create a new one,
+    /// attach a highlighter + LSP if applicable, focus the result, and
+    /// return its id.
+    /// Drain any pending LSP events and apply the synthesized actions.
+    /// Call this from the main loop after every event tick (and on the
+    /// `event::poll` timeout branch) so server-pushed diagnostics surface
+    /// even when the user is idle.
+    pub fn tick(&mut self) -> io::Result<bool> {
+        let actions = self.drain_lsp_events();
+        if actions.is_empty() {
+            return Ok(false);
+        }
+        self.apply(&actions)?;
+        Ok(true)
+    }
+
+    fn open_or_focus_file(&mut self, path: &Path) -> BufferId {
+        let path: Rc<Path> = Rc::from(path);
+        let ids: Vec<BufferId> = self.bufs.file_ids().iter().copied().collect();
+        for id in ids {
+            if self.bufs.get(id).and_then(|b| b.fs_path()).as_deref() == Some(&*path) {
+                return id;
+            }
+        }
+        let new_buf = buffer_io::with_path(path.clone());
+        let new_id = self.bufs.push_file(new_buf);
+        self.install_highlighter(new_id);
+        self.install_lsp_client(new_id);
+        new_id
+    }
+
     pub fn pending_count_or_one(&self) -> u32 {
         self.count_prefix.or_one()
     }
@@ -1391,6 +2150,35 @@ impl State {
                         self.notify_via_lisp(&e.to_string());
                     }
                 }
+                Action::LspHover => self.lsp_send_hover_focused(),
+                Action::LspGotoDefinition => self.lsp_send_goto_definition_focused(),
+                Action::LspCompletion => self.lsp_send_completion_focused(),
+                Action::LspFormat => self.lsp_send_format_focused(),
+                Action::LspCodeAction => self.lsp_send_code_action_focused(),
+                Action::LspRestart { name } => self.lsp_restart(name.as_deref()),
+                Action::LspDidOpenFocused => self.lsp_send_did_open_focused(),
+                Action::LspDidCloseFocused => self.lsp_send_did_close_focused(),
+                Action::LspShowHover { contents, anchor } => {
+                    self.show_lsp_hover(contents.clone(), *anchor);
+                }
+                Action::LspShowDefinitionList { locations } => {
+                    self.show_lsp_definition_list(locations.clone());
+                }
+                Action::LspShowCompletion { items, anchor } => {
+                    self.show_lsp_completion(items.clone(), *anchor);
+                }
+                Action::LspShowCodeActions { actions } => {
+                    self.show_lsp_code_actions(actions.clone());
+                }
+                Action::LspApplyTextEdits { buf, edits, label } => {
+                    self.apply_lsp_text_edits(*buf, edits.clone(), label.clone());
+                }
+                Action::LspApplyWorkspaceEdit { edit, label } => {
+                    self.apply_lsp_workspace_edit(edit.clone(), label.clone());
+                }
+                Action::LspExecuteCommand { client, command } => {
+                    self.lsp_send_execute_command(*client, command.clone());
+                }
             }
             // Live-`/`-search: after any minibuffer-text-mutating action,
             // re-anchor the search at origin and re-run with the freshly
@@ -1448,6 +2236,7 @@ impl State {
         };
         let id = self.bufs.push_file(buf);
         self.install_highlighter(id);
+        self.install_lsp_client(id);
         if set_active {
             self.windows.set_focused_buf(id);
         }
@@ -1465,6 +2254,7 @@ impl State {
             None => {
                 let pushed = self.bufs.push_file(buffer_io::with_path(path));
                 self.install_highlighter(pushed);
+                self.install_lsp_client(pushed);
                 info!(buf = ?pushed, "edit_buf: created new buffer");
                 pushed
             }

@@ -13,6 +13,11 @@
 
 pub mod action;
 pub mod keymap;
+pub mod lsp;
 
 pub use action::Action;
 pub use keymap::{KeymapRegistry, default_keymaps};
+pub use lsp::{
+    CodeActionOwned, CommandOwned, CompletionItemKindOwned, CompletionItemOwned,
+    DocumentEditOwned, LocationOwned, LspClientId, RangeOwned, TextEditOwned, WorkspaceEditOwned,
+};

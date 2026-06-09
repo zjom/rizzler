@@ -715,6 +715,24 @@
 (face-define "syntax.operator"     {"fg": pal-operator})
 (face-define "syntax.punctuation"  {"fg": pal-fg})
 
+;; ── Diagnostic faces (LSP) ──
+;;
+;; Looked up by severity. Defaults underline the offending text and use the
+;; same error/warning palette colors used elsewhere in the theme.
+(face-define "diagnostic.error"   {"fg": pal-error    "underline": 1})
+(face-define "diagnostic.warning" {"fg": pal-warning  "underline": 1})
+(face-define "diagnostic.info"    {"fg": pal-hint     "underline": 1})
+(face-define "diagnostic.hint"    {"fg": pal-comment  "underline": 1})
+
+;; ── LSP key bindings ──
+;;
+(keymap-set 'normal "K"          '(lsp-hover))
+(keymap-set 'normal "grd"        '(lsp-goto-definition))
+(keymap-set 'normal "<space>cf"  '(lsp-format))
+(keymap-set 'normal "<space>ca"  '(lsp-code-action))
+(keymap-set 'normal "<space>cr"  '(lsp-restart))
+(keymap-set 'insert "<c-x><c-o>" '(lsp-completion))
+
 ;; ── Installing grammars ──
 ;;
 ;; `(grammar-install 'name)` resolves <name> against the curated table in

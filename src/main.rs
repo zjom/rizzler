@@ -51,6 +51,23 @@ fn main() -> anyhow::Result<()> {
                 _ => {}
             }
         }
+
+        // Drain any pending LSP events (diagnostics, response payloads,
+        // server crashes) and apply the synthesized actions before the
+        // next render. Re-render only when something actually changed.
+        match state.tick() {
+            Ok(true) => {
+                if let Err(e) = state.render() {
+                    error!(error = %e, "render after lsp tick failed");
+                    return Err(e.into());
+                }
+            }
+            Ok(false) => {}
+            Err(e) => {
+                error!(error = %e, "state.tick() failed");
+                return Err(e.into());
+            }
+        }
     }
 
     info!("rizz shutting down");

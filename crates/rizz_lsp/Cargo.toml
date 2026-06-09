@@ -1,0 +1,22 @@
+[package]
+name = "rizz_lsp"
+version = "0.1.0"
+edition = "2024"
+description = "LSP client runtime for the rizz editor: tokio-driven JSON-RPC over stdio, per-language `LspClient` tasks, debounced `textDocument/didChange`, position-encoding negotiation, and a crossbeam channel into the editor's synchronous event loop. The `rizz_lsp_install` crate resolves the binary; this crate runs it."
+
+[dependencies]
+rizz_actions = { path = "../rizz_actions" }
+rizz_core = { path = "../rizz_core" }
+rizz_lsp_install = { path = "../rizz_lsp_install" }
+rizz_text = { path = "../rizz_text" }
+bytes = "1"
+crossbeam-channel = { workspace = true }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+lsp-types = { workspace = true }
+ropey = "1.6.1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }

@@ -5,12 +5,14 @@
 //! since selection slicing operates over ropes). Anything higher-level —
 //! buffers, themes, renderers — lives in `rizz_text` or above.
 
+pub mod diagnostic;
 pub mod display;
 pub mod mode;
 pub mod position;
 pub mod selection;
 pub mod window_dir;
 
+pub use diagnostic::{LspDiagnostic, Severity};
 pub use display::Display;
 pub use mode::EditingMode;
 pub use position::Position;

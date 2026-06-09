@@ -17,6 +17,7 @@
 
 mod cursor;
 mod edits;
+mod lsp;
 mod marks;
 mod text_object;
 mod yank;
@@ -27,7 +28,7 @@ use rizz_changetree::ChangeTree;
 use rizz_ts::{Highlighter, Point};
 use ropey::{Rope, RopeSlice, iter::Lines};
 
-use rizz_core::{EditingMode, Position};
+use rizz_core::{EditingMode, LspDiagnostic, Position};
 
 use crate::{
     props::PropStore,
@@ -36,6 +37,7 @@ use crate::{
 
 pub use cursor::MoveKind;
 pub use edits::{ReplaceBatch, Speculation};
+pub use lsp::LspBufferHandle;
 pub use text_object::TextObject;
 
 slotmap::new_key_type! {
@@ -48,7 +50,7 @@ slotmap::new_key_type! {
     pub struct BufferId;
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct Buffer {
     pub(crate) buf: Rope,
     pub(crate) cursor_pos: Position<u16>,
@@ -105,6 +107,14 @@ pub struct Buffer {
     /// forward incremental rope splices via [`Buffer::record_highlight_edit`];
     /// the precompute pass refreshes the source snapshot and reparses on demand.
     pub(crate) highlight: Option<Highlighter>,
+    /// Optional LSP attachment. Installed by `State` after consulting the
+    /// LSP registry for a server matching the file extension. Edits forward
+    /// the same rope splices used by the highlighter via
+    /// [`Buffer::record_text_edit`]; the attachment batches them and the
+    /// runtime ships them as `textDocument/didChange` on a debounce timer.
+    /// Diagnostics are pushed back into this handle when `publishDiagnostics`
+    /// arrives. Type-erased so `rizz_text` doesn't drag in tokio/serde.
+    pub(crate) lsp: Option<Box<dyn LspBufferHandle>>,
 }
 
 impl Buffer {
@@ -202,6 +212,22 @@ impl Buffer {
         }
     }
 
+    /// Forward a single rope splice to the LSP attachment so it can build a
+    /// `TextDocumentContentChangeEvent` and queue it for the next debounced
+    /// `didChange` notification.
+    pub(crate) fn record_lsp_edit(&mut self, at_char: usize, removed: &str, inserted: &str) {
+        let Some(h) = self.lsp.as_mut() else { return };
+        h.record_edit(at_char, removed, inserted, &self.buf);
+    }
+
+    /// Combined splice-forwarder used by every edit site. Drives both the
+    /// tree-sitter highlighter and the LSP attachment from the same call so
+    /// they stay in lockstep with the rope.
+    pub(crate) fn record_text_edit(&mut self, at_char: usize, removed: &str, inserted: &str) {
+        self.record_highlight_edit(at_char, removed, inserted);
+        self.record_lsp_edit(at_char, removed, inserted);
+    }
+
     /// Install (or remove) a fully-constructed highlighter. The editor's
     /// `State::install_dynamic_highlighter` calls this after consulting the
     /// `TsRegistry` populated by the `(grammar-register ...)` lisp builtin.
@@ -215,6 +241,33 @@ impl Buffer {
 
     pub fn highlight(&self) -> Option<&Highlighter> {
         self.highlight.as_ref()
+    }
+
+    /// Install (or remove) an LSP attachment. The editor's
+    /// `State::install_lsp_client` calls this after resolving the buffer's
+    /// extension against the `lsp.toml` manifest. Replacing an existing
+    /// handle calls `did_close` on the old one.
+    pub fn set_lsp_handle(&mut self, h: Option<Box<dyn LspBufferHandle>>) {
+        if let Some(old) = self.lsp.as_mut() {
+            old.did_close();
+        }
+        self.lsp = h;
+        if let Some(new) = self.lsp.as_mut() {
+            new.did_open(&self.buf);
+        }
+    }
+
+    pub fn lsp_handle(&self) -> Option<&dyn LspBufferHandle> {
+        self.lsp.as_deref()
+    }
+
+    pub fn lsp_handle_mut(&mut self) -> Option<&mut (dyn LspBufferHandle + 'static)> {
+        self.lsp.as_deref_mut()
+    }
+
+    /// Latest diagnostics for this buffer. Empty when no LSP is attached.
+    pub fn diagnostics(&self) -> &[LspDiagnostic] {
+        self.lsp.as_deref().map_or(&[], |h| h.diagnostics())
     }
 
     /// If a highlighter is attached and dirty, snapshot the rope into it and
@@ -346,6 +399,36 @@ fn advance_point(start: Point, s: &str) -> Point {
         }
     }
     Point { row, column }
+}
+
+impl Clone for Buffer {
+    /// Clone the buffer for read-only operations (probe queries, snapshot
+    /// reads). The LSP attachment is **not** cloned — sharing it would let
+    /// a transient probe trigger spurious `didChange` notifications, and
+    /// stamping a fresh `Box<dyn LspBufferHandle>` from the trait alone is
+    /// not possible. The probe gets a clean `lsp: None`; if real LSP
+    /// engagement is needed later, install a fresh handle.
+    fn clone(&self) -> Self {
+        Self {
+            buf: self.buf.clone(),
+            cursor_pos: self.cursor_pos,
+            file_pos: self.file_pos,
+            fs_path: self.fs_path.clone(),
+            viewport: self.viewport,
+            mode: self.mode,
+            selection_anchor: self.selection_anchor,
+            goal_col: self.goal_col,
+            props: self.props.clone(),
+            wrap: self.wrap.clone(),
+            wrap_cache: self.wrap_cache.clone(),
+            changetree: self.changetree.clone(),
+            insert_batch_end: self.insert_batch_end,
+            speculation: self.speculation.clone(),
+            replace_batch: self.replace_batch.clone(),
+            highlight: self.highlight.clone(),
+            lsp: None,
+        }
+    }
 }
 
 impl FromStr for Buffer {

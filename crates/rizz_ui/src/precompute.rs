@@ -255,8 +255,64 @@ fn push_builtin_decorators(buf: &Buffer, theme: &Theme, rb: &mut RenderedBuffer)
     if !syntax.ranges.is_empty() {
         rb.decorators.push(syntax);
     }
+    let diagnostics = diagnostic_ranges(buf, theme);
+    if !diagnostics.ranges.is_empty() {
+        rb.decorators.push(diagnostics);
+    }
     rb.decorators.push(current_line_ranges(buf, theme));
     rb.decorators.push(selection_ranges(buf, theme));
+}
+
+/// Emit a styled range for every LSP diagnostic attached to the buffer
+/// that falls inside the viewport. Faces are named `diagnostic.error`,
+/// `diagnostic.warning`, etc. (see `rizz_core::Severity::face`); users
+/// theme them via the existing `face-define` builtin.
+fn diagnostic_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
+    let mut ranges = Vec::new();
+    let diags = buf.diagnostics();
+    if diags.is_empty() {
+        return DecoratorRanges { ranges };
+    }
+    let start_row = buf.file_pos().row.min(buf.len_lines());
+    let visible = buf.viewport.row as usize;
+    if visible == 0 {
+        return DecoratorRanges { ranges };
+    }
+    let end_row_excl = (start_row + visible).min(buf.len_lines() + 1);
+    for d in diags {
+        let Some(style) = theme.resolve(d.severity.face()) else {
+            continue;
+        };
+        let s_row = d.start.row;
+        let e_row = d.end.row;
+        let first_row = s_row.max(start_row);
+        let last_row = e_row.min(end_row_excl.saturating_sub(1));
+        if first_row > last_row {
+            continue;
+        }
+        for row in first_row..=last_row {
+            let col = if row == s_row { d.start.col } else { 0 };
+            let row_line_len = line_char_count(buf, row);
+            let end_col = if row == e_row {
+                d.end.col.min(row_line_len)
+            } else {
+                row_line_len
+            };
+            let len = end_col.saturating_sub(col);
+            if len == 0 {
+                continue;
+            }
+            ranges.push(StyledRange {
+                row,
+                col,
+                len,
+                style: style.clone(),
+                pad_to_width: false,
+                display: None,
+            });
+        }
+    }
+    DecoratorRanges { ranges }
 }
 
 /// Walk the buffer's tree-sitter highlighter (if attached) and emit a styled

@@ -1,0 +1,110 @@
+# =============================================================================
+# lsp.toml — curated language-server manifest
+# =============================================================================
+#
+# This file is seeded into your config directory on first launch (right next
+# to init.rz). After that it's yours: edit, add entries, override binaries.
+# The editor reads it on startup to resolve names like `(lsp-install
+# 'rust-analyzer)` to a server command plus per-language defaults.
+#
+# Each table key is the server's symbolic name (the one you pass to
+# `lsp-install` and `lsp-installed?`). Fields:
+#
+#   command                 binary to spawn (required). Probed on $PATH first;
+#                           on miss, the editor looks for a cached binary at
+#                           $XDG_DATA_HOME/rizz/lsp/<name>/bin/<command>.
+#   args                    arguments passed to the server's stdin/stdout
+#                           transport (most servers want `--stdio`).
+#   extensions              file extensions this server handles (no dot,
+#                           lowercase). The auto-attach pass uses this index
+#                           to find a server for a buffer's extension.
+#   root_markers            filenames whose presence (walking upward from the
+#                           buffer's path) marks the workspace root.
+#   install                 optional shell recipe run inside the per-server
+#                           cache dir (`$RIZZ_LSP_DIR`) when the binary is
+#                           missing. Drop the resulting executable at
+#                           `$RIZZ_LSP_DIR/bin/<command>`.
+#   env                     extra environment variables for the server.
+#   initialization_options  free TOML table forwarded as JSON in `initialize`.
+#
+# Workflow:
+#   * Install/refresh:   (lsp-install 'rust-analyzer)
+#   * Idempotent guard:  (if (not (lsp-installed? 'rust-analyzer))
+#                           (lsp-install 'rust-analyzer))
+#   * Manual override:   (lsp-register "elixir-ls" "elixir-ls" '() '("ex" "exs"))
+#
+# Artefacts cache to $XDG_DATA_HOME/rizz/lsp/<name>/.
+# =============================================================================
+
+[rust-analyzer]
+command = "rust-analyzer"
+extensions = ["rs"]
+root_markers = ["Cargo.toml", "rust-project.json"]
+install = """
+set -e
+ARCH="$(uname -m)"
+OS="$(uname -s | tr A-Z a-z)"
+case "$OS" in
+  darwin) TARGET="${ARCH}-apple-darwin" ;;
+  linux)  TARGET="${ARCH}-unknown-linux-gnu" ;;
+  *) echo "unsupported os: $OS" >&2; exit 1 ;;
+esac
+URL="https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-${TARGET}.gz"
+mkdir -p "$RIZZ_LSP_DIR/bin"
+curl -L "$URL" | gunzip > "$RIZZ_LSP_DIR/bin/rust-analyzer"
+chmod +x "$RIZZ_LSP_DIR/bin/rust-analyzer"
+"""
+
+[typescript-language-server]
+command = "typescript-language-server"
+args = ["--stdio"]
+extensions = ["ts", "tsx", "js", "jsx", "mjs", "cjs"]
+root_markers = ["package.json", "tsconfig.json", "jsconfig.json"]
+install = """
+set -e
+mkdir -p "$RIZZ_LSP_DIR/bin"
+npm install --prefix "$RIZZ_LSP_DIR" typescript-language-server typescript
+ln -sf "$RIZZ_LSP_DIR/node_modules/.bin/typescript-language-server" "$RIZZ_LSP_DIR/bin/typescript-language-server"
+"""
+
+[gopls]
+command = "gopls"
+extensions = ["go"]
+root_markers = ["go.mod", "go.work"]
+install = "GOBIN=\"$RIZZ_LSP_DIR/bin\" go install golang.org/x/tools/gopls@latest"
+
+[pyright]
+command = "pyright-langserver"
+args = ["--stdio"]
+extensions = ["py", "pyi"]
+root_markers = ["pyproject.toml", "setup.py", "pyrightconfig.json"]
+install = """
+set -e
+mkdir -p "$RIZZ_LSP_DIR/bin"
+npm install --prefix "$RIZZ_LSP_DIR" pyright
+ln -sf "$RIZZ_LSP_DIR/node_modules/.bin/pyright-langserver" "$RIZZ_LSP_DIR/bin/pyright-langserver"
+"""
+
+[bash-language-server]
+command = "bash-language-server"
+args = ["start"]
+extensions = ["sh", "bash"]
+root_markers = []
+install = """
+set -e
+mkdir -p "$RIZZ_LSP_DIR/bin"
+npm install --prefix "$RIZZ_LSP_DIR" bash-language-server
+ln -sf "$RIZZ_LSP_DIR/node_modules/.bin/bash-language-server" "$RIZZ_LSP_DIR/bin/bash-language-server"
+"""
+
+[lua-language-server]
+command = "lua-language-server"
+extensions = ["lua"]
+root_markers = [".luarc.json", ".luarc.jsonc", "stylua.toml"]
+# No bundled install recipe — install via brew/scoop/etc. and put on $PATH.
+
+[clangd]
+command = "clangd"
+extensions = ["c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx"]
+root_markers = ["compile_commands.json", ".clangd", "CMakeLists.txt", "Makefile"]
+# Bundled with most clang/llvm distributions; install via brew/apt/etc.

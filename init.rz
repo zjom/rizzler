@@ -242,6 +242,49 @@
 (map 'normal "dgg"    '(delete-motion 'file-start))
 (map 'normal "dG"     '(delete-motion 'file-end))
 (map 'normal "d%"     '(delete-motion 'match-bracket))
+
+;; Change is the operator-pending twin of delete: `c<motion>` cuts the same
+;; range `d<motion>` would have and drops you into insert mode at the cut
+;; point. There's no `change-motion` builtin — we just compose the two
+;; existing builtins in a `do`. The helpers below let the c<motion> /
+;; c-text-object bindings stay one line each instead of repeating the
+;; `(do ... (set-mode 'insert))` shape every time.
+(fn change-motion (m) (do (delete-motion m) (set-mode 'insert)))
+(fn change-inner  (o) (do (delete-inner  o) (set-mode 'insert)))
+(fn change-around (o) (do (delete-around o) (set-mode 'insert)))
+
+;; `cc` / `S` clear the current line in place (cursor lands at column 0 ready
+;; to type) — distinct from `dd`, which removes the line entirely. `C` cuts
+;; to end-of-line; `s` substitutes the single character under the cursor.
+(map 'normal "cc"     '(do (move-cursor 'line-start)
+                           (delete-motion 'line-end)
+                           (set-mode 'insert)))
+(map 'normal "S"      '(do (move-cursor 'line-start)
+                           (delete-motion 'line-end)
+                           (set-mode 'insert)))
+(map 'normal "C"      '(do (delete-motion 'line-end)
+                           (set-mode 'insert)))
+(map 'normal "s"      '(do (delete-char-at (cursor-col) (cursor-line))
+                           (set-mode 'insert)))
+(map 'normal "ch"     '(change-motion 'left))
+(map 'normal "cl"     '(change-motion 'right))
+(map 'normal "cj"     '(change-motion 'down))
+(map 'normal "ck"     '(change-motion 'up))
+(map 'normal "c0"     '(change-motion 'line-start))
+(map 'normal "c^"     '(change-motion 'line-first-non-blank))
+(map 'normal "c$"     '(change-motion 'line-end))
+(map 'normal "cw"     '(change-motion 'word-forward))
+(map 'normal "cW"     '(change-motion 'big-word-forward))
+(map 'normal "cb"     '(change-motion 'word-start))
+(map 'normal "cB"     '(change-motion 'big-word-start))
+(map 'normal "ce"     '(change-motion 'word-end))
+(map 'normal "cE"     '(change-motion 'big-word-end))
+(map 'normal "cge"    '(change-motion 'word-back-end))
+(map 'normal "cgE"    '(change-motion 'big-word-back-end))
+(map 'normal "cgg"    '(change-motion 'file-start))
+(map 'normal "cG"     '(change-motion 'file-end))
+(map 'normal "c%"     '(change-motion 'match-bracket))
+
 (map 'normal "u"      '(undo))
 (map 'normal "<c-r>"  '(redo))
 
@@ -375,6 +418,7 @@
       (map mode "zz"       '(move-cursor 'center))
       (map mode "x"        '(delete-selection))
       (map mode "d"        '(delete-selection))
+      (map mode "c"        '(do (delete-selection) (set-mode 'insert)))
       (map mode "y"        '(yank))
       (map mode "p"        '(paste))
       (map mode "P"        '(paste-before))))
@@ -467,6 +511,8 @@
 
 (_bind-text-objects 'normal "di" 'delete-inner)
 (_bind-text-objects 'normal "da" 'delete-around)
+(_bind-text-objects 'normal "ci" 'change-inner)
+(_bind-text-objects 'normal "ca" 'change-around)
 (_bind-text-objects 'normal "yi" 'yank-inner)
 (_bind-text-objects 'normal "ya" 'yank-around)
 

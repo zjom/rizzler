@@ -54,6 +54,8 @@ impl Buffer {
 
         self.goal_col = None;
         self.buf.insert_char(cidx, c);
+        let mut buf = [0u8; 4];
+        self.record_highlight_edit(cidx, "", c.encode_utf8(&mut buf));
         self.invalidate_wrap_cache();
 
         if c == '\n' {
@@ -101,6 +103,7 @@ impl Buffer {
         let abs_before = self.abs_pos();
 
         self.buf.insert(cidx, s);
+        self.record_highlight_edit(cidx, "", s);
         self.invalidate_wrap_cache();
 
         let newlines = s.chars().filter(|&c| c == '\n').count();
@@ -142,6 +145,8 @@ impl Buffer {
         }
 
         _ = self.buf.try_remove(cidx - 1..cidx);
+        let mut buf = [0u8; 4];
+        self.record_highlight_edit(cidx - 1, removed_ch.encode_utf8(&mut buf), "");
         self.invalidate_wrap_cache();
         let abs_after = self.abs_pos();
 
@@ -175,6 +180,8 @@ impl Buffer {
         let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;
         self.goal_col = None;
         self.buf.insert_char(cidx, c);
+        let mut buf = [0u8; 4];
+        self.record_highlight_edit(cidx, "", c.encode_utf8(&mut buf));
         self.invalidate_wrap_cache();
         if c == '\n' {
             self.cursor_pos.row = self.cursor_pos.row.saturating_add(1);
@@ -226,6 +233,7 @@ impl Buffer {
         let nchars = spec.inserted.chars().count();
         let end_cidx = spec.start_cidx + nchars;
         _ = self.buf.try_remove(spec.start_cidx..end_cidx);
+        self.record_highlight_edit(spec.start_cidx, &spec.inserted, "");
         self.invalidate_wrap_cache();
         self.land_cursor_at(spec.cursor_before.row, spec.cursor_before.col);
         self.insert_batch_end = None;
@@ -250,6 +258,7 @@ impl Buffer {
         let target_col = s - self.buf.line_to_char(start_line);
 
         self.buf.remove(s..e);
+        self.record_highlight_edit(s, &removed, "");
         self.invalidate_wrap_cache();
 
         self.land_cursor_at(start_line, target_col);
@@ -456,6 +465,7 @@ impl Buffer {
 
         self.buf.remove(s..e);
         self.buf.insert(s, &inserted);
+        self.record_highlight_edit(s, &removed, &inserted);
         self.invalidate_wrap_cache();
 
         // Land cursor on the last replaced char.
@@ -491,13 +501,18 @@ impl Buffer {
         let usable = if has_trailing_nl { line_len - 1 } else { line_len };
         let cidx = self.buf.line_to_char(abs.row) + abs.col;
 
+        let mut new_buf = [0u8; 4];
+        let new_str = c.encode_utf8(&mut new_buf);
         let entry = if abs.col >= usable {
             self.buf.insert_char(cidx, c);
+            self.record_highlight_edit(cidx, "", new_str);
             None
         } else {
             let orig = self.buf.char(cidx);
             self.buf.remove(cidx..cidx + 1);
             self.buf.insert_char(cidx, c);
+            let mut orig_buf = [0u8; 4];
+            self.record_highlight_edit(cidx, orig.encode_utf8(&mut orig_buf), new_str);
             Some(orig)
         };
         self.invalidate_wrap_cache();
@@ -522,10 +537,19 @@ impl Buffer {
         let new_len = batch.history.len();
         let target_cidx = batch.start_cidx + new_len;
         let abs = self.abs_pos();
+        let removed_ch = self.buf.char(target_cidx);
         self.buf.remove(target_cidx..target_cidx + 1);
         if let Some(orig) = entry {
             self.buf.insert_char(target_cidx, orig);
         }
+        let mut removed_buf = [0u8; 4];
+        let mut inserted_buf = [0u8; 4];
+        let removed_str = removed_ch.encode_utf8(&mut removed_buf);
+        let inserted_str = match entry {
+            Some(orig) => orig.encode_utf8(&mut inserted_buf),
+            None => "",
+        };
+        self.record_highlight_edit(target_cidx, removed_str, inserted_str);
         self.invalidate_wrap_cache();
         self.land_cursor_at(abs.row, abs.col.saturating_sub(1));
         true
@@ -594,6 +618,8 @@ impl Buffer {
         let removed_ch = self.buf.char(cidx);
         let abs_before = self.abs_pos();
         _ = self.buf.try_remove(cidx..cidx + 1);
+        let mut buf = [0u8; 4];
+        self.record_highlight_edit(cidx, removed_ch.encode_utf8(&mut buf), "");
         self.invalidate_wrap_cache();
         self.clamp_cursor();
         let abs_after = self.abs_pos();
@@ -616,6 +642,9 @@ impl Buffer {
         let inserted_len = delta.inserted.chars().count();
         self.buf.remove(delta.at..delta.at + inserted_len);
         self.buf.insert(delta.at, &delta.removed);
+        // Undo's "removed" is what we just put back, "inserted" is what we
+        // just removed — flipped relative to the original edit.
+        self.record_highlight_edit(delta.at, &delta.inserted, &delta.removed);
         self.invalidate_wrap_cache();
         let (row, col) = delta.cursor_before;
         self.land_cursor_at(row, col);
@@ -632,6 +661,7 @@ impl Buffer {
         let removed_len = delta.removed.chars().count();
         self.buf.remove(delta.at..delta.at + removed_len);
         self.buf.insert(delta.at, &delta.inserted);
+        self.record_highlight_edit(delta.at, &delta.removed, &delta.inserted);
         self.invalidate_wrap_cache();
         let (row, col) = delta.cursor_after;
         self.land_cursor_at(row, col);

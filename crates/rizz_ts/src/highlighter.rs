@@ -1,6 +1,6 @@
 use crate::TsGrammar;
 use std::rc::Rc;
-use tree_sitter::{Parser, Query, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{InputEdit, Parser, Point, Query, QueryCursor, StreamingIterator, Tree};
 
 /// One captured byte range with the conventional capture name (`"keyword"`,
 /// `"string"`, …). Capture name comes from the live `Query` held by the
@@ -28,7 +28,9 @@ pub struct Highlighter {
     /// `query` runs against the exact bytes the tree's nodes reference.
     text: String,
     tree: Option<Tree>,
-    /// `true` once `set_source` runs and we haven't reparsed since.
+    /// `true` when the tree no longer matches the most recent source — either
+    /// because `set_source` ran or because `record_edit` recorded a buffer
+    /// edit. `ensure_parsed` clears it.
     dirty: bool,
 }
 
@@ -60,16 +62,47 @@ impl Highlighter {
     }
 
     /// Replace the snapshot text and mark the tree dirty. The next
-    /// [`Self::ensure_parsed`] call will reparse against the new bytes.
+    /// [`Self::ensure_parsed`] call will reparse against the new bytes, reusing
+    /// the cached tree as a base (the caller is responsible for having fed any
+    /// intervening edits through [`Self::record_edit`]).
     pub fn set_source(&mut self, src: String) {
         self.text = src;
         self.dirty = true;
     }
 
-    /// Mark the tree dirty without replacing the source. Use to force a
-    /// re-parse on next refresh; pair with [`Self::set_source`] before
-    /// [`Self::ensure_parsed`].
+    /// Drop any cached tree and force a full reparse on the next
+    /// [`Self::ensure_parsed`]. Used when the rope is replaced wholesale
+    /// (`clear`, `clear_with`, file reload) — incremental reuse only makes
+    /// sense when the caller can describe every byte that moved.
     pub fn invalidate(&mut self) {
+        self.tree = None;
+        self.dirty = true;
+    }
+
+    /// Apply an incremental rope edit to the cached tree so the next
+    /// [`Self::ensure_parsed`] can reuse unaffected subtrees. The caller must
+    /// describe the edit in tree-sitter's coordinate system (byte offsets +
+    /// row/column-in-bytes), matching the bytes that will be in the source on
+    /// the next `set_source`.
+    pub fn record_edit(
+        &mut self,
+        start_byte: usize,
+        old_end_byte: usize,
+        new_end_byte: usize,
+        start_position: Point,
+        old_end_position: Point,
+        new_end_position: Point,
+    ) {
+        if let Some(tree) = self.tree.as_mut() {
+            tree.edit(&InputEdit {
+                start_byte,
+                old_end_byte,
+                new_end_byte,
+                start_position,
+                old_end_position,
+                new_end_position,
+            });
+        }
         self.dirty = true;
     }
 
@@ -77,16 +110,16 @@ impl Highlighter {
         self.dirty
     }
 
-    /// Reparse if needed. Always full-reparses: tree-sitter's incremental
-    /// reuse requires `Tree::edit` to be called on the old tree with each
-    /// rope edit's byte range, and the buffer layer doesn't surface that
-    /// yet. Passing the old tree without edits would make the parser treat
-    /// unchanged regions as still-unchanged and emit stale highlights.
+    /// Reparse if needed, reusing the cached (edited) tree when possible so
+    /// tree-sitter can skip subtrees the edits didn't touch. The cached tree
+    /// is only safe to pass when every intervening edit has been fed through
+    /// [`Self::record_edit`]; [`Self::invalidate`] clears it for the cases
+    /// where that contract can't be upheld.
     pub fn ensure_parsed(&mut self) {
         if !self.dirty {
             return;
         }
-        self.tree = self.parser.parse(&self.text, None);
+        self.tree = self.parser.parse(&self.text, self.tree.as_ref());
         self.dirty = false;
     }
 

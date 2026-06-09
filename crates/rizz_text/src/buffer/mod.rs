@@ -24,7 +24,7 @@ mod yank;
 use std::{path::Path, rc::Rc, str::FromStr};
 
 use rizz_changetree::ChangeTree;
-use rizz_ts::Highlighter;
+use rizz_ts::{Highlighter, Point};
 use ropey::{Rope, RopeSlice, iter::Lines};
 
 use rizz_core::{EditingMode, Position};
@@ -102,8 +102,8 @@ pub struct Buffer {
     pub(crate) replace_batch: Option<ReplaceBatch>,
     /// Optional syntax-highlighter. Installed by `State` after consulting
     /// the `TsRegistry` for a grammar matching the file extension. Edits
-    /// flip its dirty flag via [`Buffer::invalidate_highlight`]; the
-    /// precompute pass refreshes the source snapshot and reparses on demand.
+    /// forward incremental rope splices via [`Buffer::record_highlight_edit`];
+    /// the precompute pass refreshes the source snapshot and reparses on demand.
     pub(crate) highlight: Option<Highlighter>,
 }
 
@@ -156,14 +156,54 @@ impl Buffer {
     /// render builds a fresh map.
     pub(crate) fn invalidate_wrap_cache(&mut self) {
         self.wrap_cache = None;
-        self.invalidate_highlight();
     }
 
-    /// Mark the tree-sitter tree dirty so the next render reparses against the
-    /// updated rope. No-op when no language is set.
-    pub(crate) fn invalidate_highlight(&mut self) {
+    /// Drop the tree-sitter tree wholesale so the next render full-reparses.
+    /// Reserved for paths that swap the entire rope (`clear`, `clear_with`,
+    /// file reloads) — incremental reuse only makes sense when every
+    /// intervening edit has been described to the highlighter via
+    /// [`Buffer::record_highlight_edit`].
+    pub(crate) fn reset_highlight(&mut self) {
         if let Some(h) = &mut self.highlight {
             h.invalidate();
+        }
+    }
+
+    /// Forward a single rope splice to the highlighter so tree-sitter can
+    /// reuse subtrees outside the edit region. `at_char` is the rope char
+    /// index where the splice starts; `removed` / `inserted` are the strings
+    /// pulled out and pushed in. Safe to call before or after the rope
+    /// mutation — `at_char`'s byte/point coordinates depend only on the
+    /// unchanged prefix.
+    pub(crate) fn record_highlight_edit(
+        &mut self,
+        at_char: usize,
+        removed: &str,
+        inserted: &str,
+    ) {
+        if self.highlight.is_none() {
+            return;
+        }
+        let start_byte = self.buf.char_to_byte(at_char);
+        let row = self.buf.char_to_line(at_char);
+        let line_start_byte = self.buf.line_to_byte(row);
+        let start_position = Point {
+            row,
+            column: start_byte - line_start_byte,
+        };
+        let old_end_position = advance_point(start_position, removed);
+        let new_end_position = advance_point(start_position, inserted);
+        let old_end_byte = start_byte + removed.len();
+        let new_end_byte = start_byte + inserted.len();
+        if let Some(h) = self.highlight.as_mut() {
+            h.record_edit(
+                start_byte,
+                old_end_byte,
+                new_end_byte,
+                start_position,
+                old_end_position,
+                new_end_position,
+            );
         }
     }
 
@@ -246,11 +286,13 @@ impl Buffer {
         self.cursor_pos = Position::default();
         self.file_pos = Position::default();
         self.invalidate_wrap_cache();
+        self.reset_highlight();
     }
 
     pub fn clear_with(&mut self, text: &str) {
         self.buf = Rope::from_str(text);
         self.invalidate_wrap_cache();
+        self.reset_highlight();
         self.clamp_cursor();
     }
 
@@ -292,6 +334,23 @@ impl Buffer {
     pub(crate) fn cur_line_start(&self) -> usize {
         self.buf.line_to_char(self.cur_lnum())
     }
+}
+
+/// Advance a tree-sitter [`Point`] forward across `s`. Tree-sitter measures
+/// column in bytes from the line start, so newlines reset the column and
+/// non-newline chars advance by their UTF-8 length.
+fn advance_point(start: Point, s: &str) -> Point {
+    let mut row = start.row;
+    let mut column = start.column;
+    for ch in s.chars() {
+        if ch == '\n' {
+            row += 1;
+            column = 0;
+        } else {
+            column += ch.len_utf8();
+        }
+    }
+    Point { row, column }
 }
 
 impl FromStr for Buffer {

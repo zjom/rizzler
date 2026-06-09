@@ -27,3 +27,4 @@ mod registry;
 pub use error::TsError;
 pub use highlighter::{HighlightSpan, Highlighter};
 pub use registry::{TsGrammar, TsRegistry};
+pub use tree_sitter::Point;

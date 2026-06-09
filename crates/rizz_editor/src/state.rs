@@ -243,7 +243,11 @@ fn load_init_script(config_dir: &Path) -> anyhow::Result<String> {
 /// missing. A failure to read or parse falls back to an empty manifest with
 /// a logged warning — a broken file should never keep the editor from boot.
 fn load_grammar_manifest(config_dir: &Path) -> GrammarManifest {
-    match load_or_seed(config_dir, GRAMMARS_MANIFEST_NAME, EMBEDDED_GRAMMARS_MANIFEST) {
+    match load_or_seed(
+        config_dir,
+        GRAMMARS_MANIFEST_NAME,
+        EMBEDDED_GRAMMARS_MANIFEST,
+    ) {
         Ok(text) => match GrammarManifest::parse(&text) {
             Ok(m) => m,
             Err(e) => {
@@ -396,8 +400,9 @@ impl State {
                     remaining = self.pending_notifications.len() + 1,
                     "notification drain cap hit — recording remainder to journal"
                 );
-                let remainder: Vec<String> =
-                    std::iter::once(msg).chain(self.pending_notifications.drain(..)).collect();
+                let remainder: Vec<String> = std::iter::once(msg)
+                    .chain(self.pending_notifications.drain(..))
+                    .collect();
                 for m in remainder {
                     self.record_message(&m);
                 }
@@ -804,7 +809,10 @@ impl State {
         else {
             return;
         };
-        let Some(grammar_name) = self.grammar_manifest.grammar_for_ext(&ext).map(str::to_string)
+        let Some(grammar_name) = self
+            .grammar_manifest
+            .grammar_for_ext(&ext)
+            .map(str::to_string)
         else {
             return;
         };
@@ -1150,16 +1158,19 @@ impl State {
                     let f = self.focused_buf_id();
                     debug!(buf = ?f, "Action::Undo");
                     self.bufs[f].undo();
+                    self.bufs[f].move_cursor(rizz_text::MoveKind::Center);
                 }
                 Action::Redo => {
                     let f = self.focused_buf_id();
                     debug!(buf = ?f, "Action::Redo");
                     self.bufs[f].redo();
+                    self.bufs[f].move_cursor(rizz_text::MoveKind::Center);
                 }
                 Action::GotoLastEdit { count } => {
                     let f = self.focused_buf_id();
                     debug!(buf = ?f, count, "Action::GotoLastEdit");
                     self.bufs[f].goto_last_edit(*count);
+                    self.bufs[f].move_cursor(rizz_text::MoveKind::Center);
                 }
                 Action::MoveCursor { kind, count } => {
                     let f = self.focused_buf_id();
@@ -1385,9 +1396,7 @@ impl State {
             // re-anchor the search at origin and re-run with the freshly
             // typed pattern. Skipped for the action arms that handle search
             // explicitly (Submit/Cancel/Next/Prev).
-            if edits_minibuffer_text
-                && self.bufs.minibuffer().mode() == EditingMode::Search
-            {
+            if edits_minibuffer_text && self.bufs.minibuffer().mode() == EditingMode::Search {
                 rizz_search::refresh_live_search(self);
             }
         }
@@ -1816,13 +1825,19 @@ mod tests {
         );
         s.lisp = lisp;
         s.drain_pending_notifications();
-        assert!(s.pending_notifications.is_empty(), "queue must be empty after drain");
+        assert!(
+            s.pending_notifications.is_empty(),
+            "queue must be empty after drain"
+        );
         // The user's `(notify …)` runs `notify-record`, which appends to the
         // message history — so a successful drain leaves the message there.
         let found = s
             .message_history()
             .any(|m| m.as_ref() == "queued notification");
-        assert!(found, "drain should have routed the message through `(notify …)`");
+        assert!(
+            found,
+            "drain should have routed the message through `(notify …)`"
+        );
     }
 
     #[test]

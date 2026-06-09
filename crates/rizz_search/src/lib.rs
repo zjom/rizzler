@@ -62,6 +62,13 @@ pub struct Search {
     last_dir: SearchDir,
     overlays: Vec<(BufferId, OverlayId)>,
     origin: Option<SearchOrigin>,
+    /// Buffer the current/last search targets. Set alongside `origin` on `/`
+    /// entry and survives `take_origin` so `n`/`N` keep targeting the same
+    /// buffer (e.g. a popup) after the minibuffer closes. Hosts consult this
+    /// from their `focused_buf_id` so that opening `/` inside a popup runs
+    /// search against the popup's buffer rather than the editor window
+    /// underneath.
+    target_buf: Option<BufferId>,
 }
 
 impl Search {
@@ -78,11 +85,20 @@ impl Search {
     }
 
     pub fn set_origin(&mut self, origin: SearchOrigin) {
+        self.target_buf = Some(origin.buf);
         self.origin = Some(origin);
     }
 
     pub fn take_origin(&mut self) -> Option<SearchOrigin> {
         self.origin.take()
+    }
+
+    pub fn target_buf(&self) -> Option<BufferId> {
+        self.target_buf
+    }
+
+    pub fn clear_target(&mut self) {
+        self.target_buf = None;
     }
 }
 

@@ -1393,7 +1393,7 @@ impl State {
             // Stash the cursor + scroll position so cancel can restore it
             // and so live search has a stable origin to search from.
             if mode == EditingMode::Search {
-                let buf_id = self.windows.focused_buf();
+                let buf_id = self.focused_buf_id();
                 let buf = &self.bufs[buf_id];
                 self.search.set_origin(SearchOrigin {
                     buf: buf_id,
@@ -1599,6 +1599,16 @@ impl SearchHost for State {
     }
 
     fn focused_buf_id(&self) -> BufferId {
+        // Prefer the buffer captured when `/` opened so that searches started
+        // inside a popup keep targeting the popup buffer (rather than the
+        // editor window underneath) for live updates and `n`/`N` repeats.
+        // Falls back to the focused window when the recorded target is gone
+        // — e.g. the popup was closed between submit and `n`.
+        if let Some(id) = self.search.target_buf()
+            && self.bufs.contains(id)
+        {
+            return id;
+        }
         self.windows.focused_buf()
     }
 

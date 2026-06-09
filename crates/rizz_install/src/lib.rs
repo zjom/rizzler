@@ -84,7 +84,9 @@ impl<S: Spec> Manifest<S> {
     pub fn insert(&mut self, name: String, spec: S) {
         for ext in spec.extensions() {
             let normalized = normalize_ext(ext);
-            self.by_ext.entry(normalized).or_insert_with(|| name.clone());
+            self.by_ext
+                .entry(normalized)
+                .or_insert_with(|| name.clone());
         }
         self.entries.insert(name, spec);
     }

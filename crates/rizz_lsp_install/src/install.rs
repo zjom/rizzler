@@ -7,9 +7,9 @@ use std::process::Command;
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, instrument, warn};
 
+use crate::InstallError;
 use crate::cache;
 use crate::manifest::{Manifest, ServerSpec};
-use crate::InstallError;
 
 /// Per-call overrides layered on top of the manifest entry. Everything
 /// is optional; `(lsp-install 'rust-analyzer)` uses `InstallOpts::default()`.
@@ -30,7 +30,11 @@ pub struct InstalledServer {
     pub spec: ServerSpec,
 }
 
-fn resolve(name: &str, opts: &InstallOpts, manifest: &Manifest) -> Result<ServerSpec, InstallError> {
+fn resolve(
+    name: &str,
+    opts: &InstallOpts,
+    manifest: &Manifest,
+) -> Result<ServerSpec, InstallError> {
     let mut spec = manifest.get(name).cloned().unwrap_or_default();
     if spec.command.is_empty() {
         if let Some(cmd) = &opts.command {

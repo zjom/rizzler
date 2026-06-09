@@ -20,8 +20,8 @@ use rizz_registers::RegisterKind;
 use rizz_text::{BufferId, MoveKind, TextObject};
 
 use crate::lsp::{
-    CodeActionOwned, CommandOwned, CompletionItemOwned, LocationOwned, LspClientId,
-    TextEditOwned, WorkspaceEditOwned,
+    CodeActionOwned, CommandOwned, CompletionItemOwned, LocationOwned, LspClientId, TextEditOwned,
+    WorkspaceEditOwned,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -220,7 +220,9 @@ pub enum Action {
     LspCodeAction,
     /// Restart a language-server client. `None` restarts the client
     /// attached to the focused buffer; otherwise the named one.
-    LspRestart { name: Option<Arc<str>> },
+    LspRestart {
+        name: Option<Arc<str>>,
+    },
     /// Send `textDocument/didOpen` for the focused buffer. Synthesized by
     /// `BufEdit`/`BufCreate` paths after a fresh LSP attachment is wired.
     LspDidOpenFocused,
@@ -237,7 +239,9 @@ pub enum Action {
     /// Show a picker over multiple definition locations. Single-location
     /// responses are converted to a direct `BufEdit` + cursor move and
     /// never reach this variant.
-    LspShowDefinitionList { locations: Arc<[LocationOwned]> },
+    LspShowDefinitionList {
+        locations: Arc<[LocationOwned]>,
+    },
     /// Open a completion popup with the given items, anchored at the
     /// position the originating request was issued from.
     LspShowCompletion {
@@ -245,7 +249,9 @@ pub enum Action {
         anchor: Position<usize>,
     },
     /// Open a code-action picker.
-    LspShowCodeActions { actions: Arc<[CodeActionOwned]> },
+    LspShowCodeActions {
+        actions: Arc<[CodeActionOwned]>,
+    },
     /// Apply a sorted list of `TextEdit`s to `buf` as a single tracked
     /// changetree node. Used for formatting responses and code-action
     /// `WorkspaceEdit` payloads that target a single buffer.

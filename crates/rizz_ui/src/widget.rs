@@ -48,7 +48,9 @@ pub enum Widget {
     Minibuffer,
     /// Render a single buffer. When `buf` is `None`, the renderer uses the
     /// enclosing popup's backing buffer.
-    BufferView { buf: Option<BufferId> },
+    BufferView {
+        buf: Option<BufferId>,
+    },
     /// Non-focusable floating overlay — paints `child` over the rest of
     /// the frame in a post-pass. Has no backing buffer and never receives
     /// keys.

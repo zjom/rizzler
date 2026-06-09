@@ -21,5 +21,5 @@ mod manifest;
 
 pub use cache::cache_root;
 pub use error::InstallError;
-pub use install::{install, try_load_cached, InstallOpts, InstalledServer};
+pub use install::{InstallOpts, InstalledServer, install, try_load_cached};
 pub use manifest::{Manifest, ServerSpec};

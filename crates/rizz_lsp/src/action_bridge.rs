@@ -12,12 +12,12 @@ use lsp_types::{
 use ropey::Rope;
 
 use rizz_actions::{
-    CodeActionOwned, CommandOwned, CompletionItemKindOwned, CompletionItemOwned,
-    DocumentEditOwned, LocationOwned, RangeOwned, TextEditOwned, WorkspaceEditOwned,
+    CodeActionOwned, CommandOwned, CompletionItemKindOwned, CompletionItemOwned, DocumentEditOwned,
+    LocationOwned, RangeOwned, TextEditOwned, WorkspaceEditOwned,
 };
 use rizz_core::{LspDiagnostic, Position, Severity};
 
-use crate::position::{lsp_to_byte, Encoding};
+use crate::position::{Encoding, lsp_to_byte};
 
 fn pos_owned(rope: &Rope, p: lsp_types::Position, enc: Encoding) -> Position<usize> {
     let (row, col) = lsp_to_byte(rope, p, enc);
@@ -64,13 +64,23 @@ pub fn location_owned(_rope: &Rope, loc: &Location, _enc: Encoding) -> LocationO
     LocationOwned {
         uri: Arc::from(url_str(&loc.uri)),
         range: RangeOwned {
-            start: Position::new(loc.range.start.character as usize, loc.range.start.line as usize),
-            end: Position::new(loc.range.end.character as usize, loc.range.end.line as usize),
+            start: Position::new(
+                loc.range.start.character as usize,
+                loc.range.start.line as usize,
+            ),
+            end: Position::new(
+                loc.range.end.character as usize,
+                loc.range.end.line as usize,
+            ),
         },
     }
 }
 
-pub fn locations_owned(rope: &Rope, resp: GotoDefinitionResponse, enc: Encoding) -> Vec<LocationOwned> {
+pub fn locations_owned(
+    rope: &Rope,
+    resp: GotoDefinitionResponse,
+    enc: Encoding,
+) -> Vec<LocationOwned> {
     match resp {
         GotoDefinitionResponse::Scalar(l) => vec![location_owned(rope, &l, enc)],
         GotoDefinitionResponse::Array(items) => {
@@ -198,9 +208,7 @@ fn text_document_edit_owned(e: TextDocumentEdit) -> DocumentEditOwned {
     }
 }
 
-pub fn code_actions_owned(
-    items: Vec<CodeActionOrCommand>,
-) -> Vec<CodeActionOwned> {
+pub fn code_actions_owned(items: Vec<CodeActionOrCommand>) -> Vec<CodeActionOwned> {
     items
         .into_iter()
         .map(|item| match item {

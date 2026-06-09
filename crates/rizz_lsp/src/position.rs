@@ -155,7 +155,13 @@ mod tests {
     fn utf8_ascii_roundtrip() {
         let r = rope("hello\nworld");
         let lsp = byte_to_lsp(&r, 1, 3, Encoding::Utf8);
-        assert_eq!(lsp, Position { line: 1, character: 3 });
+        assert_eq!(
+            lsp,
+            Position {
+                line: 1,
+                character: 3
+            }
+        );
         assert_eq!(lsp_to_byte(&r, lsp, Encoding::Utf8), (1, 3));
     }
 
@@ -164,7 +170,13 @@ mod tests {
         // 😀 is U+1F600, 4 UTF-8 bytes, 2 UTF-16 units.
         let r = rope("a😀b");
         let lsp = byte_to_lsp(&r, 0, 5, Encoding::Utf16); // after the emoji
-        assert_eq!(lsp, Position { line: 0, character: 3 }); // a(1) + 😀(2)
+        assert_eq!(
+            lsp,
+            Position {
+                line: 0,
+                character: 3
+            }
+        ); // a(1) + 😀(2)
         assert_eq!(lsp_to_byte(&r, lsp, Encoding::Utf16), (0, 5));
     }
 
@@ -172,13 +184,32 @@ mod tests {
     fn utf32_cjk_counts_one_unit_per_char() {
         let r = rope("日本語");
         let lsp = byte_to_lsp(&r, 0, 6, Encoding::Utf32); // 2 chars in
-        assert_eq!(lsp, Position { line: 0, character: 2 });
+        assert_eq!(
+            lsp,
+            Position {
+                line: 0,
+                character: 2
+            }
+        );
         assert_eq!(lsp_to_byte(&r, lsp, Encoding::Utf32), (0, 6));
     }
 
     #[test]
     fn advance_position_handles_newline() {
-        let p = advance_position(Position { line: 1, character: 4 }, "x\ny", Encoding::Utf8);
-        assert_eq!(p, Position { line: 2, character: 1 });
+        let p = advance_position(
+            Position {
+                line: 1,
+                character: 4,
+            },
+            "x\ny",
+            Encoding::Utf8,
+        );
+        assert_eq!(
+            p,
+            Position {
+                line: 2,
+                character: 1
+            }
+        );
     }
 }

@@ -61,10 +61,10 @@ impl State {
         library_path: &Path,
         highlights_query: &str,
     ) -> Result<(), rizz_ts::TsError> {
-        if let Err(e) = self
-            .lang
-            .ts_registry
-            .register(name, extensions, library_path, highlights_query)
+        if let Err(e) =
+            self.lang
+                .ts_registry
+                .register(name, extensions, library_path, highlights_query)
         {
             error!(error = %e, "register_grammar failed");
             return Err(e);
@@ -293,7 +293,13 @@ impl State {
         else {
             return;
         };
-        let Some(server_name) = self.lang.lsp.manifest.lookup_by_ext(&ext).map(str::to_string) else {
+        let Some(server_name) = self
+            .lang
+            .lsp
+            .manifest
+            .lookup_by_ext(&ext)
+            .map(str::to_string)
+        else {
             return;
         };
 

@@ -12,7 +12,7 @@ use ropey::Rope;
 use tracing::debug;
 
 use crate::event::{ChangeEvent, RuntimeCmd};
-use crate::position::{advance_position, byte_to_lsp, Encoding};
+use crate::position::{Encoding, advance_position, byte_to_lsp};
 use crate::runtime::runtime;
 
 pub struct LspBufferAttachment {
@@ -25,12 +25,7 @@ pub struct LspBufferAttachment {
 }
 
 impl LspBufferAttachment {
-    pub fn new(
-        client: LspClientId,
-        uri: String,
-        language_id: String,
-        encoding: Encoding,
-    ) -> Self {
+    pub fn new(client: LspClientId, uri: String, language_id: String, encoding: Encoding) -> Self {
         Self {
             client,
             uri,

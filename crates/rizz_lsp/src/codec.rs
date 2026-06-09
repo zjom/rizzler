@@ -78,9 +78,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 #[cfg(test)]
@@ -94,7 +92,10 @@ mod tests {
         let mut buf = BytesMut::new();
         let body = br#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#.to_vec();
         codec.encode(body.clone(), &mut buf).unwrap();
-        let decoded = codec.decode(&mut buf).unwrap().expect("frame should decode");
+        let decoded = codec
+            .decode(&mut buf)
+            .unwrap()
+            .expect("frame should decode");
         assert_eq!(decoded, body);
         assert!(buf.is_empty());
     }

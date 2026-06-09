@@ -151,8 +151,9 @@ impl Placement {
             },
             // `AtCursor` needs an anchor; the render path uses
             // `resolve_with_anchor`. Fall back to centered here.
-            Placement::AtCursor { width, height } => Placement::Centered { width, height }
-                .resolve(area, fit_w, fit_h),
+            Placement::AtCursor { width, height } => {
+                Placement::Centered { width, height }.resolve(area, fit_w, fit_h)
+            }
             Placement::Full => area,
         }
     }
@@ -170,18 +171,11 @@ impl Placement {
         match *self {
             Placement::AtCursor { width, height } => {
                 let Some(a) = anchor else {
-                    return Placement::Centered { width, height }
-                        .resolve(area, fit_w, fit_h);
+                    return Placement::Centered { width, height }.resolve(area, fit_w, fit_h);
                 };
                 let leaf = a.leaf;
-                let h = height
-                    .resolve(leaf.height, fit_h)
-                    .max(1)
-                    .min(leaf.height);
-                let w = width
-                    .resolve(leaf.width, fit_w)
-                    .max(1)
-                    .min(leaf.width);
+                let h = height.resolve(leaf.height, fit_h).max(1).min(leaf.height);
+                let w = width.resolve(leaf.width, fit_w).max(1).min(leaf.width);
                 // Prefer below the cursor; fall back to above when there's
                 // more room there. If neither side fully fits, pick the
                 // larger and let the height clamp below.

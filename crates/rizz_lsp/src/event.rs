@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use crossbeam_channel::Sender;
 use rizz_actions::{
-    CodeActionOwned, CommandOwned, CompletionItemOwned, LocationOwned, LspClientId,
-    TextEditOwned, WorkspaceEditOwned,
+    CodeActionOwned, CommandOwned, CompletionItemOwned, LocationOwned, LspClientId, TextEditOwned,
+    WorkspaceEditOwned,
 };
 use rizz_core::LspDiagnostic;
 use rizz_lsp_install::ServerSpec;
@@ -93,7 +93,9 @@ pub enum RuntimeCmd {
     },
     /// Graceful shutdown: the runtime drives `shutdown` → `exit` and reaps
     /// the child.
-    Shutdown { client: LspClientId },
+    Shutdown {
+        client: LspClientId,
+    },
 }
 
 #[derive(Debug)]

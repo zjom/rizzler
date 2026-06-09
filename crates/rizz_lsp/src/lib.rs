@@ -32,6 +32,6 @@ mod runtime;
 pub use document::LspBufferAttachment;
 pub use error::LspError;
 pub use event::{ChangeEvent, LspEvent, RequestSeq, RuntimeCmd, SpawnReply};
-pub use position::{advance_position, byte_to_lsp, lsp_to_byte, Encoding};
+pub use position::{Encoding, advance_position, byte_to_lsp, lsp_to_byte};
 pub use registry::{LspRegistry, RunningClient};
-pub use runtime::{runtime, LspRuntime};
+pub use runtime::{LspRuntime, runtime};

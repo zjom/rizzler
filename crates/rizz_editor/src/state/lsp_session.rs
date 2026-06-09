@@ -14,13 +14,11 @@ use std::time::{Duration, Instant};
 use rizz::runtime::Value;
 use rizz_actions::{Action, LspClientId};
 use rizz_core::Position;
-use rizz_lsp::{
-    Encoding as LspEncoding, LspEvent, RequestSeq, RuntimeCmd,
-};
+use rizz_lsp::{Encoding as LspEncoding, LspEvent, RequestSeq, RuntimeCmd};
 use rizz_text::BufferId;
 use tracing::{debug, instrument, warn};
 
-use super::{workspace::uri_to_path, State};
+use super::{State, workspace::uri_to_path};
 
 pub(super) const LSP_FORMAT_TIMEOUT: Duration = Duration::from_millis(2000);
 
@@ -251,7 +249,13 @@ impl State {
                         .and_then(|e| e.to_str())
                         .map(|s| s.to_ascii_lowercase())
                 })
-                .and_then(|ext| self.lang.lsp.manifest.lookup_by_ext(&ext).map(str::to_string))
+                .and_then(|ext| {
+                    self.lang
+                        .lsp
+                        .manifest
+                        .lookup_by_ext(&ext)
+                        .map(str::to_string)
+                })
         });
         let Some(server_name) = resolved_name else {
             self.notify_via_lisp(

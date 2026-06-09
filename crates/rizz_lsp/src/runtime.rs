@@ -100,7 +100,10 @@ async fn dispatcher(cmd_rx: Receiver<RuntimeCmd>, events_tx: Sender<LspEvent>) {
                     Ok(handle) => {
                         let encoding = handle.encoding;
                         clients.lock().unwrap().insert(id, handle);
-                        let _ = reply.send(SpawnReply::Ok { client: id, encoding });
+                        let _ = reply.send(SpawnReply::Ok {
+                            client: id,
+                            encoding,
+                        });
                     }
                     Err(e) => {
                         warn!(name, error = %e, "lsp client spawn failed");
@@ -119,10 +122,7 @@ async fn dispatcher(cmd_rx: Receiver<RuntimeCmd>, events_tx: Sender<LspEvent>) {
     }
 }
 
-fn dispatch_to_client(
-    clients: &Mutex<HashMap<LspClientId, ClientHandle>>,
-    cmd: RuntimeCmd,
-) {
+fn dispatch_to_client(clients: &Mutex<HashMap<LspClientId, ClientHandle>>, cmd: RuntimeCmd) {
     let (client_id, client_cmd) = match cmd {
         RuntimeCmd::DidOpen {
             client,
@@ -158,40 +158,19 @@ fn dispatch_to_client(
             seq,
             uri,
             position,
-        } => (
-            client,
-            ClientCmd::Hover {
-                seq,
-                uri,
-                position,
-            },
-        ),
+        } => (client, ClientCmd::Hover { seq, uri, position }),
         RuntimeCmd::GotoDefinition {
             client,
             seq,
             uri,
             position,
-        } => (
-            client,
-            ClientCmd::GotoDefinition {
-                seq,
-                uri,
-                position,
-            },
-        ),
+        } => (client, ClientCmd::GotoDefinition { seq, uri, position }),
         RuntimeCmd::Completion {
             client,
             seq,
             uri,
             position,
-        } => (
-            client,
-            ClientCmd::Completion {
-                seq,
-                uri,
-                position,
-            },
-        ),
+        } => (client, ClientCmd::Completion { seq, uri, position }),
         RuntimeCmd::Format {
             client,
             seq,
@@ -212,14 +191,7 @@ fn dispatch_to_client(
             seq,
             uri,
             range,
-        } => (
-            client,
-            ClientCmd::CodeAction {
-                seq,
-                uri,
-                range,
-            },
-        ),
+        } => (client, ClientCmd::CodeAction { seq, uri, range }),
         RuntimeCmd::ExecuteCommand {
             client,
             seq,
@@ -243,4 +215,3 @@ fn dispatch_to_client(
         warn!(?client_id, "no such lsp client");
     }
 }
-

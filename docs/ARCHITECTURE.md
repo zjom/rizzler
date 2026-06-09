@@ -41,16 +41,16 @@ For paste events, the keymap is bypassed entirely: `Event::Paste(text)` becomes 
 
 The fields you'll see, grouped by responsibility:
 
-| Concern | Field(s) | Lives in |
-| --- | --- | --- |
-| Buffer + window state | `bufs: BufferList`, `windows: WindowTree`, `panels: PanelStack` | [`buffer_list.rs`](../crates/rizz_editor/src/buffer_list.rs), [`state/buffers.rs`](../crates/rizz_editor/src/state/buffers.rs), [`state/surface.rs`](../crates/rizz_editor/src/state/surface.rs) |
-| Key input | `keymap`, `keyevents`, `keycombo_timeout`, `count_prefix` | [`state/input.rs`](../crates/rizz_editor/src/state/input.rs) |
-| Render config | `renderer`, `theme`, `frame_fn`, `gutter_fn`, `gutter_width` | [`state/render.rs`](../crates/rizz_editor/src/state/render.rs) |
-| Scripting | `lisp`, `pending_notifications` | [`state/scripting.rs`](../crates/rizz_editor/src/state/scripting.rs) |
-| Workspace paths | `workdir`, `config_dir` | [`state/workspace.rs`](../crates/rizz_editor/src/state/workspace.rs) |
-| Lang integration | `lang: LangIntegration` (TS + LSP installers + registries) | [`state/lang.rs`](../crates/rizz_editor/src/state/lang.rs) |
-| LSP session | `pending_lsp_requests`, `next_lsp_seq`, completion/code-action callbacks, pending batches, `buf_by_uri` | [`state/lsp_session.rs`](../crates/rizz_editor/src/state/lsp_session.rs) |
-| Other | `journal`, `search`, `registers`, `pending_register`, `quit` | scripting / search / yank-paste flows |
+| Concern               | Field(s)                                                                                                | Lives in                                                                                                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Buffer + window state | `bufs: BufferList`, `windows: WindowTree`, `panels: PanelStack`                                         | [`buffer_list.rs`](../crates/rizz_editor/src/buffer_list.rs), [`state/buffers.rs`](../crates/rizz_editor/src/state/buffers.rs), [`state/surface.rs`](../crates/rizz_editor/src/state/surface.rs) |
+| Key input             | `keymap`, `keyevents`, `keycombo_timeout`, `count_prefix`                                               | [`state/input.rs`](../crates/rizz_editor/src/state/input.rs)                                                                                                                                     |
+| Render config         | `renderer`, `theme`, `frame_fn`, `gutter_fn`, `gutter_width`                                            | [`state/render.rs`](../crates/rizz_editor/src/state/render.rs)                                                                                                                                   |
+| Scripting             | `lisp`, `pending_notifications`                                                                         | [`state/scripting.rs`](../crates/rizz_editor/src/state/scripting.rs)                                                                                                                             |
+| Workspace paths       | `workdir`, `config_dir`                                                                                 | [`state/workspace.rs`](../crates/rizz_editor/src/state/workspace.rs)                                                                                                                             |
+| Lang integration      | `lang: LangIntegration` (TS + LSP installers + registries)                                              | [`state/lang.rs`](../crates/rizz_editor/src/state/lang.rs)                                                                                                                                       |
+| LSP session           | `pending_lsp_requests`, `next_lsp_seq`, completion/code-action callbacks, pending batches, `buf_by_uri` | [`state/lsp_session.rs`](../crates/rizz_editor/src/state/lsp_session.rs)                                                                                                                         |
+| Other                 | `journal`, `search`, `registers`, `pending_register`, `quit`                                            | scripting / search / yank-paste flows                                                                                                                                                            |
 
 `State`'s methods live in sibling files under [`state/`](../crates/rizz_editor/src/state) — `mod.rs` declares each as a child module. Rust treats child modules as having full access to the parent's private fields, so every subsystem file can read and mutate `State`'s private state directly. This keeps the split mechanical: no `pub(crate)` field plumbing.
 
@@ -61,29 +61,29 @@ When `State::apply` arms need to touch fields from two or more subsystems at onc
 There are ~15 workspace crates. The dependency tree is shallow and acyclic, with `rizz_editor` as the orchestration hub.
 
 ```
-                                ┌──────────────┐
-                                │  rizz_core   │  (Position, EditingMode, FocusDir, …)
-                                └──┬───────────┘
-                                   │
-            ┌──────────────────────┼────────────────────────────────┐
-            │                      │                                │
-        rizz_input             rizz_text ──→ rizz_changetree   rizz_registers
-            │                  rizz_text ──→ rizz_ts ──→ libloading
-            │                      │                                │
-            │                  rizz_search                           │
-            │                      │                                │
-            └─→ rizz_ui ←──────────┘                                │
-                  ▲                                                 │
-                  │                                                 │
-            rizz_actions ───────────────────────────────────────────┘
+                        ┌──────────────┐
+                        │  rizz_core   │  (Position, EditingMode, FocusDir, …)
+                        └──┬───────────┘
+                           │
+    ┌──────────────────────┼────────────────────────────────┐
+    │                      │                                │
+rizz_input             rizz_text ──→ rizz_changetree   rizz_registers
+    │                  rizz_text ──→ rizz_ts ──→ libloading
+    │                      │                                │
+    │                  rizz_search                           │
+    │                      │                                │
+    └─→ rizz_ui ←──────────┘                                │
+          ▲                                                 │
+          │                                                 │
+    rizz_actions ───────────────────────────────────────────┘
+          │
+          ├─→ rizz_lsp ──→ rizz_lsp_install
+          │                       │
+          │              rizz_ts_install ───→ rizz_install
+          │                       │
+          └─→ rizz_editor ←───────┘
                   │
-                  ├─→ rizz_lsp ──→ rizz_lsp_install
-                  │                       │
-                  │              rizz_ts_install ───→ rizz_install
-                  │                       │
-                  └─→ rizz_editor ←───────┘
-                          │
-                       rizzler  (binary in src/main.rs)
+               rizzler  (binary in src/main.rs)
 ```
 
 (Arrows point from consumer to dependency.)
@@ -124,7 +124,7 @@ The user-facing surface is in [`crates/rizz_editor/src/lisp/builtins/`](../crate
 
 The submodules under `buffer/` already split it by concern (`cursor.rs`, `edits.rs`, `marks.rs`, `text_object.rs`, `yank.rs`, `lsp.rs`) but share `pub(crate)` access to the same fields.
 
-Buffers are owned by [`BufferList`](../crates/rizz_editor/src/buffer_list.rs) — a `SlotMap` keyed by `BufferId`, with a parallel ordered list of *file* buffers (the minibuffer and panel-backing buffers are not in the file cycle).
+Buffers are owned by [`BufferList`](../crates/rizz_editor/src/buffer_list.rs) — a `SlotMap` keyed by `BufferId`, with a parallel ordered list of _file_ buffers (the minibuffer and panel-backing buffers are not in the file cycle).
 
 ## Rendering
 
@@ -143,7 +143,7 @@ The LSP integration is split between three pieces:
 - [`rizz_lsp_install`](../crates/rizz_lsp_install/) — manifest + cache + shell recipe runner. No runtime knowledge.
 - `State::lang.lsp` (workflow) and `State`'s LSP session fields (in-flight requests, callbacks, pending batches) — editor-side bookkeeping.
 
-The request/response shape mirrors the LSP protocol: `Action::LspHover` etc. *request*, the runtime emits `LspEvent::HoverResponse`, [`State::tick`](../crates/rizz_editor/src/state/lsp_session.rs) drains the events and re-enters `apply` with response Actions like `Action::LspShowHover`. The request side and the response side are different Action variants on purpose — they cross an async boundary.
+The request/response shape mirrors the LSP protocol: `Action::LspHover` etc. _request_, the runtime emits `LspEvent::HoverResponse`, [`State::tick`](../crates/rizz_editor/src/state/lsp_session.rs) drains the events and re-enters `apply` with response Actions like `Action::LspShowHover`. The request side and the response side are different Action variants on purpose — they cross an async boundary.
 
 ## Testing
 
@@ -153,12 +153,12 @@ There are no integration tests of the binary itself; if you need to exercise the
 
 ## Where to look when…
 
-- *Something about a key binding breaks*: [`state/input.rs`](../crates/rizz_editor/src/state/input.rs) + [`crates/rizz_actions/src/keymap`](../crates/rizz_actions/src/keymap/) (the trie + descent), then init.rz for the user-side binding.
-- *A lisp call panics or doesn't see updates*: [`crates/rizz_editor/src/lisp/mod.rs`](../crates/rizz_editor/src/lisp/mod.rs) (the RAII guards) and the relevant builtin in [`builtins/`](../crates/rizz_editor/src/lisp/builtins).
-- *Buffer text math is off*: [`crates/rizz_text/src/buffer/edits.rs`](../crates/rizz_text/src/buffer/edits.rs) for inserts/deletes, [`cursor.rs`](../crates/rizz_text/src/buffer/cursor.rs) for motion, [`wrap.rs`](../crates/rizz_text/src/wrap.rs) for soft-wrap.
-- *Render output looks wrong*: [`state/render.rs`](../crates/rizz_editor/src/state/render.rs) for the precompute pass, [`crates/rizz_ui/src/precompute.rs`](../crates/rizz_ui/src/precompute.rs) for the per-buffer walk, [`crates/rizz_ui/src/render_ratatui.rs`](../crates/rizz_ui/src/render_ratatui.rs) for the terminal-side conversion.
-- *LSP response is dropped*: [`state/lsp_session.rs::handle_lsp_event`](../crates/rizz_editor/src/state/lsp_session.rs) — every `LspEvent` either becomes a response Action or short-circuits with a warn.
-- *A grammar fails to auto-install*: `lang.ts` warn/failed sets clamp retries; clear them via `(grammar-install '<name>)` or `reload-config`.
+- _Something about a key binding breaks_: [`state/input.rs`](../crates/rizz_editor/src/state/input.rs) + [`crates/rizz_actions/src/keymap`](../crates/rizz_actions/src/keymap/) (the trie + descent), then init.rz for the user-side binding.
+- _A lisp call panics or doesn't see updates_: [`crates/rizz_editor/src/lisp/mod.rs`](../crates/rizz_editor/src/lisp/mod.rs) (the RAII guards) and the relevant builtin in [`builtins/`](../crates/rizz_editor/src/lisp/builtins).
+- _Buffer text math is off_: [`crates/rizz_text/src/buffer/edits.rs`](../crates/rizz_text/src/buffer/edits.rs) for inserts/deletes, [`cursor.rs`](../crates/rizz_text/src/buffer/cursor.rs) for motion, [`wrap.rs`](../crates/rizz_text/src/wrap.rs) for soft-wrap.
+- _Render output looks wrong_: [`state/render.rs`](../crates/rizz_editor/src/state/render.rs) for the precompute pass, [`crates/rizz_ui/src/precompute.rs`](../crates/rizz_ui/src/precompute.rs) for the per-buffer walk, [`crates/rizz_ui/src/render_ratatui.rs`](../crates/rizz_ui/src/render_ratatui.rs) for the terminal-side conversion.
+- _LSP response is dropped_: [`state/lsp_session.rs::handle_lsp_event`](../crates/rizz_editor/src/state/lsp_session.rs) — every `LspEvent` either becomes a response Action or short-circuits with a warn.
+- _A grammar fails to auto-install_: `lang.ts` warn/failed sets clamp retries; clear them via `(grammar-install '<name>)` or `reload-config`.
 
 ## Conventions
 

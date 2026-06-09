@@ -123,7 +123,6 @@ impl TsRegistry {
         self.by_ext.len()
     }
 
-
     pub fn is_empty(&self) -> bool {
         self.by_ext.is_empty()
     }

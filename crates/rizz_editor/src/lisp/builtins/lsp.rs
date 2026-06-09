@@ -292,7 +292,7 @@ fn parse_install_opts(v: &Rc<Value>) -> Result<InstallOpts, RuntimeError> {
         _ => {
             return Err(RuntimeError::Other(anyhow!(
                 "lsp-install.opts: expected a map"
-            )))
+            )));
         }
     };
     let mut opts = InstallOpts::default();

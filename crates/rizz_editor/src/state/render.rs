@@ -12,8 +12,7 @@ use rizz::runtime::Value;
 use rizz_core::EditingMode;
 use rizz_text::BufferId;
 use rizz_ui::{
-    StateSnapshot, ThemeCell,
-    precompute,
+    StateSnapshot, ThemeCell, precompute,
     render::{CursorStyle, GutterWidth, RenderedFrame},
 };
 use tracing::{error, instrument, warn};

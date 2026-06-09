@@ -175,12 +175,7 @@ impl Buffer {
     /// pulled out and pushed in. Safe to call before or after the rope
     /// mutation — `at_char`'s byte/point coordinates depend only on the
     /// unchanged prefix.
-    pub(crate) fn record_highlight_edit(
-        &mut self,
-        at_char: usize,
-        removed: &str,
-        inserted: &str,
-    ) {
+    pub(crate) fn record_highlight_edit(&mut self, at_char: usize, removed: &str, inserted: &str) {
         if self.highlight.is_none() {
             return;
         }
@@ -1453,18 +1448,18 @@ mod tests {
     fn replace_backspace_handles_overwrite_then_extension_mix() {
         let mut s = mk("hi");
         s.set_mode(EditingMode::Replace);
-        s.overwrite_char('H');       // overwrite 'h'
-        s.overwrite_char('I');       // overwrite 'i'
-        s.overwrite_char('!');       // extends past EOL
-        s.overwrite_char('?');       // extends further
+        s.overwrite_char('H'); // overwrite 'h'
+        s.overwrite_char('I'); // overwrite 'i'
+        s.overwrite_char('!'); // extends past EOL
+        s.overwrite_char('?'); // extends further
         assert_eq!(s.buf.to_string(), "HI!?");
-        s.replace_backspace();       // deletes '?'
+        s.replace_backspace(); // deletes '?'
         assert_eq!(s.buf.to_string(), "HI!");
-        s.replace_backspace();       // deletes '!'
+        s.replace_backspace(); // deletes '!'
         assert_eq!(s.buf.to_string(), "HI");
-        s.replace_backspace();       // restores 'i'
+        s.replace_backspace(); // restores 'i'
         assert_eq!(s.buf.to_string(), "Hi");
-        s.replace_backspace();       // restores 'h'
+        s.replace_backspace(); // restores 'h'
         assert_eq!(s.buf.to_string(), "hi");
         assert_eq!(cur_col(&s), 0);
     }
@@ -1495,10 +1490,10 @@ mod tests {
         // delta should reflect the final state — not the intermediate one.
         let mut s = mk("abcde");
         s.set_mode(EditingMode::Replace);
-        s.overwrite_char('X');       // replaces 'a' → "Xbcde"
-        s.overwrite_char('Y');       // replaces 'b' → "XYcde"
-        s.replace_backspace();       // restores 'b'  → "Xbcde"
-        s.overwrite_char('Z');       // replaces 'b' → "XZcde"
+        s.overwrite_char('X'); // replaces 'a' → "Xbcde"
+        s.overwrite_char('Y'); // replaces 'b' → "XYcde"
+        s.replace_backspace(); // restores 'b'  → "Xbcde"
+        s.overwrite_char('Z'); // replaces 'b' → "XZcde"
         s.set_mode(EditingMode::Normal); // commits batch
         assert_eq!(s.buf.to_string(), "XZcde");
         // One undo should revert the entire session.

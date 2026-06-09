@@ -365,10 +365,7 @@ impl Panel {
                 placement,
                 show_cursor,
                 ..
-            } => self
-                .widget
-                .as_ref()
-                .map(|w| (placement, w, *show_cursor)),
+            } => self.widget.as_ref().map(|w| (placement, w, *show_cursor)),
             _ => None,
         }
     }

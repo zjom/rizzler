@@ -451,7 +451,11 @@ impl Buffer {
         let line = self.buf.line(abs.row);
         let line_len = line.len_chars();
         let has_trailing_nl = line_len > 0 && line.char(line_len - 1) == '\n';
-        let usable = if has_trailing_nl { line_len - 1 } else { line_len };
+        let usable = if has_trailing_nl {
+            line_len - 1
+        } else {
+            line_len
+        };
         if abs.col >= usable {
             return false;
         }
@@ -498,7 +502,11 @@ impl Buffer {
         let line = self.buf.line(abs.row);
         let line_len = line.len_chars();
         let has_trailing_nl = line_len > 0 && line.char(line_len - 1) == '\n';
-        let usable = if has_trailing_nl { line_len - 1 } else { line_len };
+        let usable = if has_trailing_nl {
+            line_len - 1
+        } else {
+            line_len
+        };
         let cidx = self.buf.line_to_char(abs.row) + abs.col;
 
         let mut new_buf = [0u8; 4];

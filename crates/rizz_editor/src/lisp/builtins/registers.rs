@@ -284,4 +284,3 @@ fn apply_text_object(
     let count = with_editor_mut(|st| st.pending_count_or_one());
     apply(build(object, count))
 }
-

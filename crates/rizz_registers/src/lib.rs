@@ -145,7 +145,12 @@ impl Registers {
     /// * the explicit target `name` if given (`A`-`Z` appends).
     ///
     /// `name == Some('_')` discards the text entirely (black-hole).
-    pub fn record_yank(&mut self, text: impl Into<Rc<str>>, kind: RegisterKind, name: Option<char>) {
+    pub fn record_yank(
+        &mut self,
+        text: impl Into<Rc<str>>,
+        kind: RegisterKind,
+        name: Option<char>,
+    ) {
         let text: Rc<str> = text.into();
         if matches!(name, Some(BLACK_HOLE)) {
             return;

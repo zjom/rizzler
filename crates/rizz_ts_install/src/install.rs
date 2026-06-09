@@ -56,10 +56,7 @@ struct Resolved {
 
 fn resolve(name: &str, opts: &InstallOpts, manifest: &Manifest) -> Result<Resolved, InstallError> {
     let entry = manifest.get(name);
-    let repo = opts
-        .repo
-        .clone()
-        .or_else(|| entry.map(|e| e.repo.clone()));
+    let repo = opts.repo.clone().or_else(|| entry.map(|e| e.repo.clone()));
     let path = opts.path.clone();
     if repo.is_none() && path.is_none() {
         return Err(InstallError::UnknownGrammar {
@@ -300,11 +297,7 @@ fn sync_clone(src: &Path, resolved: &Resolved, force: bool) -> Result<String, In
 
     if let Some(rev) = &resolved.rev {
         let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(src)
-            .arg("reset")
-            .arg("--hard")
-            .arg(rev);
+        cmd.arg("-C").arg(src).arg("reset").arg("--hard").arg(rev);
         let out = run_capture(&mut cmd, "git")?;
         if !out.status.success() {
             return Err(InstallError::Git {

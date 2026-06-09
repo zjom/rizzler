@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
-    #[error("grammar `{name}` is not in the manifest — add an entry to grammars.toml or pass {{\"path\": …}} / {{\"repo\": …}}")]
+    #[error(
+        "grammar `{name}` is not in the manifest — add an entry to grammars.toml or pass {{\"path\": …}} / {{\"repo\": …}}"
+    )]
     UnknownGrammar { name: String },
 
     #[error("manifest at {path} could not be parsed: {source}")]
@@ -36,7 +38,9 @@ pub enum InstallError {
         stderr: String,
     },
 
-    #[error("highlights query not found at {path} — pass {{\"queries\": …}} to point at the right file")]
+    #[error(
+        "highlights query not found at {path} — pass {{\"queries\": …}} to point at the right file"
+    )]
     MissingHighlights { path: PathBuf },
 
     #[error("io error at {path}: {source}")]

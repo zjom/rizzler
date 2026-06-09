@@ -42,12 +42,11 @@ pub struct Manifest {
 
 impl Manifest {
     pub fn parse(toml_text: &str) -> Result<Self, InstallError> {
-        let entries: HashMap<String, GrammarSpec> = toml::from_str(toml_text).map_err(|e| {
-            InstallError::Manifest {
+        let entries: HashMap<String, GrammarSpec> =
+            toml::from_str(toml_text).map_err(|e| InstallError::Manifest {
                 path: std::path::PathBuf::from("<manifest>"),
                 source: e,
-            }
-        })?;
+            })?;
         let mut by_ext = HashMap::new();
         for (name, spec) in &entries {
             for ext in &spec.extensions {

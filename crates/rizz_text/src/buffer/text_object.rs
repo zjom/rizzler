@@ -238,12 +238,7 @@ fn pair_range(
 /// Find the innermost `(open, close)` pair that *encloses* `cidx`. If
 /// `cidx` itself sits on `open`/`close`, that bracket is used as the
 /// matching endpoint.
-fn enclosing_pair(
-    rope: &Rope,
-    cidx: usize,
-    open: char,
-    close: char,
-) -> Option<(usize, usize)> {
+fn enclosing_pair(rope: &Rope, cidx: usize, open: char, close: char) -> Option<(usize, usize)> {
     let len = rope.len_chars();
     if cidx >= len {
         return None;

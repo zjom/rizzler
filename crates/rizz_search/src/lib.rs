@@ -213,13 +213,25 @@ where
         let dest = match dir {
             SearchDir::Forward => matches
                 .iter()
-                .find(|(s, _)| if inclusive { *s >= from_char } else { *s > from_char })
+                .find(|(s, _)| {
+                    if inclusive {
+                        *s >= from_char
+                    } else {
+                        *s > from_char
+                    }
+                })
                 .map(|m| m.0)
                 .or_else(|| matches.first().map(|m| m.0)),
             SearchDir::Backward => matches
                 .iter()
                 .rev()
-                .find(|(s, _)| if inclusive { *s <= from_char } else { *s < from_char })
+                .find(|(s, _)| {
+                    if inclusive {
+                        *s <= from_char
+                    } else {
+                        *s < from_char
+                    }
+                })
                 .map(|m| m.0)
                 .or_else(|| matches.last().map(|m| m.0)),
         };
@@ -299,8 +311,8 @@ pub fn repeat_search<H: SearchHost + ?Sized>(host: &mut H, dir: SearchDir) {
         None => return,
     };
     // Advance past the current match — vim's `n`/`N` semantic.
-    let found = run_search_from(host, pattern.as_ref(), dir, cursor_char, false, true)
-        .unwrap_or(false);
+    let found =
+        run_search_from(host, pattern.as_ref(), dir, cursor_char, false, true).unwrap_or(false);
     if found && let Some(b) = host.buf_mut(target_id) {
         b.move_cursor(MoveKind::Center);
     }
@@ -356,9 +368,7 @@ pub fn clear_live_overlays<H: SearchHost + ?Sized>(host: &mut H) {
         .unwrap_or_else(|| host.focused_buf_id());
     match host.search_and_buf_mut(prefer_id) {
         Some((search, prefer)) => {
-            clear_overlays(search, Some(prefer), |bid, ov| {
-                other_clears.push((bid, ov))
-            });
+            clear_overlays(search, Some(prefer), |bid, ov| other_clears.push((bid, ov)));
         }
         None => {
             clear_overlays(host.search_mut(), None, |bid, ov| {

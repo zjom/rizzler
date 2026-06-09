@@ -140,7 +140,8 @@ example:
         "popup-mode",
         0,
         |_, _| {
-            let v = with_editor_mut(|st| st.top_popup_mode().map(Value::Str).unwrap_or(Value::Unit));
+            let v =
+                with_editor_mut(|st| st.top_popup_mode().map(Value::Str).unwrap_or(Value::Unit));
             Ok(Rc::new(v))
         },
         r#"(popup-mode/0)

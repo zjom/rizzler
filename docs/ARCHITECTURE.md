@@ -70,7 +70,7 @@ There are ~15 workspace crates. The dependency tree is shallow and acyclic, with
 rizz_input             rizz_text ──→ rizz_changetree   rizz_registers
     │                  rizz_text ──→ rizz_ts ──→ libloading
     │                      │                                │
-    │                  rizz_search                           │
+    │                  rizz_search                          │
     │                      │                                │
     └─→ rizz_ui ←──────────┘                                │
           ▲                                                 │
@@ -167,9 +167,3 @@ There are no integration tests of the binary itself; if you need to exercise the
 - New `Action` variants live in [`rizz_actions/src/action.rs`](../crates/rizz_actions/src/action.rs) with a doc comment that names the Vim/Emacs analogue when there is one.
 - Tests for `State`-level behaviour live in [`crates/rizz_editor/src/state/tests.rs`](../crates/rizz_editor/src/state/tests.rs).
 - The codebase intentionally has no `unsafe` outside the thread-local lisp bridge — see [`with_editor_mut`](../crates/rizz_editor/src/lisp/mod.rs) for the load-bearing safety comment.
-
-## Historical notes
-
-- `state.rs` used to be a single 3,300-line file. PR 9233880 split it across `state/{mod,buffers,surface,input,render,scripting,workspace,lang,lsp_session,apply,tests}.rs` along the concerns above.
-- `rizz_ts_install` and `rizz_lsp_install` used to be ~75% duplicated. PR 20abd84 extracted shared `Manifest<S>`, cache primitives, and `LanguageBackend<S>` into `rizz_install`.
-- `State` used to hold 10 mirror fields for grammar / LSP install state. PR 7d8a70b collapsed them into a single `lang: LangIntegration` holding two `LanguageBackend` instances.

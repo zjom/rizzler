@@ -39,6 +39,9 @@
 # `git` and the `tree-sitter` CLI must be on $PATH. Artefacts cache to
 # $XDG_DATA_HOME/rizz/grammars/<name>/.
 # =============================================================================
+[rizz]
+repo = "https://github.com/zjom/tree-sitter-rizz"
+extensions = ["rz"]
 
 [rust]
 repo = "https://github.com/tree-sitter/tree-sitter-rust"

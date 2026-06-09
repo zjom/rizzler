@@ -26,6 +26,11 @@ pub(super) fn register(b: &mut Builtins) {
         Ok(Rc::new(s.into()))
     });
 
+    b.be("buf-nlines", 0, |_, _| {
+        let n = with_editor_mut(|st| st.focused_buf().len_lines() as i64);
+        Ok(Rc::new(n.into()))
+    });
+
     b.be("buf-no", 0, |_, _| {
         let id = with_editor_mut(|st| st.focused_buf_id());
         Ok(Rc::new(Value::Int(buf_id_to_int(id))))

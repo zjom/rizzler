@@ -27,7 +27,9 @@ use rizz_text::{
 };
 use slotmap::{SecondaryMap, SlotMap};
 
-use crate::render::{DecoratorRanges, RenderedBuffer, RenderedFrame, RenderedGutter, StyledRange};
+use crate::render::{
+    DecoratorRanges, GutterWidth, RenderedBuffer, RenderedFrame, RenderedGutter, StyledRange,
+};
 use crate::styling::{Color, Style, Theme, ThemeCell, spans_from_value, style_from_value};
 use crate::widget::{Widget, parse_widget};
 use crate::window::WindowTree;
@@ -45,11 +47,11 @@ pub struct PrecomputeInput<'a> {
     /// File buffers (the ones the user can cycle through with `:bn`/`:bp`).
     /// Only these get a gutter; popup-backing buffers don't.
     pub file_bufs: &'a [BufferId],
-    /// Gutter render fn + cell width. `None` means "no gutter" — file buffers
-    /// render without one. Set per-frame from State so a `set-gutter` lisp
-    /// call takes effect the next render.
+    /// Gutter render fn + width policy. `gutter = None` means "no gutter" —
+    /// file buffers render without one. Set per-frame from State so a
+    /// `set-gutter` lisp call takes effect the next render.
     pub gutter: Option<&'a Rc<Value>>,
-    pub gutter_width: u16,
+    pub gutter_width: GutterWidth,
     pub lisp_env: &'a Env,
 }
 
@@ -100,7 +102,7 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
         let is_file = file_bufs.contains(&id);
         let is_minibuffer = id == minibuffer;
 
-        if is_file && gutter_width > 0 {
+        if is_file && gutter.is_some() && !matches!(gutter_width, GutterWidth::Fixed(0)) {
             let g = build_gutter(buf, gutter_width, gutter, &theme_snap, lisp_env);
             match g {
                 Ok(g) => rb.gutter = Some(g),
@@ -184,16 +186,18 @@ fn default_layout() -> Widget {
 
 fn build_gutter(
     buf: &Buffer,
-    width: u16,
+    width: GutterWidth,
     gutter_fn: Option<&Rc<Value>>,
     theme: &Theme,
     env: &Env,
 ) -> Result<RenderedGutter, String> {
+    use unicode_width::UnicodeWidthStr;
+
     let start = buf.file_pos().row.min(buf.len_lines());
     let visible = buf.viewport.row as usize;
     let last = buf.len_lines().saturating_sub(1);
 
-    let mut rows = Vec::with_capacity(visible);
+    let mut raw: Vec<(Vec<Span<'static>>, usize)> = Vec::with_capacity(visible);
     for r in 0..visible {
         let lnum = start + r;
         let lnum_arg: Rc<Value> = if lnum <= last {
@@ -206,17 +210,34 @@ fn build_gutter(
             None => Rc::new(Value::Unit),
         };
         let spans = spans_from_value(&v, theme).map_err(|e| e.to_string())?;
-        rows.push(pad_line_to_width(spans, width));
+        let used: usize = spans
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+            .sum();
+        raw.push((spans, used));
     }
-    Ok(RenderedGutter { width, rows })
+
+    let resolved: u16 = match width {
+        GutterWidth::Fixed(n) => n,
+        GutterWidth::Fit => raw
+            .iter()
+            .map(|(_, used)| *used)
+            .max()
+            .unwrap_or(0)
+            .min(u16::MAX as usize) as u16,
+    };
+
+    let rows = raw
+        .into_iter()
+        .map(|(spans, used)| pad_line_to_width(spans, used, resolved))
+        .collect();
+    Ok(RenderedGutter {
+        width: resolved,
+        rows,
+    })
 }
 
-fn pad_line_to_width(spans: Vec<Span<'static>>, width: u16) -> Line<'static> {
-    use unicode_width::UnicodeWidthStr;
-    let used: usize = spans
-        .iter()
-        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-        .sum();
+fn pad_line_to_width(spans: Vec<Span<'static>>, used: usize, width: u16) -> Line<'static> {
     let mut spans = spans;
     if (width as usize) > used {
         spans.push(Span::raw(" ".repeat(width as usize - used)));

@@ -100,11 +100,31 @@ pub struct RenderedBuffer {
 }
 
 pub struct RenderedGutter {
-    /// Fixed column width registered with the gutter.
+    /// Resolved column width — what the renderer reserves on the left of the
+    /// buffer view. For [`GutterWidth::Fixed`] this matches the configured
+    /// value; for [`GutterWidth::Fit`] it's the measured max across `rows`.
     pub width: u16,
     /// One [`Line`] per visible row of the buffer's viewport. Already
     /// padded to `width`.
     pub rows: Vec<Line<'static>>,
+}
+
+/// How wide the gutter column should be.
+///
+/// `Fit` (the default) measures the widest row the gutter fn returns this
+/// frame and uses that — the gutter shrinks/grows with its content.
+/// `Fixed(n)` reserves exactly `n` cells regardless of content. `Fixed(0)`
+/// disables the gutter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GutterWidth {
+    Fit,
+    Fixed(u16),
+}
+
+impl Default for GutterWidth {
+    fn default() -> Self {
+        GutterWidth::Fit
+    }
 }
 
 /// Whole-buffer decorator output: a flat list of styled character ranges

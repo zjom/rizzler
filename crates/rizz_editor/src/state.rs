@@ -30,7 +30,7 @@ use rizz_ui::{
     RatatuiRenderer, Renderer, StateSnapshot, ThemeCell, Widget, WindowTree,
     panel::{Panel, PanelKind, PanelStack, Placement},
     precompute,
-    render::{CursorStyle, RenderedFrame},
+    render::{CursorStyle, GutterWidth, RenderedFrame},
 };
 
 use crate::buffer_list::{BufferList, CycleDir};
@@ -130,11 +130,12 @@ pub struct State {
     theme: ThemeCell,
     /// Lisp callable that builds the frame's widget tree each render.
     frame_fn: Option<Rc<Value>>,
-    /// Lisp callable + width that renders the per-row gutter for every file
-    /// buffer. `None` = no gutter. Set by the lisp `set-gutter` builtin and
-    /// consumed by the precompute pass.
+    /// Lisp callable + width policy that renders the per-row gutter for every
+    /// file buffer. `gutter_fn = None` = no gutter. Set by the lisp
+    /// `set-gutter` builtin and consumed by the precompute pass. Width
+    /// defaults to [`GutterWidth::Fit`].
     gutter_fn: Option<Rc<Value>>,
-    gutter_width: u16,
+    gutter_width: GutterWidth,
     workdir: Rc<Path>,
     /// Directory holding `init.rz`. Stored so `reload-config` (and any
     /// future config-path query from lisp) can locate the script after init.
@@ -297,7 +298,7 @@ impl State {
             theme: ThemeCell::default(),
             frame_fn: None,
             gutter_fn: None,
-            gutter_width: 0,
+            gutter_width: GutterWidth::Fit,
             workdir: workdir.into(),
             config_dir: config_dir.into(),
             ts_registry: TsRegistry::new(),
@@ -459,10 +460,11 @@ impl State {
         self.frame_fn.as_ref()
     }
 
-    /// Install the per-frame gutter callback. `width` is the column count
-    /// reserved on the left of every file buffer; pass `None` for `f` to
-    /// disable the gutter entirely (`width` is then ignored).
-    pub fn set_gutter(&mut self, f: Option<Rc<Value>>, width: u16) {
+    /// Install the per-frame gutter callback. `width` is the column policy
+    /// reserved on the left of every file buffer ([`GutterWidth::Fit`] sizes
+    /// to the widest row, [`GutterWidth::Fixed`] reserves a constant count);
+    /// pass `None` for `f` to disable the gutter entirely.
+    pub fn set_gutter(&mut self, f: Option<Rc<Value>>, width: GutterWidth) {
         self.gutter_fn = f;
         self.gutter_width = width;
     }
@@ -471,7 +473,7 @@ impl State {
         self.gutter_fn.as_ref()
     }
 
-    pub fn gutter_width(&self) -> u16 {
+    pub fn gutter_width(&self) -> GutterWidth {
         self.gutter_width
     }
 

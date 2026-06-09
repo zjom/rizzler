@@ -815,14 +815,23 @@
         (str-join [s (str-join (fmap (fn _spc (_) " ") (range 0 pad)) "")] "")
         s)))
 
+(fn _pad-left (s w)
+  (do
+    (let pad (- w (len s)))
+    (if (> pad 0)
+        (str-join [(str-join (fmap (fn _spc (_) " ") (range 0 pad)) "") s] "")
+        s)))
+
 (fn _gutter (n)
-  (if (= n ())
-      (w-span "     " "vague.gutter")
-      (if (= n (cursor-line))
-          (w-span (_pad-right (str-join ["▎ " (to-str n)] "") 5)
-                  "vague.gutter-current")
-          (w-span (_pad-right (str-join ["│ " (to-str n)] "") 5)
-                  "vague.gutter"))))
+  (do
+    (let w (len (to-str (buf-nlines))))
+    (if (= n ())
+        (w-span "     " "vague.gutter")
+        (if (= n (cursor-line))
+            (w-span (str-join ["▎ " (_pad-left (to-str n) w) "  "] "")
+                    "vague.gutter-current")
+            (w-span (str-join ["│ " (_pad-left (to-str n) w) "  "] "")
+                    "vague.gutter")))))
 
 ;; ----- status line ----------------------------------------------------
 ;; The status line is an hstack with a `fill` spacer between the left and
@@ -1119,7 +1128,7 @@
      (_selection-badge)]))
 
 (set-frame _frame)
-(set-gutter _gutter 5)
+(set-gutter _gutter 'fit)
 
 
 ;; ============================================================================

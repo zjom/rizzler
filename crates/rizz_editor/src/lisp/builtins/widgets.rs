@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use im::{HashMap as ImHashMap, Vector};
 use rizz::runtime::{RuntimeError, Value};
+use rizz_ui::render::GutterWidth;
 use rizz_ui::styling::normalize_style_value;
 
 use super::super::helpers::{Builtins, as_ident_or_str, as_int, as_str, unit};
@@ -326,16 +327,7 @@ example:
         2,
         |args, _| {
             let f = args[0].clone();
-            let width = match args[1].as_int() {
-                Some(n) => n.max(0).min(u16::MAX as i64) as u16,
-                None => {
-                    return Err(RuntimeError::type_mismatch(
-                        "set-gutter.width",
-                        "int",
-                        &args[1],
-                    ));
-                }
-            };
+            let width = parse_gutter_width(&args[1])?;
             let fn_opt = if f.is_unit() { None } else { Some(f) };
             with_editor_mut(|st| st.set_gutter(fn_opt, width));
             Ok(unit())
@@ -343,16 +335,19 @@ example:
         r#"(set-gutter/2)
 install the per-row gutter callback used by every file buffer. fn is called
 once per visible row with either the file row number (int) or () for rows
-past EOF; it must return a widget — typically (w-text ...). width is the
-number of columns reserved for the gutter on the left of the buffer view.
+past EOF; it must return a widget — typically (w-text ...). width controls
+how many columns are reserved on the left of the buffer view:
+  'fit | ()   — size to the widest row the fn returns this frame (default)
+  <int>       — reserve exactly N columns (0 disables)
 pass () for fn to disable the gutter entirely.
 example:
   (fn _gutter (n)
     (if (= n ())
         (w-text "     " "vague.gutter")
         (w-text (str-join [" " (to-str n) " "] "") "vague.gutter")))
-  (set-gutter _gutter 5)
-  (set-gutter () 0)   ; disable"#,
+  (set-gutter _gutter 'fit)   ; shrinks/grows with content
+  (set-gutter _gutter 5)      ; fixed 5-column gutter
+  (set-gutter () 0)           ; disable"#,
     );
 
     b.be_doc(
@@ -505,6 +500,22 @@ example:
 
 fn strkey(s: &str) -> Rc<Value> {
     Rc::new(Value::Str(s.into()))
+}
+
+fn parse_gutter_width(v: &Rc<Value>) -> Result<GutterWidth, RuntimeError> {
+    match &**v {
+        Value::Unit => Ok(GutterWidth::Fit),
+        Value::Ident(s) | Value::Str(s) if s.as_ref() == "fit" => Ok(GutterWidth::Fit),
+        Value::Int(n) => {
+            let n = (*n).max(0).min(u16::MAX as i64) as u16;
+            Ok(GutterWidth::Fixed(n))
+        }
+        _ => Err(RuntimeError::type_mismatch(
+            "set-gutter.width",
+            "int | 'fit | ()",
+            v,
+        )),
+    }
 }
 
 fn value_iter(v: &Rc<Value>) -> Box<dyn Iterator<Item = Rc<Value>> + '_> {

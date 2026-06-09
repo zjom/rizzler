@@ -366,7 +366,7 @@ example:
         r#"(w-minibuffer/0)
 the single-row minibuffer leaf widget. put it somewhere in your frame tree
 (typically the bottom row of an outer (w-vstack ...)) so command-mode input
-and notifications have a place to render.
+has a place to render.
 example:
   (w-vstack [(w-min-cells 1 (w-editor-tree))
              (w-cells 1 (w-minibuffer))])"#,

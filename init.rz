@@ -603,39 +603,44 @@
 (map 'command "<c-y>" '(_menu-accept))
 
 ;; ============================================================================
-;;  Vague — bundled default theme (ported from vague.nvim)
+;;  Colorscheme (ported from [vague.nvim])
 ;; ============================================================================
 ;;
-;;  The theme is just rizz code: a palette (let-bindings of named colors), a
+;;  The colorscheme is just rizz code: a palette (let-bindings of named colors), a
 ;;  pile of `face-define` calls that name visual styles, and a few helper
 ;;  functions that build widgets for the gutter and status line. Nothing
 ;;  here is privileged — replace any of it and the editor will pick up your
 ;;  version on the next render.
 ;;
 ;;  The frame layout is described as a single widget tree returned by the fn
-;;  passed to `(set-frame ...)`. The tree primitives are:
+;;  passed to `(set-frame ...)`.
+;;
+;;  The tree primitives are:
 ;;
 ;;    (w-vstack [...]) / (w-hstack [...])      — stack children with constraints
-;;    (w-size kind N child)               — child constraint inside a stack
-;;                                          kind is 'cells / 'min / 'fill /
-;;                                          'frac (frac takes one extra arg
-;;                                          for the denominator)
-;;    (w-line [span ...])                — single screen row
-;;    (w-span "..." 'face)               — shorthand for one span
-;;    (w-block {props} child)            — bordered/titled box
-;;    (w-overlay placement child)        — non-focusable floating overlay
-;;    (w-buffer-view BUFID)              — render a specific buffer
-;;    (w-popup-self)                     — inside a popup: the popup's own buf
-;;    (w-editor-tree)                    — the editor window tree leaf
-;;    (w-minibuffer)                     — the minibuffer leaf
+;;    (w-size kind N child)                    — child constraint inside a stack
+;;                                               `kind` is one of:
+;;                                                  - 'cells
+;;                                                  - 'min
+;;                                                  - 'fill
+;;                                                  - 'frac    (frac takes one extra arg for the denominator.
+;;                                                               e.g. `(w-size 'frac N M child)`)
+;;    (w-line [span ...])                      — single screen row
+;;    (w-span "..." 'face)                     — shorthand for one span
+;;    (w-block {props} child)                  — bordered/titled box
+;;    (w-overlay placement child)              — non-focusable floating overlay
+;;    (w-buffer-view BUFID)                    — render a specific buffer
+;;    (w-popup-self)                           — inside a popup: the popup's own buf
+;;    (w-editor-tree)                          — the editor window tree leaf
+;;    (w-minibuffer)                           — the minibuffer leaf
 ;;
-;;  placement values are either 'centered / 'full, or any of the constructor
-;;  fns: (placement-centered W H), (placement-anchored SIDE SIZE),
-;;  (placement-at X Y W H).
+;;  placement values are either `'centered` / `'full`, or any of the constructor
+;;  fns: `(placement-centered W H)`, `(placement-anchored SIDE SIZE)`,
+;;  `(placement-at X Y W H)`.
 ;;
-;;  Faces, text properties, and overlays are unchanged from before.
+;;
+;; [vague.nvim]: (https://github.com/vague-theme/vague.nvim)
 ;; ============================================================================
-
 
 ;; Port of the Vague palette.
 ;;
@@ -672,19 +677,19 @@
 ;;
 ;; The renderer looks up `default`, `selection`, `cursor-line` directly —
 ;; redefining these here drives the always-on built-in decorator passes.
-(face-define 'default                  {"fg": pal-fg "bg": pal-bg})
+(face-define 'default                  {"fg": pal-fg            "bg": pal-bg})
 (face-define 'selection                {"bg": pal-visual})
-(face-define 'cursor-line              {"bg": pal-line "fg": pal-fg})
-(face-define "vague.muted"             {"fg": pal-comment "italic": 1})
-(face-define "vague.accent"            {"fg": pal-constant "bold": 1})
-(face-define "vague.error"             {"fg": pal-error    "bold": 1 "underline": 1})
-(face-define "vague.warn"              {"fg": pal-warning  "bold": 1})
-(face-define "vague.mode.normal"       {"fg": pal-keyword   "bold": 1})
-(face-define "vague.mode.insert"       {"fg": pal-warning   "bold": 1})
-(face-define "vague.mode.visual"       {"fg": pal-parameter "bold": 1})
-(face-define "vague.mode.visual-line"  {"fg": pal-parameter "bold": 1 "italic": 1})
-(face-define "vague.mode.visual-block" {"fg": pal-parameter "bold": 1 "underline": 1})
-(face-define "vague.mode.command"      {"fg": pal-hint      "bold": 1})
+(face-define 'cursor-line              {"bg": pal-line          "fg": pal-fg})
+(face-define "vague.muted"             {"fg": pal-comment   "italic": 1})
+(face-define "vague.accent"            {"fg": pal-constant    "bold": 1})
+(face-define "vague.error"             {"fg": pal-error       "bold": 1 "underline": 1})
+(face-define "vague.warn"              {"fg": pal-warning     "bold": 1})
+(face-define "vague.mode.normal"       {"fg": pal-keyword     "bold": 1})
+(face-define "vague.mode.insert"       {"fg": pal-warning     "bold": 1})
+(face-define "vague.mode.visual"       {"fg": pal-parameter   "bold": 1})
+(face-define "vague.mode.visual-line"  {"fg": pal-parameter   "bold": 1 "italic": 1})
+(face-define "vague.mode.visual-block" {"fg": pal-parameter   "bold": 1 "underline": 1})
+(face-define "vague.mode.command"      {"fg": pal-hint        "bold": 1})
 
 ;; dim for the rest of the buffer, fg for the active row.
 (face-define "vague.gutter"          {"fg": pal-comment})
@@ -707,7 +712,7 @@
 ;;
 ;; TODO: register your own tree-sitter grammar with `(grammar-register …)`
 ;; — see `(show grammar-register)` from command mode for the full signature.
-(face-define "syntax.keyword"      {"fg": pal-keyword   "bold": 1})
+(face-define "syntax.keyword"      {"fg": pal-keyword     "bold": 1})
 (face-define "syntax.string"       {"fg": pal-string    "italic": 1})
 (face-define "syntax.escape"       {"fg": pal-keyword})
 (face-define "syntax.number"       {"fg": pal-number})

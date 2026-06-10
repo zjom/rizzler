@@ -6,6 +6,7 @@
 - [ ] named mutable widgets
 - [ ] lspconfig
 - [ ] add (non-lsp) formatter support
+- [ ] shiftwidth/ expandtab/ tab-width config
 - [ ] add `<<` and `>>` like vim
 - [ ] highlight matching pair (parens, brackets, etc)
 - [ ] picker (telescope like)

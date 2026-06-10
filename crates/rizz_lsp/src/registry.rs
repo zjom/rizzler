@@ -53,7 +53,7 @@ impl LspRegistry {
         runtime().send_cmd(RuntimeCmd::SpawnClient {
             name: name.to_string(),
             binary,
-            spec,
+            spec: Box::new(spec),
             root_uri,
             reply: reply_tx,
         });

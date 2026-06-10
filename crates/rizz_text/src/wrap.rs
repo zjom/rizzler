@@ -34,7 +34,7 @@ impl WrapMode {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         Some(match s {
             "none" | "off" => WrapMode::None,
             "char" => WrapMode::Char,

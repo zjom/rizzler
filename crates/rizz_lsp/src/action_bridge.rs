@@ -24,13 +24,6 @@ fn pos_owned(rope: &Rope, p: lsp_types::Position, enc: Encoding) -> Position<usi
     Position::new(col, row)
 }
 
-fn range_owned(rope: &Rope, r: lsp_types::Range, enc: Encoding) -> RangeOwned {
-    RangeOwned {
-        start: pos_owned(rope, r.start, enc),
-        end: pos_owned(rope, r.end, enc),
-    }
-}
-
 pub fn diagnostic_owned(rope: &Rope, d: &Diagnostic, enc: Encoding) -> LspDiagnostic {
     let severity = match d.severity {
         Some(lsp_types::DiagnosticSeverity::ERROR) => Severity::Error,

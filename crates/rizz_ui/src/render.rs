@@ -85,16 +85,11 @@ pub struct RenderedGutter {
 
 /// `Fit` measures the widest row the gutter fn returns this frame.
 /// `Fixed(n)` reserves exactly `n` cells. `Fixed(0)` disables the gutter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GutterWidth {
+    #[default]
     Fit,
     Fixed(u16),
-}
-
-impl Default for GutterWidth {
-    fn default() -> Self {
-        GutterWidth::Fit
-    }
 }
 
 /// Styled character ranges applied after a buffer's base line content.

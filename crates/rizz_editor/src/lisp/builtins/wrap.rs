@@ -16,7 +16,7 @@ pub(super) fn register(b: &mut Builtins) {
             if let Some(arg) = args.first() {
                 let sym = as_ident_or_str(arg, "buffer-wrap")?;
                 let m =
-                    WrapMode::from_str(&sym).ok_or_else(|| unknown_variant("buffer-wrap", &sym))?;
+                    WrapMode::parse(&sym).ok_or_else(|| unknown_variant("buffer-wrap", &sym))?;
                 with_editor_mut(|st| st.focused_buf_mut().set_wrap_mode(m));
                 Ok(unit())
             } else {

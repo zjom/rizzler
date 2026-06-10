@@ -16,7 +16,7 @@ use lsp_types::{
     ClientCapabilities, ClientInfo, CompletionClientCapabilities, CompletionItemCapability,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     FormattingOptions, GeneralClientCapabilities, HoverClientCapabilities, HoverContents,
-    HoverParams, InitializeParams, InitializedParams, MarkedString, MarkupKind, MessageType,
+    HoverParams, InitializeParams, InitializedParams, MarkedString, MarkupKind,
     PartialResultParams, PositionEncodingKind, PublishDiagnosticsClientCapabilities,
     PublishDiagnosticsParams, ServerCapabilities, TextDocumentClientCapabilities,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
@@ -196,6 +196,7 @@ where
     W: AsyncWrite + Unpin,
 {
     let root_uri_parsed = root_uri.as_deref().and_then(|s| s.parse::<Uri>().ok());
+    #[allow(deprecated)] // `root_uri` is still honored by many servers; harmless to set.
     let params = InitializeParams {
         process_id: Some(std::process::id()),
         root_uri: root_uri_parsed,
@@ -350,7 +351,7 @@ where
                 let now = tokio::time::Instant::now();
                 if matches!(cmd, ClientCmd::Shutdown) {
                     flush_changes(&mut ctx, &mut pending_changes).await;
-                    let id = next_id; next_id += 1;
+                    let id = next_id;
                     pending.by_lsp_id.insert(id, PendingKind::Shutdown);
                     let req = OutgoingRequest::new(
                         RequestId::number(id), Shutdown::METHOD, Value::Null,

@@ -77,15 +77,15 @@ pub fn install(
 ) -> Result<InstalledServer, InstallError> {
     let spec = resolve(name, opts, manifest)?;
 
-    if !opts.force {
-        if let Some(binary) = which::which(&spec.command).ok() {
-            debug!(name, ?binary, "found on PATH");
-            return Ok(InstalledServer {
-                name: name.to_string(),
-                binary,
-                spec,
-            });
-        }
+    if !opts.force
+        && let Ok(binary) = which::which(&spec.command)
+    {
+        debug!(name, ?binary, "found on PATH");
+        return Ok(InstalledServer {
+            name: name.to_string(),
+            binary,
+            spec,
+        });
     }
 
     let cache_root = cache::cache_root();

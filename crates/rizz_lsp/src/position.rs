@@ -106,12 +106,10 @@ pub fn lsp_to_byte(rope: &Rope, pos: Position, encoding: Encoding) -> (usize, us
             }
         }
         Encoding::Utf32 => {
-            let mut units = 0usize;
-            for ch in line.chars() {
+            for (units, ch) in line.chars().enumerate() {
                 if units >= target {
                     break;
                 }
-                units += 1;
                 byte += ch.len_utf8();
             }
         }

@@ -95,7 +95,7 @@ async fn dispatcher(cmd_rx: Receiver<RuntimeCmd>, events_tx: Sender<LspEvent>) {
                 next_client_id += 1;
                 let events_tx = events_tx.clone();
                 let spawn_res =
-                    client::spawn(id, name.clone(), &binary, spec, root_uri, events_tx).await;
+                    client::spawn(id, name.clone(), &binary, *spec, root_uri, events_tx).await;
                 match spawn_res {
                     Ok(handle) => {
                         let encoding = handle.encoding;

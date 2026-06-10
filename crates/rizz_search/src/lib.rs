@@ -155,6 +155,7 @@ where
 /// else the first match strictly after; backward is the symmetric case.
 /// Wrap is unconditional — vim does the same and surfaces "search hit
 /// BOTTOM/TOP" as a notice we elide for now.
+#[allow(clippy::too_many_arguments)]
 pub fn run<F>(
     search: &mut Search,
     target_buf: &mut Buffer,

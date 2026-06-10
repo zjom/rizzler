@@ -406,7 +406,7 @@ impl Clone for Buffer {
             selection_anchor: self.selection_anchor,
             goal_col: self.goal_col,
             props: self.props.clone(),
-            wrap: self.wrap.clone(),
+            wrap: self.wrap,
             wrap_cache: self.wrap_cache.clone(),
             changetree: self.changetree.clone(),
             insert_batch_end: self.insert_batch_end,

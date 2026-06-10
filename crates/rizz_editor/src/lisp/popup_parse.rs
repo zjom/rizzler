@@ -46,7 +46,7 @@ pub(super) fn parse_popup_options(v: &Rc<Value>, spec: &mut PopupSpec) -> Result
     }
     if let Some(sc) = m.get(&key("wrap-mode")) {
         spec.wrap_mode =
-            WrapMode::from_str(&as_ident_or_str(sc, "popup-show.wrap-mode")?).unwrap_or_default();
+            WrapMode::parse(&as_ident_or_str(sc, "popup-show.wrap-mode")?).unwrap_or_default();
     }
     if let Some(sc) = m.get(&key("wrap-column")) {
         spec.wrap_column = Some(as_int(sc, "popup-show.wrap-column")?.max(0) as u16);

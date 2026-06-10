@@ -572,7 +572,7 @@ impl Buffer {
         let s = line_start + abs.col;
         let e = s + take;
         let removed = self.buf.slice(s..e).to_string();
-        let inserted: String = std::iter::repeat(c).take(take).collect();
+        let inserted: String = std::iter::repeat_n(c, take).collect();
         let abs_before = abs;
 
         self.buf.remove(s..e);

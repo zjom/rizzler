@@ -366,6 +366,7 @@ fn walk_editor_tree(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_overlay<'fr>(
     panel: &'fr Panel,
     area: Rect,

@@ -80,8 +80,6 @@ pub struct ResponseError {
 #[serde(untagged)]
 pub enum IncomingMessage {
     Response {
-        #[serde(default)]
-        jsonrpc: Option<String>,
         id: RequestId,
         #[serde(default)]
         result: Option<Value>,
@@ -89,16 +87,12 @@ pub enum IncomingMessage {
         error: Option<ResponseError>,
     },
     Request {
-        #[serde(default)]
-        jsonrpc: Option<String>,
         id: RequestId,
         method: String,
         #[serde(default)]
         params: Value,
     },
     Notification {
-        #[serde(default)]
-        jsonrpc: Option<String>,
         method: String,
         #[serde(default)]
         params: Value,

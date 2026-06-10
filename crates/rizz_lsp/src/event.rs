@@ -27,7 +27,7 @@ pub enum RuntimeCmd {
     SpawnClient {
         name: String,
         binary: PathBuf,
-        spec: ServerSpec,
+        spec: Box<ServerSpec>,
         root_uri: Option<String>,
         reply: Sender<SpawnReply>,
     },

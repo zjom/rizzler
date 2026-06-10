@@ -836,19 +836,12 @@
 ;; or `()` for rows past EOF. Returns one widget for that row. The total
 ;; column width is the second arg to `set-gutter` further down.
 
-(fn _pad-right (s w)
-  (do
-    (let pad (- w (len s)))
-    (if (> pad 0)
-        (str-join [s (str-join (fmap (fn _spc (_) " ") (range 0 pad)) "")] "")
-        s)))
+;; Thin wrappers over the native `str-pad-*` builtins. The gutter fn runs
+;; once per visible row per frame, so padding must not be an interpreted
+;; per-char loop.
+(fn _pad-right (s w) (str-pad-right s w))
 
-(fn _pad-left (s w)
-  (do
-    (let pad (- w (len s)))
-    (if (> pad 0)
-        (str-join [(str-join (fmap (fn _spc (_) " ") (range 0 pad)) "") s] "")
-        s)))
+(fn _pad-left (s w) (str-pad-left s w))
 
 (fn _gutter (n)
   (do
@@ -1049,10 +1042,8 @@
                  (fn _w (acc s) (if (> (len s) acc) (len s) acc))
                  0 cands))
     (let pad-w (+ max-w 2))
-    (fn _spaces (n)
-      (str-join (fmap (fn _sp (_) " ") (range 0 n)) ""))
     (fmap (fn _r (s)
-            (str-join [" " s (_spaces (- pad-w (+ (len s) 1)))] ""))
+            (str-pad-right (str-join [" " s] "") pad-w))
           cands)))
 
 (fn _menu-row (cand i sel)

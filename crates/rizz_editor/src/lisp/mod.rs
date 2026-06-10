@@ -358,6 +358,22 @@ mod tests {
     }
 
     #[test]
+    fn str_pad_and_repeat_builtins() {
+        let mut s = test_state();
+        let cases = [
+            (r#"(str-pad-left "42" 5)"#, "   42"),
+            (r#"(str-pad-left "123456" 5)"#, "123456"),
+            (r#"(str-pad-right "ab" 4)"#, "ab  "),
+            (r#"(str-repeat "ab" 3)"#, "ababab"),
+            (r#"(str-repeat "x" 0)"#, ""),
+        ];
+        for (src, want) in cases {
+            let v = s.eval_lisp(src).unwrap();
+            assert_eq!(v.display(), want, "{src}");
+        }
+    }
+
+    #[test]
     fn command_submit_via_minibuffer_does_not_recurse() {
         use crossterm::event::{KeyCode, KeyModifiers};
         let mut s = test_state();

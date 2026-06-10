@@ -26,6 +26,7 @@
 
 # Bugs
 
+- [ ] user defined functions not showing in completion menu
 - [ ] cursor-* reporting is not tied to editor window
   - [ ] moving cursor in command buffer and popups updates cursor-line of editor
   - [ ] gutter shifts when entering command buffer

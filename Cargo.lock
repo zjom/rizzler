@@ -804,9 +804,9 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "rizz"
-version = "0.7.3"
+version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86c2dadfb32e34d68ec998621d91915eac9b4bcb89e927f10d35dc954be4a781"
+checksum = "7d71ef55f7f5875c059fc7f78dec267ae02e13518dde5aef3c2834d943930ce9"
 dependencies = [
  "anyhow",
  "bon",

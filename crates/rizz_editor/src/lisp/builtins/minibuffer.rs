@@ -1,6 +1,7 @@
 //! Minibuffer / command-line builtins: submit, cancel, evaluate, history,
 //! and tab-completion against the lisp env.
 
+use std::ops::Deref;
 use std::rc::Rc;
 
 use im::Vector;
@@ -143,24 +144,16 @@ pub(super) fn register(b: &mut Builtins) {
         "(command-prefix)\n\nReturns str: the word the minibuffer cursor is completing — the token a\ntab-completion callback should match against.\nSee also: (command-completions), (command-complete TEXT).",
     );
 
-    // `Env::filter` with an always-true predicate is the supported way to
-    // iterate the (private) bindings map. The clone is O(1) thanks to
-    // `im::HashMap`'s persistent representation.
     b.be_doc(
         "command-completions",
         0,
         |_, env| {
             let prefix = with_editor_mut(|st| st.minibuffer_completion_prefix());
-            let mut names: Vec<Rc<str>> = Vec::new();
-            let _ = env.clone().filter(|name, _| {
-                if name.starts_with(prefix.as_str()) && !name.starts_with('_') {
-                    names.push(name.clone());
-                }
-                true
-            });
+            let mut names: Vec<Rc<str>> = env.into_iter().filter(|( name, _ )| {
+                name.starts_with(prefix.as_str()) && !name.starts_with('_')
+            }).map(|(name,_)| Rc::clone(name)).collect();
             names.sort();
-            let arr: Vector<Rc<Value>> =
-                names.into_iter().map(|s| Rc::new(Value::Str(s))).collect();
+            let arr = names.iter().map(|n| Rc::new(Value::Str(n.clone()))).collect();
             Ok(Rc::new(Value::Array(arr)))
         },
         "(command-completions)\n\nReturns array of str: every binding in the env whose name starts with\nthe current (command-prefix), sorted, skipping underscore-prefixed\nprivate names. The default tab-completion candidate set.\nSee also: (command-prefix), (longest-common-prefix STRS).",

@@ -7,23 +7,22 @@
 - [ ] lspconfig
 - [ ] add (non-lsp) formatter support
 - [ ] shiftwidth/ expandtab/ tab-width config
-- [ ] add `<<` and `>>` like vim
 - [ ] highlight matching pair (parens, brackets, etc)
 - [ ] picker (telescope like)
 - [ ] add support for package manager installation of lsps, formatters, linters (look at what mason.nvim does)
+- [ ] sed
+- [ ] multicursor editing
 
 # Improvements
 
 - [ ] add more known tree-sitter languages to grammars.toml
 - [ ] add more known lsps to lsp.toml
 - [ ] support more default tree-sitter highlights
-- [ ] documentation for builtins
 - [ ] `o`/`O`/`enter` should be whitespace aware. put you on col of start of prev line
 - [ ] filetype on buffers
 - [ ] buffers cycle should by access order instead of creation order
 - [ ] improve latency of lsp completion menu
 - [ ] better tracing/ error handling/ reporting
-- [x] clean up comments and architecture
 
 # Bugs
 

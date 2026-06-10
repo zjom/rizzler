@@ -15,11 +15,11 @@ use rizz_actions::{
     CodeActionOwned, CommandOwned, CompletionItemKindOwned, CompletionItemOwned, DocumentEditOwned,
     LocationOwned, RangeOwned, TextEditOwned, WorkspaceEditOwned,
 };
-use rizz_core::{LspDiagnostic, Position, Severity};
+use rizz_core::{FilePos, LspDiagnostic, Position, Severity};
 
 use crate::position::{Encoding, lsp_to_byte};
 
-fn pos_owned(rope: &Rope, p: lsp_types::Position, enc: Encoding) -> Position<usize> {
+fn pos_owned(rope: &Rope, p: lsp_types::Position, enc: Encoding) -> FilePos {
     let (row, col) = lsp_to_byte(rope, p, enc);
     Position::new(col, row)
 }

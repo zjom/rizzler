@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use rizz_core::{EditingMode, Position};
+use rizz_core::{EditingMode, Position, ScreenPos};
 use rizz_search::SearchOrigin;
 use rizz_text::BufferId;
 use rizz_ui::{
@@ -199,7 +199,7 @@ impl State {
             }
         }
         self.bufs.minibuffer_mut().viewport = Position::new(cols, MINIBUFFER_ROWS);
-        let overlay_viewports: Vec<(BufferId, Position<u16>)> = self
+        let overlay_viewports: Vec<(BufferId, ScreenPos)> = self
             .surface
             .panels
             .overlays()

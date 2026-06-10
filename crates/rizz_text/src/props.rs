@@ -17,15 +17,15 @@
 use std::rc::Rc;
 
 use rizz::runtime::Value;
-use rizz_core::{Display, Position};
+use rizz_core::{Display, FilePos};
 
 /// An absolute half-open range `[start, end)` with a property bag. Used for
 /// both text properties (anonymous, batch-applied) and overlays (named via
 /// `id`, individually mutable).
 #[derive(Clone, Debug)]
 pub struct PropEntry {
-    pub start: Position<usize>,
-    pub end: Position<usize>,
+    pub start: FilePos,
+    pub end: FilePos,
     /// Style to apply. For face-only entries, restyles the underlying chars;
     /// for display entries, styles the substituted content. Stored as a raw
     /// `Value` so the face name resolves through the theme at render time

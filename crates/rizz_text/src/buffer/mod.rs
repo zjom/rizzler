@@ -28,7 +28,7 @@ use rizz_changetree::ChangeTree;
 use rizz_ts::{Highlighter, Point};
 use ropey::{Rope, RopeSlice, iter::Lines};
 
-use rizz_core::{EditingMode, LspDiagnostic, Position};
+use rizz_core::{EditingMode, FilePos, LspDiagnostic, Position, ScreenPos};
 
 use crate::{
     props::PropStore,
@@ -53,17 +53,17 @@ slotmap::new_key_type! {
 #[derive(Debug, Default)]
 pub struct Buffer {
     pub(crate) buf: Rope,
-    pub(crate) cursor_pos: Position<u16>,
-    pub(crate) file_pos: Position<usize>,
+    pub(crate) cursor_pos: ScreenPos,
+    pub(crate) file_pos: FilePos,
     pub(crate) fs_path: Option<Rc<Path>>,
     /// Visible viewport size in cells. When `viewport.row > 0`, cursor
     /// movement scrolls `file_pos` to keep the cursor in view. Default zero
     /// means "no viewport" — scrolling is a no-op (useful in tests).
-    pub viewport: Position<u16>,
+    pub viewport: ScreenPos,
     pub(crate) mode: EditingMode,
     /// Anchor (absolute file position) of the current visual selection.
     /// `Some` iff `mode` is one of the visual modes — managed by `set_mode`.
-    pub(crate) selection_anchor: Option<Position<usize>>,
+    pub(crate) selection_anchor: Option<FilePos>,
     /// Sticky column for vertical motion. Initialized on the first vertical
     /// `Relative` step and preserved across subsequent ones so traversing a
     /// short line doesn't truncate the cursor's column on later longer ones.
@@ -304,7 +304,7 @@ impl Buffer {
         self.wrap_cache = map;
     }
 
-    pub fn abs_pos(&self) -> Position<usize> {
+    pub fn abs_pos(&self) -> FilePos {
         Position::new(
             self.file_pos.col + self.cursor_pos.col as usize,
             self.file_pos.row + self.cursor_pos.row as usize,
@@ -338,11 +338,11 @@ impl Buffer {
         self.buf.to_string()
     }
 
-    pub fn cursor_pos(&self) -> Position<u16> {
+    pub fn cursor_pos(&self) -> ScreenPos {
         self.cursor_pos
     }
 
-    pub fn file_pos(&self) -> Position<usize> {
+    pub fn file_pos(&self) -> FilePos {
         self.file_pos
     }
 
@@ -456,7 +456,7 @@ mod tests {
     #[test]
     fn insert_on_second_line_uses_correct_offset() {
         let mut s = mk("ab\ncd");
-        s.cursor_pos = Position::<u16>::new(1, 1);
+        s.cursor_pos = ScreenPos::new(1, 1);
         s.insert_char('X');
         assert_eq!(s.buf.to_string(), "ab\ncXd");
         assert_eq!(s.cursor_pos.row, 1);
@@ -466,7 +466,7 @@ mod tests {
     #[test]
     fn insert_newline_splits_line() {
         let mut s = mk("abcd");
-        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.cursor_pos = ScreenPos::new(2, 0);
         s.insert_char('\n');
         assert_eq!(s.buf.to_string(), "ab\ncd");
         assert_eq!(s.cursor_pos.row, 1);
@@ -476,7 +476,7 @@ mod tests {
     #[test]
     fn insert_at_end_of_buffer() {
         let mut s = mk("ab");
-        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.cursor_pos = ScreenPos::new(2, 0);
         s.insert_char('c');
         assert_eq!(s.buf.to_string(), "abc");
         assert_eq!(s.cursor_pos.col, 3);
@@ -485,7 +485,7 @@ mod tests {
     #[test]
     fn delete_at_file_start_is_noop() {
         let mut s = mk("hello");
-        s.cursor_pos = Position::<u16>::new(0, 0);
+        s.cursor_pos = ScreenPos::new(0, 0);
         s.delete_char();
         assert_eq!(s.buf.to_string(), "hello");
     }
@@ -493,7 +493,7 @@ mod tests {
     #[test]
     fn delete_char_in_middle() {
         let mut s = mk("hello");
-        s.cursor_pos = Position::<u16>::new(3, 0);
+        s.cursor_pos = ScreenPos::new(3, 0);
         s.delete_char();
         assert_eq!(s.buf.to_string(), "helo");
         assert_eq!(s.cursor_pos.col, 2);
@@ -502,7 +502,7 @@ mod tests {
     #[test]
     fn delete_only_character() {
         let mut s = mk("a");
-        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.cursor_pos = ScreenPos::new(1, 0);
         s.delete_char();
         assert_eq!(s.buf.to_string(), "");
     }
@@ -510,7 +510,7 @@ mod tests {
     #[test]
     fn delete_newline_at_line_start() {
         let mut s = mk("ab\ncd\nef");
-        s.cursor_pos = Position::<u16>::new(0, 2);
+        s.cursor_pos = ScreenPos::new(0, 2);
         s.delete_char();
         assert_eq!(s.buf.to_string(), "ab\ncdef");
         assert_eq!(s.cursor_pos.row, 1);
@@ -520,7 +520,7 @@ mod tests {
     #[test]
     fn line_start_moves_to_col_zero() {
         let mut s = mk("hello\nworld");
-        s.cursor_pos = Position::<u16>::new(3, 1);
+        s.cursor_pos = ScreenPos::new(3, 1);
         s.move_cursor(MoveKind::LineStart);
         assert_eq!(s.cursor_pos.col, 0);
     }
@@ -543,7 +543,7 @@ mod tests {
     #[test]
     fn line_end_on_last_line_without_newline() {
         let mut s = mk("abc\ndef");
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         s.move_cursor(MoveKind::LineEnd);
         assert_eq!(s.cursor_pos.col, 2);
     }
@@ -551,7 +551,7 @@ mod tests {
     #[test]
     fn file_start_resets_row_and_col() {
         let mut s = mk("hello\nworld");
-        s.cursor_pos = Position::<u16>::new(3, 1);
+        s.cursor_pos = ScreenPos::new(3, 1);
         s.move_cursor(MoveKind::FileStart);
         assert_eq!(cur_row(&s), 0);
         assert_eq!(cur_col(&s), 0);
@@ -588,7 +588,7 @@ mod tests {
     #[test]
     fn word_end_jumps_to_next_word_when_already_at_end() {
         let mut s = mk("hello world");
-        s.cursor_pos = Position::<u16>::new(4, 0);
+        s.cursor_pos = ScreenPos::new(4, 0);
         s.move_cursor(MoveKind::WordEnd);
         assert_eq!(s.cursor_pos.col, 10);
     }
@@ -596,7 +596,7 @@ mod tests {
     #[test]
     fn word_start_goes_to_previous_word_start() {
         let mut s = mk("hello world foo");
-        s.cursor_pos = Position::<u16>::new(8, 0);
+        s.cursor_pos = ScreenPos::new(8, 0);
         s.move_cursor(MoveKind::WordStart);
         assert_eq!(s.cursor_pos.col, 6);
     }
@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn word_back_end_from_inside_word_lands_on_prev_word_end() {
         let mut s = mk("hello world foo");
-        s.cursor_pos = Position::<u16>::new(8, 0);
+        s.cursor_pos = ScreenPos::new(8, 0);
         s.move_cursor(MoveKind::WordBackEnd);
         assert_eq!(s.cursor_pos.col, 4);
     }
@@ -657,7 +657,7 @@ mod tests {
     #[test]
     fn match_bracket_jumps_back_to_open_paren_from_close() {
         let mut s = mk("(abc)");
-        s.cursor_pos = Position::<u16>::new(4, 0);
+        s.cursor_pos = ScreenPos::new(4, 0);
         s.move_cursor(MoveKind::MatchBracket);
         assert_eq!(s.cursor_pos.col, 0);
     }
@@ -681,7 +681,7 @@ mod tests {
         let mut s = mk("{[x]}");
         s.move_cursor(MoveKind::MatchBracket);
         assert_eq!(s.cursor_pos.col, 4);
-        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.cursor_pos = ScreenPos::new(1, 0);
         s.move_cursor(MoveKind::MatchBracket);
         assert_eq!(s.cursor_pos.col, 3);
     }
@@ -697,7 +697,7 @@ mod tests {
     #[test]
     fn match_bracket_no_bracket_on_line_is_noop() {
         let mut s = mk("hello world");
-        s.cursor_pos = Position::<u16>::new(3, 0);
+        s.cursor_pos = ScreenPos::new(3, 0);
         s.move_cursor(MoveKind::MatchBracket);
         assert_eq!(s.cursor_pos.col, 3);
     }
@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn line_first_non_blank_skips_leading_whitespace() {
         let mut s = mk("    hello");
-        s.cursor_pos = Position::<u16>::new(7, 0);
+        s.cursor_pos = ScreenPos::new(7, 0);
         s.move_cursor(MoveKind::LineFirstNonBlank);
         assert_eq!(s.cursor_pos.col, 4);
     }
@@ -720,7 +720,7 @@ mod tests {
     #[test]
     fn line_first_non_blank_on_blank_line_stays_at_zero() {
         let mut s = mk("   \nabc");
-        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.cursor_pos = ScreenPos::new(2, 0);
         s.move_cursor(MoveKind::LineFirstNonBlank);
         assert_eq!(s.cursor_pos.col, 0);
     }
@@ -749,7 +749,7 @@ mod tests {
     #[test]
     fn relative_move_within_bounds() {
         let mut s = mk("hello\nworld");
-        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.cursor_pos = ScreenPos::new(2, 0);
         s.move_cursor(MoveKind::Relative(Position::new(1, 1)));
         assert_eq!(s.cursor_pos.row, 1);
         assert_eq!(s.cursor_pos.col, 3);
@@ -766,7 +766,7 @@ mod tests {
     #[test]
     fn absolute_moves_to_file_position() {
         let mut s = mk("aaaa\nbbbb\ncccc\ndddd\neeee");
-        s.cursor_pos = Position::<u16>::new(3, 2);
+        s.cursor_pos = ScreenPos::new(3, 2);
         s.move_cursor(MoveKind::Absolute(Position::new(0, 0)));
         assert_eq!(cur_row(&s), 0);
         assert_eq!(cur_col(&s), 0);
@@ -775,14 +775,14 @@ mod tests {
     #[test]
     fn cur_line_returns_the_right_line() {
         let mut s = mk("ab\ncd\nef");
-        s.cursor_pos = Position::<u16>::new(0, 2);
+        s.cursor_pos = ScreenPos::new(0, 2);
         assert_eq!(s.cur_line().to_string(), "ef");
     }
 
     #[test]
     fn clamp_keeps_cursor_in_buffer() {
         let mut s = mk("ab\ncd");
-        s.cursor_pos = Position::<u16>::new(50, 50);
+        s.cursor_pos = ScreenPos::new(50, 50);
         s.clamp_cursor();
         assert_eq!(s.cursor_pos.row, 1);
         assert_eq!(s.cursor_pos.col, 1);
@@ -791,7 +791,7 @@ mod tests {
     #[test]
     fn clamp_on_empty_buffer() {
         let mut s = mk("");
-        s.cursor_pos = Position::<u16>::new(10, 10);
+        s.cursor_pos = ScreenPos::new(10, 10);
         s.clamp_cursor();
         assert_eq!(s.cursor_pos.row, 0);
         assert_eq!(s.cursor_pos.col, 0);
@@ -801,7 +801,7 @@ mod tests {
     fn clamp_does_not_allow_landing_on_newline() {
         let mut s = mk("abc\ndef");
         s.mode = EditingMode::Insert;
-        s.cursor_pos = Position::<u16>::new(10, 0);
+        s.cursor_pos = ScreenPos::new(10, 0);
         s.clamp_cursor();
         assert_eq!(s.cursor_pos.col, 3);
     }
@@ -867,7 +867,7 @@ mod tests {
     fn half_page_down_centers_cursor() {
         let mut s = mk("0\n1\n2\n3\n4\n5\n6\n7\n8\n9");
         s.viewport.row = 4;
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         s.move_cursor(MoveKind::HalfPageDown);
         assert_eq!(s.file_pos.row, 1);
         assert_eq!(s.cursor_pos.row, 2);
@@ -879,7 +879,7 @@ mod tests {
         let mut s = mk("0\n1\n2\n3\n4\n5\n6\n7\n8\n9");
         s.viewport.row = 4;
         s.file_pos.row = 4;
-        s.cursor_pos = Position::<u16>::new(0, 2);
+        s.cursor_pos = ScreenPos::new(0, 2);
         s.move_cursor(MoveKind::HalfPageUp);
         assert_eq!(s.file_pos.row, 2);
         assert_eq!(s.cursor_pos.row, 2);
@@ -901,7 +901,7 @@ mod tests {
     fn half_page_up_at_top_does_not_scroll_past_origin() {
         let mut s = mk("0\n1\n2\n3\n4\n5");
         s.viewport.row = 4;
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         s.move_cursor(MoveKind::HalfPageUp);
         assert_eq!(s.file_pos.row, 0);
         assert_eq!(s.cursor_pos.row, 0);
@@ -925,7 +925,7 @@ mod tests {
     fn normal_mode_vertical_motion_preserves_goal_col() {
         let mut s = mk("12345678\nab\n0123456789");
         s.mode = EditingMode::Normal;
-        s.cursor_pos = Position::<u16>::new(7, 0);
+        s.cursor_pos = ScreenPos::new(7, 0);
         s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
         assert_eq!(cur_col(&s), 1);
         s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
@@ -936,7 +936,7 @@ mod tests {
     fn insert_mode_vertical_motion_preserves_goal_col() {
         let mut s = mk("12345678\nab\n0123456789");
         s.mode = EditingMode::Insert;
-        s.cursor_pos = Position::<u16>::new(8, 0);
+        s.cursor_pos = ScreenPos::new(8, 0);
         s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
         assert_eq!(cur_col(&s), 2);
         s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
@@ -961,7 +961,7 @@ mod tests {
     fn typing_resets_goal_col() {
         let mut s = mk("12345678\nab\n0123456789");
         s.mode = EditingMode::Insert;
-        s.cursor_pos = Position::<u16>::new(8, 0);
+        s.cursor_pos = ScreenPos::new(8, 0);
         s.move_cursor(MoveKind::Relative(Position::new(0, 1)));
         assert_eq!(cur_col(&s), 2);
         s.insert_char('!');
@@ -979,14 +979,14 @@ mod tests {
     fn selected_text_visual_forward_single_line() {
         let mut s = mk("hello");
         s.set_mode(EditingMode::Visual);
-        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.cursor_pos = ScreenPos::new(2, 0);
         assert_eq!(s.selected_text().as_deref(), Some("hel"));
     }
 
     #[test]
     fn selected_text_visual_line_single_line() {
         let mut s = mk("abc\ndef\nghi");
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         s.set_mode(EditingMode::VisualLine);
         assert_eq!(s.selected_text().as_deref(), Some("def\n"));
     }
@@ -994,9 +994,9 @@ mod tests {
     #[test]
     fn selected_text_visual_block_rectangle() {
         let mut s = mk("abcde\nfghij\nklmno");
-        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.cursor_pos = ScreenPos::new(1, 0);
         s.set_mode(EditingMode::VisualBlock);
-        s.cursor_pos = Position::<u16>::new(3, 2);
+        s.cursor_pos = ScreenPos::new(3, 2);
         assert_eq!(s.selected_text().as_deref(), Some("bcd\nghi\nlmn"));
     }
 
@@ -1004,7 +1004,7 @@ mod tests {
     fn undo_reverts_insert_char_and_restores_cursor() {
         let mut s = mk("ab");
         s.mode = EditingMode::Insert;
-        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.cursor_pos = ScreenPos::new(2, 0);
         s.insert_char('c');
         assert_eq!(s.buf.to_string(), "abc");
         assert_eq!(cur_col(&s), 3);
@@ -1017,7 +1017,7 @@ mod tests {
     fn redo_reapplies_insert_char_and_restores_cursor() {
         let mut s = mk("ab");
         s.mode = EditingMode::Insert;
-        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.cursor_pos = ScreenPos::new(2, 0);
         s.insert_char('c');
         s.undo();
         assert!(s.redo());
@@ -1079,7 +1079,7 @@ mod tests {
     fn insert_run_breaks_on_cursor_move() {
         let mut s = mk("xy");
         s.set_mode(EditingMode::Insert);
-        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.cursor_pos = ScreenPos::new(2, 0);
         s.insert_char('a');
         s.move_cursor(MoveKind::LineStart);
         s.insert_char('b');
@@ -1100,7 +1100,7 @@ mod tests {
     fn delete_selection_visual_single_line() {
         let mut s = mk("hello");
         s.set_mode(EditingMode::Visual);
-        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.cursor_pos = ScreenPos::new(2, 0);
         assert!(s.delete_selection());
         assert_eq!(s.buf.to_string(), "lo");
         assert_eq!(s.mode, EditingMode::Normal);
@@ -1111,9 +1111,9 @@ mod tests {
     #[test]
     fn delete_selection_visual_across_lines_joins() {
         let mut s = mk("abc\ndef\nghi");
-        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.cursor_pos = ScreenPos::new(1, 0);
         s.set_mode(EditingMode::Visual);
-        s.cursor_pos = Position::<u16>::new(1, 1);
+        s.cursor_pos = ScreenPos::new(1, 1);
         assert!(s.delete_selection());
         assert_eq!(s.buf.to_string(), "af\nghi");
         assert_eq!(s.mode, EditingMode::Normal);
@@ -1124,9 +1124,9 @@ mod tests {
     #[test]
     fn delete_selection_visual_undo_redo_roundtrip() {
         let mut s = mk("abc\ndef\nghi");
-        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.cursor_pos = ScreenPos::new(1, 0);
         s.set_mode(EditingMode::Visual);
-        s.cursor_pos = Position::<u16>::new(1, 1);
+        s.cursor_pos = ScreenPos::new(1, 1);
         s.delete_selection();
         assert_eq!(s.buf.to_string(), "af\nghi");
         assert!(s.undo());
@@ -1138,7 +1138,7 @@ mod tests {
     #[test]
     fn delete_selection_visual_line_middle() {
         let mut s = mk("abc\ndef\nghi");
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         s.set_mode(EditingMode::VisualLine);
         assert!(s.delete_selection());
         assert_eq!(s.buf.to_string(), "abc\nghi");
@@ -1150,7 +1150,7 @@ mod tests {
     #[test]
     fn delete_selection_visual_line_last_line_eats_preceding_newline() {
         let mut s = mk("abc\ndef");
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         s.set_mode(EditingMode::VisualLine);
         assert!(s.delete_selection());
         assert_eq!(s.buf.to_string(), "abc");
@@ -1160,7 +1160,7 @@ mod tests {
     #[test]
     fn delete_selection_visual_line_last_line_undo_redo() {
         let mut s = mk("abc\ndef");
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         s.set_mode(EditingMode::VisualLine);
         s.delete_selection();
         assert_eq!(s.buf.to_string(), "abc");
@@ -1174,7 +1174,7 @@ mod tests {
     fn delete_selection_visual_line_all_lines() {
         let mut s = mk("abc\ndef");
         s.set_mode(EditingMode::VisualLine);
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         assert!(s.delete_selection());
         assert_eq!(s.buf.to_string(), "");
         assert!(s.undo());
@@ -1184,9 +1184,9 @@ mod tests {
     #[test]
     fn delete_selection_visual_block_rectangle() {
         let mut s = mk("abcde\nfghij\nklmno");
-        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.cursor_pos = ScreenPos::new(1, 0);
         s.set_mode(EditingMode::VisualBlock);
-        s.cursor_pos = Position::<u16>::new(3, 2);
+        s.cursor_pos = ScreenPos::new(3, 2);
         assert!(s.delete_selection());
         assert_eq!(s.buf.to_string(), "ae\nfj\nko");
         assert_eq!(s.mode, EditingMode::Normal);
@@ -1199,9 +1199,9 @@ mod tests {
         // VisualBlock is implemented as one `delete_range` call per row, so
         // a 3-row block delete is 3 undo steps.
         let mut s = mk("abcde\nfghij\nklmno");
-        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.cursor_pos = ScreenPos::new(1, 0);
         s.set_mode(EditingMode::VisualBlock);
-        s.cursor_pos = Position::<u16>::new(3, 2);
+        s.cursor_pos = ScreenPos::new(3, 2);
         s.delete_selection();
         assert_eq!(s.buf.to_string(), "ae\nfj\nko");
         while s.undo() {}
@@ -1260,7 +1260,7 @@ mod tests {
     #[test]
     fn delete_line_removes_current_line_and_newline() {
         let mut s = mk("abc\ndef\nghi");
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         assert!(s.delete_line(1));
         assert_eq!(s.buf.to_string(), "abc\nghi");
         assert_eq!(cur_row(&s), 1);
@@ -1270,7 +1270,7 @@ mod tests {
     #[test]
     fn delete_line_on_last_line_eats_preceding_newline() {
         let mut s = mk("abc\ndef");
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         assert!(s.delete_line(1));
         assert_eq!(s.buf.to_string(), "abc");
         assert_eq!(cur_row(&s), 0);
@@ -1279,7 +1279,7 @@ mod tests {
     #[test]
     fn delete_line_count_deletes_multiple_lines() {
         let mut s = mk("a\nb\nc\nd\ne");
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         assert!(s.delete_line(3));
         assert_eq!(s.buf.to_string(), "a\ne");
         assert_eq!(cur_row(&s), 1);
@@ -1288,7 +1288,7 @@ mod tests {
     #[test]
     fn delete_line_undo_restores_text() {
         let mut s = mk("abc\ndef\nghi");
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         s.delete_line(1);
         assert!(s.undo());
         assert_eq!(s.buf.to_string(), "abc\ndef\nghi");
@@ -1311,7 +1311,7 @@ mod tests {
     #[test]
     fn delete_motion_line_end_stops_before_newline() {
         let mut s = mk("hello world\nrest");
-        s.cursor_pos = Position::<u16>::new(6, 0);
+        s.cursor_pos = ScreenPos::new(6, 0);
         assert!(s.delete_motion(MoveKind::LineEnd, 1));
         assert_eq!(s.buf.to_string(), "hello \nrest");
     }
@@ -1319,7 +1319,7 @@ mod tests {
     #[test]
     fn delete_motion_left_deletes_char_to_the_left() {
         let mut s = mk("abc");
-        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.cursor_pos = ScreenPos::new(1, 0);
         assert!(s.delete_motion(MoveKind::Relative(Position::new(-1, 0)), 1));
         assert_eq!(s.buf.to_string(), "bc");
     }
@@ -1327,7 +1327,7 @@ mod tests {
     #[test]
     fn delete_motion_right_at_end_of_line_deletes_last_char() {
         let mut s = mk("abc");
-        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.cursor_pos = ScreenPos::new(2, 0);
         assert!(s.delete_motion(MoveKind::Relative(Position::new(1, 0)), 1));
         assert_eq!(s.buf.to_string(), "ab");
     }
@@ -1335,7 +1335,7 @@ mod tests {
     #[test]
     fn delete_motion_word_back_deletes_to_prev_word_start() {
         let mut s = mk("hello world");
-        s.cursor_pos = Position::<u16>::new(6, 0);
+        s.cursor_pos = ScreenPos::new(6, 0);
         assert!(s.delete_motion(MoveKind::WordStart, 1));
         assert_eq!(s.buf.to_string(), "world");
     }
@@ -1343,7 +1343,7 @@ mod tests {
     #[test]
     fn delete_motion_down_is_linewise() {
         let mut s = mk("a\nb\nc\nd\ne");
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         assert!(s.delete_motion(MoveKind::Relative(Position::new(0, 1)), 1));
         assert_eq!(s.buf.to_string(), "a\nd\ne");
     }
@@ -1351,7 +1351,7 @@ mod tests {
     #[test]
     fn delete_motion_file_end_is_linewise() {
         let mut s = mk("a\nb\nc\nd\ne");
-        s.cursor_pos = Position::<u16>::new(0, 2);
+        s.cursor_pos = ScreenPos::new(0, 2);
         assert!(s.delete_motion(MoveKind::FileEnd, 1));
         assert_eq!(s.buf.to_string(), "a\nb");
     }
@@ -1367,7 +1367,7 @@ mod tests {
     #[test]
     fn replace_char_n_swaps_char_under_cursor() {
         let mut s = mk("hello");
-        s.cursor_pos = Position::<u16>::new(1, 0);
+        s.cursor_pos = ScreenPos::new(1, 0);
         assert!(s.replace_char_n('a', 1));
         assert_eq!(s.buf.to_string(), "hallo");
         assert_eq!(cur_col(&s), 1);
@@ -1417,7 +1417,7 @@ mod tests {
     fn overwrite_char_at_eol_extends_line() {
         let mut s = mk("hi");
         s.mode = EditingMode::Replace;
-        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.cursor_pos = ScreenPos::new(2, 0);
         s.overwrite_char('!');
         assert_eq!(s.buf.to_string(), "hi!");
         assert_eq!(cur_col(&s), 3);
@@ -1575,7 +1575,7 @@ mod tests {
     #[test]
     fn shift_line_indents_and_lands_on_first_non_blank() {
         let mut s = mk("foo\nbar");
-        s.cursor_pos = Position::<u16>::new(2, 0);
+        s.cursor_pos = ScreenPos::new(2, 0);
         assert!(s.shift_line(1, false));
         assert_eq!(s.buf.to_string(), "    foo\nbar");
         assert_eq!(cur_row(&s), 0);
@@ -1640,7 +1640,7 @@ mod tests {
     fn shift_selection_indents_spanned_lines_and_exits_visual() {
         let mut s = mk("a\nb\nc");
         s.set_mode(EditingMode::VisualLine);
-        s.cursor_pos = Position::<u16>::new(0, 1);
+        s.cursor_pos = ScreenPos::new(0, 1);
         assert!(s.shift_selection(false));
         assert_eq!(s.buf.to_string(), "    a\n    b\nc");
         assert_eq!(s.mode(), EditingMode::Normal);

@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use rizz_core::Position;
+use rizz_core::FilePos;
 
 /// Stable identifier for a spawned language-server client. Lets the editor
 /// side refer to clients by value without depending on `rizz_lsp`.
@@ -17,8 +17,8 @@ pub struct LspClientId(pub u64);
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct RangeOwned {
-    pub start: Position<usize>,
-    pub end: Position<usize>,
+    pub start: FilePos,
+    pub end: FilePos,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]

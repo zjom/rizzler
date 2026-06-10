@@ -9,7 +9,7 @@ use im::HashMap;
 use rizz::runtime::Value;
 
 use rizz_actions::{CodeActionOwned, CompletionItemKindOwned, CompletionItemOwned};
-use rizz_core::Position;
+use rizz_core::FilePos;
 
 fn key(s: &str) -> Rc<Value> {
     Rc::new(Value::Str(s.into()))
@@ -46,7 +46,7 @@ fn completion_kind_to_ident(k: CompletionItemKindOwned) -> Rc<Value> {
     Rc::new(Value::Ident(s.into()))
 }
 
-pub fn position_to_value(p: Position<usize>) -> Rc<Value> {
+pub fn position_to_value(p: FilePos) -> Rc<Value> {
     let mut m: HashMap<Rc<Value>, Rc<Value>> = HashMap::new();
     m.insert(key("row"), Rc::new(Value::Int(p.row as i64)));
     m.insert(key("col"), Rc::new(Value::Int(p.col as i64)));

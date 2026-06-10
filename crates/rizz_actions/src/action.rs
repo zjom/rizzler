@@ -14,7 +14,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use rizz::runtime::Value;
-use rizz_core::{EditingMode, FocusDir, Position, SplitDir};
+use rizz_core::{EditingMode, FilePos, FocusDir, SplitDir};
 use rizz_input::KeyEvent;
 use rizz_registers::RegisterKind;
 use rizz_text::{BufferId, MoveKind, TextObject};
@@ -64,7 +64,7 @@ pub enum Action {
     InsertMany(Rc<str>),
     InsertNewline,
     DeleteChar,
-    DeleteCharAt(Position<usize>),
+    DeleteCharAt(FilePos),
     /// Remove the focused buffer's current visual selection and return to
     /// Normal mode. No-op when the buffer is not in a visual mode.
     DeleteSelection,
@@ -246,7 +246,7 @@ pub enum Action {
     /// `anchor` absolute position.
     LspShowHover {
         contents: Arc<str>,
-        anchor: Position<usize>,
+        anchor: FilePos,
     },
     /// Show a picker over multiple definition locations. Single-location
     /// responses are converted to a direct `BufEdit` + cursor move and
@@ -258,7 +258,7 @@ pub enum Action {
     /// position the originating request was issued from.
     LspShowCompletion {
         items: Arc<[CompletionItemOwned]>,
-        anchor: Position<usize>,
+        anchor: FilePos,
     },
     /// Open a code-action picker.
     LspShowCodeActions {

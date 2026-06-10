@@ -15,5 +15,5 @@ pub mod window_dir;
 pub use diagnostic::{LspDiagnostic, Severity};
 pub use display::Display;
 pub use mode::EditingMode;
-pub use position::Position;
+pub use position::{Delta, File, FilePos, PosDelta, Position, Screen, ScreenPos, Space};
 pub use window_dir::{FocusDir, SplitDir};

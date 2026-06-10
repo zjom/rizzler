@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use rizz::runtime::Value;
 use rizz_actions::Action;
-use rizz_core::Position;
+use rizz_core::FilePos;
 use rizz_lsp::{LspEvent, RequestSeq};
 use rizz_text::BufferId;
 use tracing::{debug, instrument, warn};
@@ -27,7 +27,7 @@ use super::State;
 #[derive(Debug, Clone)]
 pub(crate) struct PendingCompletion {
     pub buf: BufferId,
-    pub anchor: Position<usize>,
+    pub anchor: FilePos,
     pub items: Arc<[rizz_actions::CompletionItemOwned]>,
 }
 
@@ -48,14 +48,14 @@ pub(crate) struct PendingCodeActions {
 pub(super) enum PendingLspKind {
     Hover {
         buf: BufferId,
-        anchor: Position<usize>,
+        anchor: FilePos,
     },
     GotoDefinition {
         buf: BufferId,
     },
     Completion {
         buf: BufferId,
-        anchor: Position<usize>,
+        anchor: FilePos,
     },
     Format {
         buf: BufferId,

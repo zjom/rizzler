@@ -10,7 +10,7 @@
 //! editor's native coordinate space. The LSP client does any UTF-16
 //! adjustment before constructing one of these.
 
-use crate::Position;
+use crate::FilePos;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum Severity {
@@ -34,8 +34,8 @@ impl Severity {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LspDiagnostic {
-    pub start: Position<usize>,
-    pub end: Position<usize>,
+    pub start: FilePos,
+    pub end: FilePos,
     pub severity: Severity,
     pub message: std::sync::Arc<str>,
     pub source: Option<std::sync::Arc<str>>,

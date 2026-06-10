@@ -7,7 +7,7 @@
 use std::rc::Rc;
 
 use rizz_changetree::Delta;
-use rizz_core::{EditingMode, Position};
+use rizz_core::{EditingMode, FilePos, Position};
 
 use super::{Buffer, MoveKind};
 
@@ -20,7 +20,7 @@ pub struct Speculation {
     /// Rope char index where the first speculative char was written.
     pub(crate) start_cidx: usize,
     /// Cursor absolute position immediately before speculation began.
-    pub(crate) cursor_before: Position<usize>,
+    pub(crate) cursor_before: FilePos,
     /// Speculative chars in insertion order. Length equals the number of
     /// rope chars to unwind on rollback / track on commit.
     pub(crate) inserted: String,
@@ -43,7 +43,7 @@ pub struct Speculation {
 #[derive(Debug, Clone)]
 pub struct ReplaceBatch {
     pub(crate) start_cidx: usize,
-    pub(crate) cursor_before: Position<usize>,
+    pub(crate) cursor_before: FilePos,
     pub(crate) history: Vec<Option<char>>,
 }
 
@@ -717,7 +717,7 @@ impl Buffer {
         });
     }
 
-    pub fn delete_char_at(&mut self, Position { col, row }: Position<usize>) {
+    pub fn delete_char_at(&mut self, Position { col, row }: FilePos) {
         self.close_insert_batch();
         if row >= self.buf.len_lines() {
             return;

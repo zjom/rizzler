@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use rizz_core::Position;
+use rizz_core::FilePos;
 use rizz_text::BufferId;
 use tracing::warn;
 
@@ -14,7 +14,7 @@ use super::lsp_session::{PendingCodeActions, PendingCompletion};
 use super::{State, workspace::uri_to_path};
 
 impl State {
-    pub(crate) fn show_lsp_hover(&mut self, contents: Arc<str>, _anchor: Position<usize>) {
+    pub(crate) fn show_lsp_hover(&mut self, contents: Arc<str>, _anchor: FilePos) {
         // TODO: surface as a floating overlay instead of a notify.
         let s: &str = &contents;
         if !s.is_empty() {
@@ -61,7 +61,7 @@ impl State {
     pub(crate) fn show_lsp_completion(
         &mut self,
         items: Arc<[rizz_actions::CompletionItemOwned]>,
-        anchor: Position<usize>,
+        anchor: FilePos,
     ) {
         if items.is_empty() {
             self.lsp_session.pending_completion = None;
@@ -94,7 +94,7 @@ impl State {
     fn fire_lsp_completion_fn(
         &mut self,
         items: &Arc<[rizz_actions::CompletionItemOwned]>,
-        anchor: Position<usize>,
+        anchor: FilePos,
     ) {
         use crate::lisp::lsp_convert::{completion_items_to_value, position_to_value};
         let Some(f) = self.lsp_session.completion_fn.clone() else {

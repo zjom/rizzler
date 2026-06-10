@@ -4,7 +4,7 @@
 use ropey::Rope;
 
 use crate::mode::EditingMode;
-use crate::position::Position;
+use crate::position::FilePos;
 
 /// Text covered by the current visual selection. Returns `None` when `mode`
 /// is non-visual. Inclusive on both ends; `VisualLine` includes the trailing
@@ -13,8 +13,8 @@ use crate::position::Position;
 pub fn selected_text(
     rope: &Rope,
     mode: EditingMode,
-    anchor: Position<usize>,
-    cursor: Position<usize>,
+    anchor: FilePos,
+    cursor: FilePos,
 ) -> Option<String> {
     match mode {
         EditingMode::Visual => Some(visual_text(rope, anchor, cursor)),
@@ -24,7 +24,7 @@ pub fn selected_text(
     }
 }
 
-fn visual_text(rope: &Rope, anchor: Position<usize>, cursor: Position<usize>) -> String {
+fn visual_text(rope: &Rope, anchor: FilePos, cursor: FilePos) -> String {
     let (start, end) = if (anchor.row, anchor.col) <= (cursor.row, cursor.col) {
         (anchor, cursor)
     } else {
@@ -35,7 +35,7 @@ fn visual_text(rope: &Rope, anchor: Position<usize>, cursor: Position<usize>) ->
     rope.slice(s..e).to_string()
 }
 
-fn visual_line_text(rope: &Rope, anchor: Position<usize>, cursor: Position<usize>) -> String {
+fn visual_line_text(rope: &Rope, anchor: FilePos, cursor: FilePos) -> String {
     let (lo, hi) = if anchor.row <= cursor.row {
         (anchor.row, cursor.row)
     } else {
@@ -51,7 +51,7 @@ fn visual_line_text(rope: &Rope, anchor: Position<usize>, cursor: Position<usize
     rope.slice(s..e).to_string()
 }
 
-fn visual_block_text(rope: &Rope, anchor: Position<usize>, cursor: Position<usize>) -> String {
+fn visual_block_text(rope: &Rope, anchor: FilePos, cursor: FilePos) -> String {
     let (lo_row, hi_row) = if anchor.row <= cursor.row {
         (anchor.row, cursor.row)
     } else {

@@ -23,7 +23,7 @@
 use std::rc::Rc;
 
 use rizz::runtime::Value;
-use rizz_core::Position;
+use rizz_core::{FilePos, Position};
 use rizz_text::props::{OverlayId, PropEntry};
 use rizz_text::{Buffer, BufferId, MoveKind};
 
@@ -50,7 +50,7 @@ impl SearchDir {
 #[derive(Clone, Copy, Debug)]
 pub struct SearchOrigin {
     pub buf: BufferId,
-    pub cursor: Position<usize>,
+    pub cursor: FilePos,
 }
 
 /// Per-host search bookkeeping: last submitted pattern + direction (for

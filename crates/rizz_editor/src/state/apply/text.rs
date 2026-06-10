@@ -3,7 +3,7 @@
 //! functions over `State`, called from the dispatch table in
 //! [`super::State::apply`]'s `apply_one`.
 
-use rizz_core::Position;
+use rizz_core::FilePos;
 use rizz_text::{MoveKind, TextObject};
 use tracing::{debug, trace};
 
@@ -59,7 +59,7 @@ pub(super) fn delete_char(st: &mut State) {
     st.bufs[f].delete_char();
 }
 
-pub(super) fn delete_char_at(st: &mut State, pos: Position<usize>) {
+pub(super) fn delete_char_at(st: &mut State, pos: FilePos) {
     let f = st.focused_buf_id();
     st.bufs[f].delete_char_at(pos);
 }

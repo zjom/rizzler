@@ -8,7 +8,7 @@
 //! buffer can serve as the backing buffer of multiple panels without
 //! their input contexts bleeding into each other.
 
-use rizz_core::{EditingMode, Position, selection};
+use rizz_core::{EditingMode, FilePos, Position, selection};
 
 use super::Buffer;
 
@@ -34,7 +34,7 @@ impl Buffer {
     }
 
     /// Anchor of the current visual selection (absolute file position).
-    pub fn selection_anchor(&self) -> Option<Position<usize>> {
+    pub fn selection_anchor(&self) -> Option<FilePos> {
         self.selection_anchor
     }
 

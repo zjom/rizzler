@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use ropey::Rope;
 
-use rizz_core::{EditingMode, Position};
+use rizz_core::{EditingMode, FilePos, PosDelta, Position};
 
 use crate::motions;
 use crate::scroll;
@@ -40,8 +40,8 @@ pub enum MoveKind {
     /// Vim `%` — jump to the matching bracket of `()[]{}`. If the cursor is
     /// not on a bracket, the first bracket on the current line is used.
     MatchBracket,
-    Relative(Position<i16>),
-    Absolute(Position<usize>),
+    Relative(PosDelta),
+    Absolute(FilePos),
     LineNum(usize),
     HalfPageDown,
     HalfPageUp,

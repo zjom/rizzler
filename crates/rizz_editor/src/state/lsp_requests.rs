@@ -7,7 +7,7 @@
 use std::time::{Duration, Instant};
 
 use rizz_actions::LspClientId;
-use rizz_core::Position;
+use rizz_core::FilePos;
 use rizz_lsp::{Encoding as LspEncoding, RuntimeCmd};
 use rizz_text::BufferId;
 
@@ -28,7 +28,7 @@ impl State {
         String,
         LspEncoding,
         lsp_types::Position,
-        Position<usize>,
+        FilePos,
     )> {
         let b = self.bufs.get(buf)?;
         let handle = b.lsp_handle()?;

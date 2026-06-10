@@ -68,8 +68,12 @@ impl State {
         v
     }
 
+    /// Resolve and apply one key event without rendering. The binary's
+    /// event loop drains every immediately-available event through here and
+    /// renders once at the end, so a burst of autorepeat keys costs N
+    /// applies + 1 render instead of N full frames.
     #[instrument(skip(self), fields(code = ?event.code, mods = ?event.modifiers))]
-    pub fn handle_key_event(&mut self, event: CTKeyEvent) -> io::Result<()> {
+    pub fn process_key_event(&mut self, event: CTKeyEvent) {
         let now = Instant::now();
         let timedout = self
             .input
@@ -82,7 +86,7 @@ impl State {
         if self.input.count_prefix.feed(ke, self.count_eligible()) {
             trace!(?ke, "key consumed by count prefix");
             self.refresh_viewport();
-            return self.render();
+            return;
         }
 
         let modes = self.active_modes();
@@ -100,6 +104,10 @@ impl State {
         self.refresh_viewport();
         let focused = self.focused_buf_id();
         self.bufs[focused].clamp_cursor();
+    }
+
+    pub fn handle_key_event(&mut self, event: CTKeyEvent) -> io::Result<()> {
+        self.process_key_event(event);
         self.render()
     }
 
@@ -108,13 +116,17 @@ impl State {
     /// terminal); we bypass the keymap entirely so embedded newlines stay as
     /// newlines instead of being parsed as `Ctrl+J` keystrokes.
     #[instrument(skip(self, text), fields(len = text.len()))]
-    pub fn handle_paste(&mut self, text: String) -> io::Result<()> {
+    pub fn process_paste(&mut self, text: String) {
         if !text.is_empty() {
             self.apply(&[Rc::new(rizz_actions::Action::InsertMany(Rc::from(text)))]);
         }
         self.refresh_viewport();
         let focused = self.focused_buf_id();
         self.bufs[focused].clamp_cursor();
+    }
+
+    pub fn handle_paste(&mut self, text: String) -> io::Result<()> {
+        self.process_paste(text);
         self.render()
     }
 

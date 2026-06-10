@@ -23,6 +23,11 @@ fn main() -> anyhow::Result<()> {
             return Err(e);
         }
     };
+    // Upper bound on events applied per frame: a frame is painted at least
+    // every MAX_DRAIN events even under sustained input, so the UI visibly
+    // progresses while still coalescing autorepeat bursts into one render.
+    const MAX_DRAIN: usize = 64;
+
     state.render()?;
     loop {
         if state.quit_requested() {
@@ -30,34 +35,40 @@ fn main() -> anyhow::Result<()> {
             break;
         }
 
+        let mut dirty = false;
         if event::poll(Duration::from_millis(500))? {
-            match event::read()? {
-                Event::Key(key_event) => {
-                    let _span =
-                        info_span!("key", code = ?key_event.code, mods = ?key_event.modifiers)
-                            .entered();
-                    if let Err(e) = state.handle_key_event(key_event) {
-                        error!(error = %e, "handle_key_event failed");
-                        return Err(e.into());
+            // Apply every immediately-available event without rendering,
+            // then paint once below. N queued events cost N applies + 1
+            // render instead of N full frames.
+            for _ in 0..MAX_DRAIN {
+                match event::read()? {
+                    Event::Key(key_event) => {
+                        let _span =
+                            info_span!("key", code = ?key_event.code, mods = ?key_event.modifiers)
+                                .entered();
+                        state.process_key_event(key_event);
+                        dirty = true;
                     }
-                }
-                Event::Paste(text) => {
-                    let _span = info_span!("paste", len = text.len()).entered();
-                    if let Err(e) = state.handle_paste(text) {
-                        error!(error = %e, "handle_paste failed");
-                        return Err(e.into());
+                    Event::Paste(text) => {
+                        let _span = info_span!("paste", len = text.len()).entered();
+                        state.process_paste(text);
+                        dirty = true;
                     }
+                    _ => {}
                 }
-                _ => {}
+                if state.quit_requested() || !event::poll(Duration::ZERO)? {
+                    break;
+                }
             }
         }
 
         // Drain pending LSP events and apply synthesized actions before the
         // next render. Re-render only when something actually changed.
-        if state.tick()
-            && let Err(e) = state.render()
-        {
-            error!(error = %e, "render after lsp tick failed");
+        if state.tick() {
+            dirty = true;
+        }
+        if dirty && let Err(e) = state.render() {
+            error!(error = %e, "render failed");
             return Err(e.into());
         }
     }

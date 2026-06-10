@@ -141,6 +141,18 @@ impl PopupSpec {
     }
 }
 
+/// Cursor into command history for `<up>`/`<down>` recall in command mode.
+/// Reset every time command mode is (re)entered.
+#[derive(Default)]
+struct CmdHistoryNav {
+    /// Index (oldest = 0) of the recalled command currently shown, or `None`
+    /// when the user is editing their own freshly-typed line.
+    pos: Option<usize>,
+    /// The line the user had typed before recall began, so `<down>` past the
+    /// newest entry can restore it.
+    draft: String,
+}
+
 pub struct State {
     bufs: BufferList,
     journal: Journal,
@@ -180,6 +192,9 @@ pub struct State {
     /// counter, response callbacks, last completion + code-action batch).
     /// See [`lsp_session::LspSession`].
     lsp_session: LspSession,
+    /// `<up>`/`<down>` recall position in command history. See
+    /// [`CmdHistoryNav`].
+    cmd_history_nav: CmdHistoryNav,
 }
 
 impl State {
@@ -212,6 +227,7 @@ impl State {
             pending_register: None,
             search: Search::default(),
             lsp_session: LspSession::new(),
+            cmd_history_nav: CmdHistoryNav::default(),
         };
         if let Some(path) = config.edit_path
             && !path.is_dir()

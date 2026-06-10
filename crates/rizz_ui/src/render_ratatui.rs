@@ -42,6 +42,10 @@ struct OverlayCtx {
 
 pub struct RatatuiRenderer {
     term: Terminal<CrosstermBackend<Stdout>>,
+    /// Cursor shape last written to the terminal. `SetCursorStyle` is an
+    /// unbuffered write+flush outside ratatui's diffed draw, so it's only
+    /// emitted when the shape actually changes.
+    last_cursor_style: Option<CursorStyle>,
 }
 
 impl RatatuiRenderer {
@@ -49,6 +53,7 @@ impl RatatuiRenderer {
         let backend = CrosstermBackend::new(io::stdout());
         Ok(Self {
             term: Terminal::new(backend)?,
+            last_cursor_style: None,
         })
     }
 }
@@ -72,8 +77,7 @@ struct DeferredOverlay<'a> {
 
 impl Renderer for RatatuiRenderer {
     fn render(&mut self, snap: StateSnapshot<'_>, frame_data: &RenderedFrame) -> io::Result<()> {
-        execute!(io::stdout(), set_cursor_style(snap.cursor_style))?;
-
+        let mut desired_cursor_style = snap.cursor_style;
         self.term.draw(|f| {
             let base_style = style_to_ratatui(&frame_data.default_style);
             f.render_widget(Block::default().style(base_style), f.area());
@@ -130,7 +134,7 @@ impl Renderer for RatatuiRenderer {
             }
 
             if let Some((x, y, cs)) = cur.overlay {
-                let _ = execute!(io::stdout(), set_cursor_style(cs));
+                desired_cursor_style = cs;
                 f.set_cursor_position((x, y));
             } else if !snap.panels.any_overlay()
                 && let Some((x, y)) = cur.editor
@@ -138,6 +142,10 @@ impl Renderer for RatatuiRenderer {
                 f.set_cursor_position((x, y));
             }
         })?;
+        if self.last_cursor_style != Some(desired_cursor_style) {
+            execute!(io::stdout(), set_cursor_style(desired_cursor_style))?;
+            self.last_cursor_style = Some(desired_cursor_style);
+        }
         Ok(())
     }
 }
@@ -314,7 +322,7 @@ fn walk_buffer_view(
     let Some(buf) = snap.bufs.get(buf_id) else {
         return;
     };
-    let buf_frame = fd.per_buf.get(buf_id);
+    let buf_frame = fd.per_buf.get(buf_id).map(|rc| &**rc);
     EditorView::render(buf, area, buf_frame, f);
 
     if let Some(octx) = ctx.overlay
@@ -347,7 +355,7 @@ fn walk_editor_tree(
         let Some(buf) = snap.bufs.get(leaf.buf) else {
             continue;
         };
-        let buf_frame = fd.per_buf.get(leaf.buf);
+        let buf_frame = fd.per_buf.get(leaf.buf).map(|rc| &**rc);
         EditorView::render(buf, leaf.area, buf_frame, f);
         if &leaf.path == focused_path {
             let (cx, cy) = match buf_frame.and_then(|bf| bf.wrap.as_ref()) {

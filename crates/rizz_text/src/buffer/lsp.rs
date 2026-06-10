@@ -35,4 +35,8 @@ pub trait LspBufferHandle: std::fmt::Debug + Send {
     /// editor's drain loop on every `publishDiagnostics` notification —
     /// LSP semantics say the latest batch is authoritative.
     fn replace_diagnostics(&mut self, items: Vec<LspDiagnostic>);
+
+    /// Bumped on every [`Self::replace_diagnostics`] so render caches can
+    /// tell whether the diagnostics changed since they last walked them.
+    fn diagnostics_version(&self) -> u64;
 }

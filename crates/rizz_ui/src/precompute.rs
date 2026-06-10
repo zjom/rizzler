@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use rizz::Env;
 use rizz::runtime::{self, Value};
 
-use rizz_core::EditingMode;
+use rizz_core::{EditingMode, FilePos, ScreenPos};
 use rizz_text::{
     Buffer, BufferId,
     props::{PropEntry, PropStore},
@@ -19,18 +19,90 @@ use rizz_text::{
 };
 use slotmap::{SecondaryMap, SlotMap};
 
+use crate::panel::PanelStack;
 use crate::render::{
     DecoratorRanges, GutterWidth, RenderedBuffer, RenderedFrame, RenderedGutter, StyledRange,
 };
 use crate::styling::{Color, Style, Theme, ThemeCell, spans_from_value, style_from_value};
-use crate::widget::{Widget, parse_widget};
+use crate::widget::{Widget, collect_buffer_views, parse_widget};
 use crate::window::WindowTree;
+
+/// Frame-to-frame memo of per-buffer precompute output. Owned by the
+/// editor's render plumbing and threaded into [`compute`]; an entry is
+/// reused when its [`RenderKey`] — every input the per-buffer pass reads —
+/// is unchanged. That makes scrolling a popup over an untouched file buffer
+/// skip the buffer's gutter lisp calls, tree-sitter query, and decorator
+/// walks entirely.
+///
+/// Caveat: a user gutter fn that reads state outside the key (say, git
+/// status) renders stale until any keyed field changes.
+#[derive(Default)]
+pub struct PrecomputeCache {
+    entries: SecondaryMap<BufferId, (RenderKey, Rc<RenderedBuffer>)>,
+}
+
+/// Everything the per-buffer precompute pass depends on, snapshot as a
+/// comparable value. Two equal keys ⇒ the pass would produce the same
+/// [`RenderedBuffer`].
+#[derive(PartialEq)]
+struct RenderKey {
+    edit_gen: u64,
+    props_gen: u64,
+    diag_version: u64,
+    theme_gen: u64,
+    file_pos: FilePos,
+    viewport: ScreenPos,
+    abs_pos: FilePos,
+    mode: EditingMode,
+    selection_anchor: Option<FilePos>,
+    len_lines: usize,
+    is_file: bool,
+    is_minibuffer: bool,
+    gutter_ptr: usize,
+    gutter_width: GutterWidth,
+    wrap_mode: WrapMode,
+    wrap_column: Option<u16>,
+    breakindent: bool,
+}
+
+impl RenderKey {
+    #[allow(clippy::too_many_arguments)]
+    fn snapshot(
+        buf: &Buffer,
+        theme_gen: u64,
+        is_file: bool,
+        is_minibuffer: bool,
+        gutter: Option<&Rc<Value>>,
+        gutter_width: GutterWidth,
+    ) -> Self {
+        Self {
+            edit_gen: buf.edit_gen(),
+            props_gen: buf.props().generation(),
+            diag_version: buf.diagnostics_version(),
+            theme_gen,
+            file_pos: buf.file_pos(),
+            viewport: buf.viewport,
+            abs_pos: buf.abs_pos(),
+            mode: buf.mode(),
+            selection_anchor: buf.selection_anchor(),
+            len_lines: buf.len_lines(),
+            is_file,
+            is_minibuffer,
+            gutter_ptr: gutter.map_or(0, |g| Rc::as_ptr(g) as *const () as usize),
+            gutter_width,
+            wrap_mode: buf.wrap_mode(),
+            wrap_column: buf.wrap_column(),
+            breakindent: buf.breakindent(),
+        }
+    }
+}
 
 /// Inputs the precompute pass reads from `State`. All references are
 /// immutable; the only mutation it performs is on its own local builders.
 pub struct PrecomputeInput<'a> {
     pub bufs: &'a SlotMap<BufferId, Buffer>,
     pub windows: &'a WindowTree,
+    pub panels: &'a PanelStack,
     pub frame_fn: Option<&'a Rc<Value>>,
     pub theme: &'a ThemeCell,
     /// Skipped from decorator passes — the minibuffer is plain text.
@@ -42,12 +114,15 @@ pub struct PrecomputeInput<'a> {
     pub gutter: Option<&'a Rc<Value>>,
     pub gutter_width: GutterWidth,
     pub lisp_env: &'a Env,
+    /// Frame-to-frame per-buffer memo; see [`PrecomputeCache`].
+    pub cache: &'a mut PrecomputeCache,
 }
 
 pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
     let PrecomputeInput {
         bufs,
-        windows: _,
+        windows,
+        panels,
         frame_fn,
         theme,
         minibuffer,
@@ -55,6 +130,7 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
         gutter,
         gutter_width,
         lisp_env,
+        cache,
     } = input;
 
     let theme_snap = theme.borrow().clone();
@@ -84,12 +160,48 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
         None => default_layout(),
     };
 
-    let mut per_buf: SecondaryMap<BufferId, RenderedBuffer> = SecondaryMap::new();
-    for (id, buf) in bufs.iter() {
-        let mut rb = RenderedBuffer::default();
+    // Only buffers that can appear this frame: window leaves, the
+    // minibuffer, panel backing buffers, and explicit (w-buffer-view N)
+    // targets in the frame tree or any panel's widget. Hidden buffers pay
+    // no gutter/decorator/wrap cost.
+    let mut visible: Vec<BufferId> = windows.leaf_bufs();
+    visible.push(minibuffer);
+    for p in panels.iter() {
+        visible.push(p.buf);
+        if let Some(w) = p.widget.as_ref() {
+            collect_buffer_views(w, &mut visible);
+        }
+    }
+    collect_buffer_views(&root, &mut visible);
+
+    let mut per_buf: SecondaryMap<BufferId, Rc<RenderedBuffer>> = SecondaryMap::new();
+    for id in visible {
+        if per_buf.contains_key(id) {
+            continue;
+        }
+        let Some(buf) = bufs.get(id) else {
+            continue;
+        };
 
         let is_file = file_bufs.contains(&id);
         let is_minibuffer = id == minibuffer;
+
+        let key = RenderKey::snapshot(
+            buf,
+            theme_snap.generation(),
+            is_file,
+            is_minibuffer,
+            gutter,
+            gutter_width,
+        );
+        if let Some((cached_key, rb)) = cache.entries.get(id)
+            && *cached_key == key
+        {
+            per_buf.insert(id, rb.clone());
+            continue;
+        }
+
+        let mut rb = RenderedBuffer::default();
 
         if is_file && gutter.is_some() && !matches!(gutter_width, GutterWidth::Fixed(0)) {
             let g = build_gutter(buf, gutter_width, gutter, &theme_snap, lisp_env);
@@ -110,6 +222,13 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
             }
         }
 
+        rb.viewport_start = buf.file_pos().row.min(buf.len_lines());
+        rb.row_index = build_row_index(
+            &rb.decorators,
+            rb.viewport_start,
+            buf.viewport.row as usize,
+        );
+
         if !matches!(buf.wrap_mode(), WrapMode::None) && buf.viewport.row > 0 {
             let gutter_w: u16 = rb.gutter.as_ref().map(|g| g.width).unwrap_or(0);
             let content_w = buf
@@ -127,8 +246,13 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
             }
         }
 
+        let rb = Rc::new(rb);
+        cache.entries.insert(id, (key, rb.clone()));
         per_buf.insert(id, rb);
     }
+
+    // Entries for buffers that left the visible set keep no value alive.
+    cache.entries.retain(|id, _| per_buf.contains_key(id));
 
     let _ = &mut root;
 
@@ -233,11 +357,30 @@ fn pad_line_to_width(spans: Vec<Span<'static>>, used: usize, width: u16) -> Line
     Line::from(spans)
 }
 
-/// Order matters: later passes paint over earlier ones. Base-fg first,
-/// then optional syntax/diagnostics, then cursor-line and selection
-/// backgrounds on top.
+/// Index `decorators` by viewport-relative row. Pairs are pushed in
+/// `(decorator, range)` iteration order, which is exactly the paint order
+/// the renderer used when it scanned every decorator per row.
+pub(crate) fn build_row_index(
+    decorators: &[DecoratorRanges],
+    start: usize,
+    rows: usize,
+) -> Vec<Vec<(u32, u32)>> {
+    let mut index: Vec<Vec<(u32, u32)>> = vec![Vec::new(); rows];
+    for (di, d) in decorators.iter().enumerate() {
+        for (ri, r) in d.ranges.iter().enumerate() {
+            if let Some(slot) = r.row.checked_sub(start).and_then(|i| index.get_mut(i)) {
+                slot.push((di as u32, ri as u32));
+            }
+        }
+    }
+    index
+}
+
+/// Order matters: later passes paint over earlier ones. Optional
+/// syntax/diagnostics first, then cursor-line and selection backgrounds on
+/// top. (The frame-level background fill already paints the `default`
+/// face, so there is no base-fg pass.)
 fn push_builtin_decorators(buf: &Buffer, theme: &Theme, rb: &mut RenderedBuffer) {
-    rb.decorators.push(base_fg_ranges(buf, theme));
     let syntax = syntax_ranges(buf, theme);
     if !syntax.ranges.is_empty() {
         rb.decorators.push(syntax);
@@ -334,7 +477,7 @@ fn syntax_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
         return DecoratorRanges { ranges };
     }
 
-    for span in h.query(start_byte, end_byte) {
+    for span in h.query(rope, start_byte, end_byte) {
         let Some(style) = resolve_syntax_face(theme, &span.capture) else {
             continue;
         };
@@ -372,28 +515,6 @@ fn syntax_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
                 display: None,
             });
         }
-    }
-    DecoratorRanges { ranges }
-}
-
-fn base_fg_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
-    let mut ranges = Vec::new();
-    let Some(style) = theme.resolve("default") else {
-        return DecoratorRanges { ranges };
-    };
-    let start = buf.file_pos().row.min(buf.len_lines());
-    let visible = buf.viewport.row as usize;
-    for (i, line) in buf.lines_at(start).take(visible).enumerate() {
-        let text = line.to_string();
-        let len = text.trim_end_matches(['\n', '\r']).chars().count();
-        ranges.push(StyledRange {
-            row: start + i,
-            col: 0,
-            len,
-            style: style.clone(),
-            pad_to_width: false,
-            display: None,
-        });
     }
     DecoratorRanges { ranges }
 }

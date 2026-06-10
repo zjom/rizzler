@@ -115,6 +115,10 @@ pub struct Buffer {
     /// Diagnostics are pushed back into this handle when `publishDiagnostics`
     /// arrives. Type-erased so `rizz_text` doesn't drag in tokio/serde.
     pub(crate) lsp: Option<Box<dyn LspBufferHandle>>,
+    /// Bumped on every rope mutation (and on highlighter swaps). Render
+    /// caches compare it to decide whether precomputed per-buffer data is
+    /// still valid.
+    pub(crate) edit_gen: u64,
 }
 
 impl Buffer {
@@ -163,9 +167,24 @@ impl Buffer {
     }
 
     /// Drop the cached visual-line layout. Called by every edit so the next
-    /// render builds a fresh map.
+    /// render builds a fresh map. Doubles as the rope-changed hook: every
+    /// rope-mutating path goes through here, so this is where [`Self::edit_gen`]
+    /// advances.
     pub(crate) fn invalidate_wrap_cache(&mut self) {
         self.wrap_cache = None;
+        self.edit_gen += 1;
+    }
+
+    /// Render-relevant text generation: changes whenever the rope (or the
+    /// installed highlighter) does.
+    pub fn edit_gen(&self) -> u64 {
+        self.edit_gen
+    }
+
+    /// Generation of the attached LSP diagnostics; `0` when no LSP is
+    /// attached.
+    pub fn diagnostics_version(&self) -> u64 {
+        self.lsp.as_deref().map_or(0, |h| h.diagnostics_version())
     }
 
     /// Drop the tree-sitter tree wholesale so the next render full-reparses.
@@ -231,6 +250,9 @@ impl Buffer {
     /// Install (or remove) a fully-constructed highlighter.
     pub fn set_highlighter(&mut self, h: Option<Highlighter>) {
         self.highlight = h;
+        // Render caches key on edit_gen; swapping the highlighter changes
+        // what a render of the same text produces.
+        self.edit_gen += 1;
     }
 
     pub fn highlight_mut(&mut self) -> Option<&mut Highlighter> {
@@ -266,17 +288,16 @@ impl Buffer {
         self.lsp.as_deref().map_or(&[], |h| h.diagnostics())
     }
 
-    /// If a highlighter is attached and dirty, snapshot the rope into it and
-    /// reparse. Cheap when clean: the dirty flag short-circuits before any
-    /// allocation.
+    /// If a highlighter is attached and dirty, reparse against the rope.
+    /// Cheap when clean (the dirty flag short-circuits), and never copies
+    /// the rope: tree-sitter streams its chunks directly.
     pub fn refresh_highlight(&mut self) {
         if !self.highlight.as_ref().is_some_and(|h| h.is_dirty()) {
             return;
         }
-        let src = self.buf.to_string();
+        let rope = &self.buf;
         if let Some(h) = self.highlight.as_mut() {
-            h.set_source(src);
-            h.ensure_parsed();
+            h.parse_rope(rope);
         }
     }
 
@@ -414,6 +435,7 @@ impl Clone for Buffer {
             replace_batch: self.replace_batch.clone(),
             highlight: self.highlight.clone(),
             lsp: None,
+            edit_gen: self.edit_gen,
         }
     }
 }

@@ -24,6 +24,72 @@ pub fn selected_text(
     }
 }
 
+/// Char count of [`selected_text`] without materializing the string. The
+/// status line and selection badge read this every frame, so it must stay
+/// O(rows) — not O(selection bytes).
+pub fn selection_size(
+    rope: &Rope,
+    mode: EditingMode,
+    anchor: FilePos,
+    cursor: FilePos,
+) -> Option<usize> {
+    match mode {
+        EditingMode::Visual => {
+            let (start, end) = if (anchor.row, anchor.col) <= (cursor.row, cursor.col) {
+                (anchor, cursor)
+            } else {
+                (cursor, anchor)
+            };
+            let s = rope.line_to_char(start.row) + start.col;
+            let e = (rope.line_to_char(end.row) + end.col + 1).min(rope.len_chars());
+            Some(e.saturating_sub(s))
+        }
+        EditingMode::VisualLine => {
+            let (lo, hi) = if anchor.row <= cursor.row {
+                (anchor.row, cursor.row)
+            } else {
+                (cursor.row, anchor.row)
+            };
+            let s = rope.line_to_char(lo);
+            let last_line = rope.len_lines().saturating_sub(1);
+            let e = if hi >= last_line {
+                rope.len_chars()
+            } else {
+                rope.line_to_char(hi + 1)
+            };
+            Some(e.saturating_sub(s))
+        }
+        EditingMode::VisualBlock => {
+            let (lo_row, hi_row) = if anchor.row <= cursor.row {
+                (anchor.row, cursor.row)
+            } else {
+                (cursor.row, anchor.row)
+            };
+            let (lo_col, hi_col) = if anchor.col <= cursor.col {
+                (anchor.col, cursor.col)
+            } else {
+                (cursor.col, anchor.col)
+            };
+            let mut n = 0;
+            for row in lo_row..=hi_row {
+                let line = rope.line(row);
+                let mut len = line.len_chars();
+                if len > 0 && line.char(len - 1) == '\n' {
+                    len -= 1;
+                }
+                let s = lo_col.min(len);
+                let e = (hi_col + 1).min(len);
+                n += e.saturating_sub(s);
+                if row != hi_row {
+                    n += 1; // the joining '\n'
+                }
+            }
+            Some(n)
+        }
+        _ => None,
+    }
+}
+
 fn visual_text(rope: &Rope, anchor: FilePos, cursor: FilePos) -> String {
     let (start, end) = if (anchor.row, anchor.col) <= (cursor.row, cursor.col) {
         (anchor, cursor)

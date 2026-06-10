@@ -94,7 +94,17 @@ pub(super) fn register(b: &mut Builtins) {
             let s = with_editor_mut(|st| st.focused_buf().selected_text());
             Ok(Rc::new(s.into()))
         },
-        "(selected-text)\n\nReturns str: the text covered by the active visual selection, or () if\nnothing is selected.\nSee also: (buf-text).",
+        "(selected-text)\n\nReturns str: the text covered by the active visual selection, or () if\nnothing is selected.\nSee also: (buf-text), (selection-size).",
+    );
+
+    b.be_doc(
+        "selection-size",
+        0,
+        |_, _| {
+            let n = with_editor_mut(|st| st.focused_buf().selection_size());
+            Ok(Rc::new(n.map(|n| n as i64).into()))
+        },
+        "(selection-size)\n\nReturns int: the char count of the active visual selection, or () if\nnothing is selected. Unlike (len (selected-text)) this never\nmaterializes the selection text, so it's safe to call every frame from\na status line or badge.\nSee also: (selected-text).",
     );
 
     b.be_doc(

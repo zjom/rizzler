@@ -46,6 +46,13 @@ impl Buffer {
         selection::selected_text(&self.buf, self.mode, anchor, self.abs_pos())
     }
 
+    /// Char count of [`Self::selected_text`] without building the string —
+    /// for per-frame consumers like the status line.
+    pub fn selection_size(&self) -> Option<usize> {
+        let anchor = self.selection_anchor?;
+        selection::selection_size(&self.buf, self.mode, anchor, self.abs_pos())
+    }
+
     /// Set up a charwise visual selection spanning the half-open char range
     /// `[start, end)`. Switches the buffer into Visual mode, anchors at
     /// `start`, and lands the cursor on the last char of the range so the

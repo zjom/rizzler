@@ -11,7 +11,7 @@ use ratatui::widgets::Paragraph;
 use rizz_core::Display;
 use rizz_text::{Buffer, WrapMap};
 
-use crate::render::{DecoratorRanges, RenderedBuffer, StyledRange};
+use crate::render::{RenderedBuffer, StyledRange};
 use crate::styling::style_to_ratatui;
 
 pub struct EditorView;
@@ -28,7 +28,6 @@ impl EditorView {
 
     pub fn render(buf: &Buffer, area: Rect, buf_frame: Option<&RenderedBuffer>, frame: &mut Frame) {
         let gutter = buf_frame.and_then(|f| f.gutter.as_ref());
-        let decorators = buf_frame.map(|f| f.decorators.as_slice()).unwrap_or(&[]);
         let wrap = buf_frame.and_then(|f| f.wrap.as_ref());
 
         let gutter_w = gutter.map(|g| g.width).unwrap_or(0);
@@ -44,7 +43,12 @@ impl EditorView {
         let content_area = cols[cols.len() - 1];
 
         if let Some(g) = gutter {
-            frame.render_widget(Paragraph::new(g.rows.clone()), cols[0]);
+            // Write rows directly instead of cloning them into a Paragraph.
+            let gutter_area = cols[0];
+            let buf = frame.buffer_mut();
+            for (i, line) in g.rows.iter().take(gutter_area.height as usize).enumerate() {
+                buf.set_line(gutter_area.x, gutter_area.y + i as u16, line, gutter_area.width);
+            }
         }
 
         let visible_rows = content_area.height as usize;
@@ -66,7 +70,7 @@ impl EditorView {
                         vr.start_col,
                         vr.indent,
                         segment,
-                        decorators,
+                        buf_frame,
                         content_area.width,
                     )
                 })
@@ -80,7 +84,7 @@ impl EditorView {
                     let lnum = start + row;
                     let text = l.to_string();
                     let text = text.trim_end_matches(['\n', '\r']).to_string();
-                    apply_decorators(lnum, text, decorators, content_area.width)
+                    apply_decorators(lnum, text, buf_frame, content_area.width)
                 })
                 .collect()
         };
@@ -114,15 +118,12 @@ impl EditorView {
 fn apply_decorators(
     lnum: usize,
     text: String,
-    decorators: &[DecoratorRanges],
+    buf_frame: Option<&RenderedBuffer>,
     area_width: u16,
 ) -> Line<'static> {
     let mut spans = vec![Span::raw(text)];
-    for d in decorators {
-        for r in &d.ranges {
-            if r.row != lnum {
-                continue;
-            }
+    if let Some(rb) = buf_frame {
+        for r in rb.ranges_on_row(lnum) {
             spans = apply_range(spans, r, area_width);
         }
     }
@@ -134,7 +135,7 @@ fn apply_decorators_segment(
     segment_start: usize,
     indent: u16,
     text: String,
-    decorators: &[DecoratorRanges],
+    buf_frame: Option<&RenderedBuffer>,
     area_width: u16,
 ) -> Line<'static> {
     let segment_len = text.chars().count();
@@ -142,11 +143,8 @@ fn apply_decorators_segment(
     let inner_width = area_width.saturating_sub(indent);
 
     let mut spans = vec![Span::raw(text)];
-    for d in decorators {
-        for r in &d.ranges {
-            if r.row != file_row {
-                continue;
-            }
+    if let Some(rb) = buf_frame {
+        for r in rb.ranges_on_row(file_row) {
             let r_end = r.col + r.len;
             if !r.pad_to_width && (r_end <= segment_start || r.col >= segment_end) {
                 continue;
@@ -249,4 +247,93 @@ fn apply_range(spans: Vec<Span<'static>>, r: &StyledRange, area_width: u16) -> V
         out.push(Span::raw(String::new()));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::precompute::build_row_index;
+    use crate::render::DecoratorRanges;
+    use crate::styling::{Color, Style};
+
+    fn sr(row: usize, col: usize, len: usize, fg: Color, pad: bool) -> StyledRange {
+        StyledRange {
+            row,
+            col,
+            len,
+            style: Style {
+                fg: Some(fg),
+                ..Default::default()
+            },
+            pad_to_width: pad,
+            display: None,
+        }
+    }
+
+    /// The pre-index renderer: scan every range of every decorator per row.
+    fn brute_force(lnum: usize, text: &str, decorators: &[DecoratorRanges]) -> Line<'static> {
+        let mut spans = vec![Span::raw(text.to_string())];
+        for d in decorators {
+            for r in &d.ranges {
+                if r.row != lnum {
+                    continue;
+                }
+                spans = apply_range(spans, r, 40);
+            }
+        }
+        Line::from(spans)
+    }
+
+    /// Overlapping syntax / cursor-line / selection style passes must paint
+    /// identically through the row index and the brute-force scan.
+    #[test]
+    fn row_index_preserves_paint_order() {
+        let decorators = vec![
+            // "syntax": two ranges on row 0, one on row 2
+            DecoratorRanges {
+                ranges: vec![
+                    sr(0, 0, 4, Color::Red, false),
+                    sr(0, 6, 3, Color::Green, false),
+                    sr(2, 1, 5, Color::Red, false),
+                ],
+            },
+            // "cursor line": padded background on row 0
+            DecoratorRanges {
+                ranges: vec![sr(0, 0, 0, Color::DarkGray, true)],
+            },
+            // "selection": overlaps both syntax ranges on row 0
+            DecoratorRanges {
+                ranges: vec![sr(0, 2, 6, Color::Blue, false), sr(1, 0, 3, Color::Blue, false)],
+            },
+        ];
+        let rb = RenderedBuffer {
+            row_index: build_row_index(&decorators, 0, 5),
+            viewport_start: 0,
+            decorators,
+            ..Default::default()
+        };
+        for (lnum, text) in [(0, "hello world"), (1, "abc"), (2, "scanned"), (3, "")] {
+            let via_index = apply_decorators(lnum, text.to_string(), Some(&rb), 40);
+            let brute = brute_force(lnum, text, &rb.decorators);
+            assert_eq!(via_index, brute, "row {lnum}");
+        }
+    }
+
+    /// Ranges on rows outside the indexed viewport are simply not painted.
+    #[test]
+    fn row_index_clips_to_viewport() {
+        let decorators = vec![DecoratorRanges {
+            ranges: vec![sr(10, 0, 3, Color::Red, false)],
+        }];
+        let rb = RenderedBuffer {
+            row_index: build_row_index(&decorators, 3, 4), // rows 3..7
+            viewport_start: 3,
+            decorators,
+            ..Default::default()
+        };
+        assert_eq!(rb.ranges_on_row(10).count(), 0);
+        assert_eq!(rb.ranges_on_row(2).count(), 0);
+        let line = apply_decorators(10, "abc".into(), Some(&rb), 40);
+        assert_eq!(line, Line::from(vec![Span::raw("abc".to_string())]));
+    }
 }

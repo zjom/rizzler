@@ -81,6 +81,65 @@ impl State {
         mb.insert_many(replacement);
     }
 
+    /// Replace the entire minibuffer line with `text`, landing the cursor at
+    /// the end. Used by command-history recall.
+    fn set_minibuffer_text(&mut self, text: &str) {
+        let mb = self.bufs.minibuffer_mut();
+        mb.clear();
+        mb.insert_many(text);
+    }
+
+    /// Forget the command-history recall position so the next `<up>` starts
+    /// again from the newest entry. Called on every (re)entry into command
+    /// mode.
+    pub(super) fn reset_cmd_history_nav(&mut self) {
+        self.cmd_history_nav = Default::default();
+    }
+
+    /// `<up>` in command mode: pull the previous (older) submitted command
+    /// into the minibuffer. The first press stashes the current draft so it
+    /// can be restored by walking back down past the newest entry.
+    pub fn command_history_prev(&mut self) {
+        let n = self.journal.command_count();
+        if n == 0 {
+            return;
+        }
+        let next = match self.cmd_history_nav.pos {
+            None => {
+                self.cmd_history_nav.draft = self.bufs.minibuffer().text();
+                n - 1
+            }
+            Some(0) => return, // already at the oldest entry
+            Some(i) => i - 1,
+        };
+        self.cmd_history_nav.pos = Some(next);
+        if let Some(cmd) = self.journal.command(next) {
+            let cmd = cmd.to_string();
+            self.set_minibuffer_text(&cmd);
+        }
+    }
+
+    /// `<down>` in command mode: pull the next (newer) command in, or restore
+    /// the stashed draft once we step past the newest entry. A no-op while the
+    /// user is still on their own un-recalled line.
+    pub fn command_history_next(&mut self) {
+        let Some(i) = self.cmd_history_nav.pos else {
+            return;
+        };
+        let n = self.journal.command_count();
+        if i + 1 < n {
+            self.cmd_history_nav.pos = Some(i + 1);
+            if let Some(cmd) = self.journal.command(i + 1) {
+                let cmd = cmd.to_string();
+                self.set_minibuffer_text(&cmd);
+            }
+        } else {
+            self.cmd_history_nav.pos = None;
+            let draft = std::mem::take(&mut self.cmd_history_nav.draft);
+            self.set_minibuffer_text(&draft);
+        }
+    }
+
     pub(super) fn open_or_focus_file(&mut self, path: &Path) -> BufferId {
         let id = self.find_or_open_file(path);
         self.surface.windows.set_focused_buf(id);

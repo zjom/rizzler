@@ -500,6 +500,9 @@
 (map 'command "<esc>"       '(command-cancel))
 (map 'command "<left>"      '(move-cursor 'left))
 (map 'command "<right>"     '(move-cursor 'right))
+;; <up>/<down> recall older/newer commands from history into the minibuffer.
+(map 'command "<up>"        '(command-history-prev))
+(map 'command "<down>"      '(command-history-next))
 
 ;; ============================================================================
 ;; Search mode (`/` — minibuffer)
@@ -836,19 +839,12 @@
 ;; or `()` for rows past EOF. Returns one widget for that row. The total
 ;; column width is the second arg to `set-gutter` further down.
 
-(fn _pad-right (s w)
-  (do
-    (let pad (- w (len s)))
-    (if (> pad 0)
-        (str-join [s (str-join (fmap (fn _spc (_) " ") (range 0 pad)) "")] "")
-        s)))
+;; Thin wrappers over the native `str-pad-*` builtins. The gutter fn runs
+;; once per visible row per frame, so padding must not be an interpreted
+;; per-char loop.
+(fn _pad-right (s w) (str-pad-right s w))
 
-(fn _pad-left (s w)
-  (do
-    (let pad (- w (len s)))
-    (if (> pad 0)
-        (str-join [(str-join (fmap (fn _spc (_) " ") (range 0 pad)) "") s] "")
-        s)))
+(fn _pad-left (s w) (str-pad-left s w))
 
 (fn _gutter (n)
   (do
@@ -907,10 +903,10 @@
 
 (fn _seg-selection-hint ()
   (do
-    (let sel (selected-text))
-    (if (= sel ())
+    (let n (selection-size))
+    (if (= n ())
         (w-span "" "vague.muted")
-        (w-span (str-join [" " (to-str (len sel)) " chars selected "] "")
+        (w-span (str-join [" " (to-str n) " chars selected "] "")
                 "vague.accent"))))
 
 (fn _seg-cursor ()
@@ -990,12 +986,12 @@
 ;; chord-prefix hint, ...).
 (fn _selection-badge ()
   (do
-    (let sel (selected-text))
-    (if (= sel ())
+    (let n (selection-size))
+    (if (= n ())
         (w-empty)
         (w-overlay
           (placement-anchored 'top 1)
-          (w-line [(w-span (str-join ["  " (to-str (len sel)) " chars selected  "] "")
+          (w-line [(w-span (str-join ["  " (to-str n) " chars selected  "] "")
                            "vague.warn")]
                   'right)))))
 
@@ -1018,25 +1014,46 @@
 ;; having to wire up any "candidates changed" callback.
 
 (let _menu-max-rows 8)
-(let _menu-index    (ref 0))
+;; -1 is the "no selection" sentinel: the menu opens with nothing highlighted,
+;; so <enter> submits the typed minibuffer text. <c-n>/<c-p> move the cursor
+;; onto a real item, at which point <enter> submits that item instead.
+(let _menu-index    (ref -1))
 
 ;; Candidate list visible to the menu. Empty unless we're in command mode
 ;; with a non-empty prefix — otherwise an empty minibuffer would balloon
 ;; the bottom of the screen with every binding in the env.
+;;
+;; `command-completions` walks the entire env and sorts, and this fn runs
+;; once per frame (from the overlay) plus once per <c-n>/<c-p>/<c-y>
+;; keypress — so the result is memoized per prefix.
+(let! _menu-cands-cache  [])
+(let! _menu-cache-prefix ())
+
 (fn _menu-cands ()
   (if (= (focused-mode) "command")
-      (if (= (command-prefix) "")
-          []
-          (command-completions))
+      (do
+        (let prefix (command-prefix))
+        (if (= prefix "")
+            []
+            (if (= prefix (deref _menu-cache-prefix))
+                (deref _menu-cands-cache)
+                (do
+                  (let cands (command-completions))
+                  (set! _menu-cands-cache cands)
+                  (set! _menu-cache-prefix prefix)
+                  cands))))
       []))
 
-;; Clamp the persisted index to the live candidate count.
+;; Resolve the persisted index against the live candidate count. Returns the
+;; in-range selection, or -1 when there's no valid selection (empty menu or
+;; the cursor is out of bounds) — so callers can tell "on an item" apart from
+;; "nothing selected".
 (fn _menu-clamped (n)
   (do
     (let i (deref _menu-index))
-    (if (<= n 0) 0
-    (if (< i 0) 0
-    (if (>= i n) 0
+    (if (<= n 0) -1
+    (if (< i 0) -1
+    (if (>= i n) -1
                  i)))))
 
 ;; Pad every candidate to the same width so the selection highlight covers
@@ -1049,10 +1066,8 @@
                  (fn _w (acc s) (if (> (len s) acc) (len s) acc))
                  0 cands))
     (let pad-w (+ max-w 2))
-    (fn _spaces (n)
-      (str-join (fmap (fn _sp (_) " ") (range 0 n)) ""))
     (fmap (fn _r (s)
-            (str-join [" " s (_spaces (- pad-w (+ (len s) 1)))] ""))
+            (str-pad-right (str-join [" " s] "") pad-w))
           cands)))
 
 (fn _menu-row (cand i sel)
@@ -1096,13 +1111,32 @@
     (let n (len cands))
     (if (<= n 0) ()
         (do
+          ;; With no explicit selection, accept the top candidate.
           (let i (_menu-clamped n))
-          (set! _menu-index 0)
-          (command-complete (get cands i))))))
+          (let j (if (< i 0) 0 i))
+          (set! _menu-index -1)
+          (command-complete (get cands j))))))
 
-(map 'command "<c-n>" '(_menu-next))
-(map 'command "<c-p>" '(_menu-prev))
-(map 'command "<c-y>" '(_menu-accept))
+;; <enter> in command mode. If the cursor is on a menu item, complete to it and
+;; submit; otherwise (empty menu or cursor out of bounds) submit the minibuffer
+;; text as typed.
+(fn _menu-command-submit ()
+  (do
+    (let cands (_menu-cands))
+    (let n (len cands))
+    (let i (_menu-clamped n))
+    (if (< i 0)
+        (command-submit)
+        (do
+          (set! _menu-index -1)
+          (command-complete (get cands i))
+          (command-submit)))))
+
+(map 'command "<c-n>"       '(_menu-next))
+(map 'command "<c-p>"       '(_menu-prev))
+(map 'command "<c-y>"       '(_menu-accept))
+;; We override the default `<enter>` keymap in command mode to submit the item we have our cursor on.
+(map 'command "<enter>"     '(_menu-command-submit))
 
 ;; The overlay wrapper. Anchors the menu to the bottom of the editor area
 ;; and grows it upward as more candidates appear, so the editor rows
@@ -1495,6 +1529,324 @@
          (do
            (popup-hide 'lsp-code-action)
            (lsp-invoke-code-action (get a "id"))))))
+
+
+;; ============================================================================
+;; Pickers — a telescope-style fuzzy finder
+;; ============================================================================
+;;
+;; A *picker* is a floating prompt over a scrollable, live-filtered list:
+;; type to fuzzy-narrow the candidates, move the highlight, press <enter> to
+;; act on the selection. It's the same shape as Telescope/fzf — and like
+;; them, the engine here knows nothing about *what* it's listing. Everything
+;; specific to a use case lives in a small data spec:
+;;
+;;   (picker-open
+;;     {"title":     "find files"            ;; shown in the border
+;;      "items":     [ ITEM ... ]            ;; the candidate list
+;;      "on-accept": (fn _a (item) ...)})    ;; run on <enter> with the pick
+;;
+;; An ITEM is a map with a "display" string (what you see, and what the
+;; fuzzy filter matches against) plus any other keys you like — the whole
+;; item map is handed back to "on-accept", so stash a path, a buffer id, or
+;; a quoted form to evaluate under a "data" key. That separation is the
+;; whole extensibility story: the two concrete pickers at the bottom
+;; (`picker-files`, `picker-commands`) are each ~10 lines built on this one
+;; engine, and your own is just another spec.
+;;
+;; ── How it stays live ──
+;;
+;; Unlike the completion menu (an overlay re-read every frame by the frame
+;; fn), a popup's widget is built once per `popup-show`. So the picker drives
+;; itself the other way round: every keystroke mutates a `ref` of state and
+;; calls `popup-show` again. Because `popup-show` is create-or-update keyed
+;; by name, that repaints the same panel in place — no flicker, no stacking.
+;;
+;; ── Input capture ──
+;;
+;; The panel runs under its own `'picker` keymap (NOT layered on `'popup`),
+;; so it has total control of the keyboard. Printable keys are wired in bulk
+;; further down — each one appends to the query and repaints. Control keys
+;; (<c-n>/<c-p>, <bs>, <enter>, <esc>) get their own handlers.
+
+;; ----- faces ----------------------------------------------------------
+;; Reuse the vague palette so the picker matches the rest of the chrome.
+;; The selected row gets the same warning-coloured bar the completion menu
+;; uses, stretched across the full row width (see `_picker-fit`).
+(face-define "picker.default"  {"fg": pal-fg       "bg": pal-inactive-bg})
+(face-define "picker.border"   {"fg": pal-border   "bg": pal-inactive-bg})
+(face-define "picker.title"    {"fg": pal-warning  "bg": pal-inactive-bg "bold": 1})
+(face-define "picker.prompt"   {"fg": pal-hint     "bold": 1})
+(face-define "picker.query"    {"fg": pal-fg})
+(face-define "picker.cursor"   {"fg": pal-warning  "bold": 1})
+(face-define "picker.count"    {"fg": pal-comment  "italic": 1})
+(face-define "picker.item"     {"fg": pal-fg})
+(face-define "picker.selected" {"fg": pal-bg       "bg": pal-warning    "bold": 1})
+
+;; ----- state ----------------------------------------------------------
+;; Five refs thread the picker's state between keypresses. `_picker-query`
+;; is the text you've typed; `_picker-index` is the highlighted row within
+;; the *filtered* list; `_picker-spec` / `_picker-items` hold the active
+;; picker's definition and its full (unfiltered) candidate snapshot.
+(let _picker-max-rows   12)   ;; rows of results shown at once (scrolls past)
+(let _picker-file-limit 2000) ;; cap the recursive file walk so it stays snappy
+(let! _picker-query "")
+(let! _picker-index 0)
+(let! _picker-spec  ())
+(let! _picker-items [])
+
+;; ----- the fuzzy matcher ----------------------------------------------
+;; The match itself is the native `fuzzy-filter` builtin: a case-
+;; insensitive subsequence test (are all of the query's chars found in the
+;; candidate's "display", in order, gaps allowed?). Typing " control"
+;; matches "core/control" and "c_o_n_t.rs". Filtering thousands of items
+;; per keystroke in interpreted lisp was the picker's bottleneck.
+;;
+;; The result is memoized per query: `_picker-render` and the navigation
+;; handlers each ask for the match list, so without the cache every
+;; keypress would filter twice. `picker-open` resets the cache (that's the
+;; only place the item list changes).
+(let! _picker-matches-cache [])
+(let! _picker-cache-query  ())
+
+(fn _picker-matches ()
+  (do
+    (let q (deref _picker-query))
+    (if (= q (deref _picker-cache-query))
+        (deref _picker-matches-cache)
+        (do
+          (let m (fuzzy-filter q (deref _picker-items) "display"))
+          (set! _picker-matches-cache m)
+          (set! _picker-cache-query q)
+          m))))
+
+;; Clamp the persisted highlight to the live match count (wrapping a stale
+;; index back to 0), mirroring the completion menu's `_menu-clamped`.
+(fn _picker-clamp (n)
+  (do
+    (let i (deref _picker-index))
+    (cond
+      ((<= n 0) 0)
+      ((<  i 0) 0)
+      ((>= i n) 0)
+      (else     i))))
+
+;; Pad (or truncate) a string to exactly `w` cells so the selection bar is
+;; a clean rectangle regardless of candidate length. `_pad-right` is the
+;; gutter helper defined back in the widgets section.
+(fn _picker-fit (s w)
+  (if (> (len s) w) (slice s 0 w) (_pad-right s w)))
+
+;; One result row: a pointer column plus the (width-fitted) display text.
+;; The selected row paints both spans with the highlight face so the bar
+;; reads as one solid block.
+(fn _picker-row (it i sel w)
+  (do
+    (let face (if (= i sel) "picker.selected" "picker.item"))
+    (w-line [(w-span (if (= i sel) " ▶ " "   ") face)
+             (w-span (_picker-fit (get it "display") w) face)])))
+
+;; Assemble and (re)show the panel. Called on open and after every keypress.
+;; The layout, top to bottom: prompt line, a count line (matches/total),
+;; then up to `_picker-max-rows` result rows scrolled to keep the highlight
+;; visible — the same scroll arithmetic the completion menu uses.
+(fn _picker-render ()
+  (do
+    (let spec    (deref _picker-spec))
+    (let matches (_picker-matches))
+    (let n       (len matches))
+    (let total   (len (deref _picker-items)))
+    (let sel     (_picker-clamp n))
+    (let bar-w   (max 8 (- (/ (* (viewport-cols) 7) 10) 6)))
+    (let shown   (min n _picker-max-rows))
+    (let scroll  (if (>= sel _picker-max-rows) (+ (- sel _picker-max-rows) 1) 0))
+    (let visible (slice matches scroll (+ scroll shown)))
+    (let rows
+      (fmapi (fn _r (j it) (w-size 'cells 1 (_picker-row it j (- sel scroll) bar-w)))
+             visible))
+    (let prompt
+      (w-size 'cells 1
+        (w-line [(w-span " › "               "picker.prompt")
+                 (w-span (deref _picker-query) "picker.query")
+                 (w-span "▏"                  "picker.cursor")])))
+    (let countbar
+      (w-size 'cells 1
+        (w-line [(w-span (str-join ["   " (to-str n) "/" (to-str total)] "")
+                         "picker.count")])))
+    (popup-show 'picker
+      (w-block {"border":      "rounded"
+                "title":       (str-join [" " (get spec "title") " "] "")
+                "face":        "picker.default"
+                "border-face": "picker.border"
+                "title-face":  "picker.title"}
+               (w-vstack (concat [prompt countbar] rows)))
+      ;; A popup's 'fit height is measured from its *backing buffer* text,
+      ;; not the widget tree (see resolve_overlay_rect in panel.rs) — and we
+      ;; render entirely with custom widgets over an empty buffer. So size
+      ;; the panel explicitly instead: prompt + count + the visible rows,
+      ;; plus 2 cells for the rounded border.
+      {"modes":       ['picker]
+       "buffer-mode": 'normal
+       "placement":   (placement-centered 0.7 (+ shown 4))
+       "show-cursor": 0
+       "text":        ""})
+    ()))
+
+;; ----- the public engine ----------------------------------------------
+;; Seed the state from a spec and paint the first frame. Call this from your
+;; own pickers; the keymap below drives it from there.
+(fn picker-open (spec)
+  (do
+    (set! _picker-spec  spec)
+    (set! _picker-items (get spec "items"))
+    (set! _picker-query "")
+    (set! _picker-index 0)
+    (set! _picker-cache-query ())
+    (_picker-render)))
+
+;; ----- input handlers -------------------------------------------------
+;; Each mutates state and repaints. Typing resets the highlight to the top
+;; (so the best fuzzy match is always one <enter> away, Telescope-style).
+(fn _picker-type (c)
+  (do
+    (set! _picker-query (str-join [(deref _picker-query) c] ""))
+    (set! _picker-index 0)
+    (_picker-render)))
+
+(fn _picker-backspace ()
+  (do
+    (let q (deref _picker-query))
+    (let n (len q))
+    (set! _picker-query (if (> n 0) (slice q 0 (- n 1)) q))
+    (set! _picker-index 0)
+    (_picker-render)))
+
+(fn _picker-clear ()
+  (do (set! _picker-query "")
+      (set! _picker-index 0)
+      (_picker-render)))
+
+(fn _picker-next ()
+  (do
+    (let n (len (_picker-matches)))
+    (if (<= n 0) ()
+        (do
+          (let i (_picker-clamp n))
+          (set! _picker-index (if (>= (+ i 1) n) 0 (+ i 1)))
+          (_picker-render)))))
+
+(fn _picker-prev ()
+  (do
+    (let n (len (_picker-matches)))
+    (if (<= n 0) ()
+        (do
+          (let i (_picker-clamp n))
+          (set! _picker-index (if (<= i 0) (- n 1) (- i 1)))
+          (_picker-render)))))
+
+(fn _picker-cancel () (popup-hide 'picker))
+
+;; Accept: snapshot the pick, dismiss the panel *first* (so the action runs
+;; with the editor — not the popup — focused, exactly like the file
+;; explorer's <enter>), then hand the item to the spec's "on-accept".
+(fn _picker-accept ()
+  (do
+    (let matches (_picker-matches))
+    (let n       (len matches))
+    (if (<= n 0)
+        (popup-hide 'picker)
+        (do
+          (let it   (get matches (_picker-clamp n)))
+          (let spec (deref _picker-spec))
+          (popup-hide 'picker)
+          ((get spec "on-accept") it)))))
+
+;; ----- the 'picker keymap ---------------------------------------------
+;; Printable keys are bound in bulk: walk a string of the characters a query
+;; might contain and wire each to `(_picker-type "<char>")`. The action is
+;; built as a cons list `(_picker-type c)` — the same code-as-data trick the
+;; text-object binder uses — so the char is baked into the quoted form.
+;; `<` and space can't be written literally as key tokens, so they get the
+;; named `<lt>` / `<space>` forms.
+(let _picker-chars
+  "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/~+@#%=,>")
+
+(for c (str-split _picker-chars "")
+  (keymap-set 'picker c (cons '_picker-type (cons c ()))))
+
+(keymap-set 'picker "<space>"     '(_picker-type " "))
+(keymap-set 'picker "<lt>"        '(_picker-type "<"))
+(keymap-set 'picker "<backspace>" '(_picker-backspace))
+(keymap-set 'picker "<c-u>"       '(_picker-clear))
+(keymap-set 'picker "<c-n>"       '(_picker-next))
+(keymap-set 'picker "<down>"      '(_picker-next))
+(keymap-set 'picker "<c-p>"       '(_picker-prev))
+(keymap-set 'picker "<up>"        '(_picker-prev))
+(keymap-set 'picker "<c-y>"       '(_picker-accept))
+(keymap-set 'picker "<enter>"     '(_picker-accept))
+(keymap-set 'picker "<esc>"       '(_picker-cancel))
+
+;; ----- concrete picker: find files ------------------------------------
+;; A recursive walk of the working directory. The descent is an ordinary
+;; recursive fn (depth = directory nesting, which is shallow), while breadth
+;; at each level is a non-recursive `for` over `fs-readdir` — so we never
+;; approach the interpreter's recursion cap even on big trees. `out` is a
+;; ref-of-array accumulator, bounded by `_picker-file-limit`.
+(fn _picker-basename (p) (last (str-split p "/")))
+
+(fn _picker-skip? (base)
+  (or (= base "")
+  (or (= (get base 0) ".")          ;; dotfiles / .git / .build ...
+  (or (= base "target")
+      (= base "node_modules")))))
+
+(fn _picker-collect (dir out)
+  (for e (fs-readdir dir)
+    (if (>= (len (deref out)) _picker-file-limit)
+        ()
+        (do
+          (let p    (to-str e))
+          (let base (_picker-basename p))
+          (unless (_picker-skip? base)
+            (if (fs-isdir p)
+                (_picker-collect p out)
+                (set! out (push (deref out) p))))))))
+
+(fn picker-files ()
+  (do
+    (let root  (to-str (workdir)))
+    (let! acc  [])
+    (_picker-collect root acc)
+    (let prefix (str-join [root "/"] ""))
+    (picker-open
+      {"title": "find files"
+       "items": (fmap (fn _it (p)
+                       {"display": (str-replace p prefix "")
+                        "data":    p})
+                     (deref acc))
+       "on-accept": (fn _open (it) (edit (get it "data")))})))
+
+;; ----- concrete picker: command palette -------------------------------
+;; Pure-data extensibility: each item carries a quoted form under "data",
+;; and accepting `eval`s it. Add a row to the array and it's instantly
+;; fuzzy-findable — no new plumbing. This is the template for your own
+;; pickers (recent files, git branches, LSP symbols, ...).
+(fn picker-commands ()
+  (picker-open
+    {"title": "commands"
+     "items": [{"display": "find files"      "data": '(picker-files)}
+              {"display": "file explorer"   "data": '(popup-files)}
+              {"display": "reload config"   "data": '(reload-config)}
+              {"display": "write buffer"    "data": '(write)}
+              {"display": "messages"        "data": '(messages)}
+              {"display": "command history" "data": '(history)}
+              {"display": "help"            "data": '(popup-help)}]
+     "on-accept": (fn _run (it) (eval (get it "data")))}))
+
+;; ff finds files, <space>fc opens the command palette.
+;; Both are also callable by name from command mode.
+(keymap-set 'normal "ff" '(picker-files))
+(keymap-set 'normal "<space>fc" '(picker-commands))
 
 
 ;; =============================================================================

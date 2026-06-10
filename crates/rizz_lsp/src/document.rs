@@ -22,6 +22,7 @@ pub struct LspBufferAttachment {
     encoding: Encoding,
     version: i32,
     diagnostics: Vec<LspDiagnostic>,
+    diagnostics_gen: u64,
 }
 
 impl LspBufferAttachment {
@@ -33,6 +34,7 @@ impl LspBufferAttachment {
             encoding,
             version: 0,
             diagnostics: Vec::new(),
+            diagnostics_gen: 0,
         }
     }
 
@@ -110,6 +112,11 @@ impl LspBufferHandle for LspBufferAttachment {
     }
 
     fn replace_diagnostics(&mut self, items: Vec<LspDiagnostic>) {
+        self.diagnostics_gen += 1;
         self.diagnostics = items;
+    }
+
+    fn diagnostics_version(&self) -> u64 {
+        self.diagnostics_gen
     }
 }

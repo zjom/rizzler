@@ -40,6 +40,63 @@ fn notify_records_history_and_shows_popup() {
 }
 
 #[test]
+fn command_history_up_down_recall() {
+    let mut s = test_state();
+    s.record_cmd("first");
+    s.record_cmd("second");
+    // Entering command mode clears the minibuffer and resets recall.
+    s.eval_lisp("(set-mode 'command)").unwrap();
+    assert_eq!(s.minibuffer_text(), "");
+
+    // <up> pulls in the newest entry, then walks older.
+    s.command_history_prev();
+    assert_eq!(s.minibuffer_text(), "second");
+    s.command_history_prev();
+    assert_eq!(s.minibuffer_text(), "first");
+    // At the oldest entry it stays put.
+    s.command_history_prev();
+    assert_eq!(s.minibuffer_text(), "first");
+
+    // <down> walks back toward newer, then restores the (empty) draft.
+    s.command_history_next();
+    assert_eq!(s.minibuffer_text(), "second");
+    s.command_history_next();
+    assert_eq!(s.minibuffer_text(), "");
+    // Past the draft <down> is a no-op.
+    s.command_history_next();
+    assert_eq!(s.minibuffer_text(), "");
+}
+
+#[test]
+fn command_history_restores_typed_draft() {
+    use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+    let mut s = test_state();
+    s.record_cmd("old");
+    s.eval_lisp("(set-mode 'command)").unwrap();
+    for c in "wip".chars() {
+        s.handle_key_event(CT::new(KeyCode::Char(c), KeyModifiers::NONE))
+            .unwrap();
+    }
+    assert_eq!(s.minibuffer_text(), "wip");
+
+    // Recall an entry, then step back down past the newest → the draft returns.
+    s.command_history_prev();
+    assert_eq!(s.minibuffer_text(), "old");
+    s.command_history_next();
+    assert_eq!(s.minibuffer_text(), "wip");
+}
+
+#[test]
+fn command_history_prev_noop_when_empty() {
+    let mut s = test_state();
+    s.eval_lisp("(set-mode 'command)").unwrap();
+    s.command_history_prev();
+    assert_eq!(s.minibuffer_text(), "");
+    s.command_history_next();
+    assert_eq!(s.minibuffer_text(), "");
+}
+
+#[test]
 fn q_dismisses_popup() {
     use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
     let mut s = test_state();
@@ -131,7 +188,47 @@ fn default_precompute_produces_expected_frame() {
     let id = s.surface.windows.focused_buf();
     let bf = &frame.per_buf[id];
     assert!(bf.gutter.is_some(), "expected a gutter");
-    assert!(bf.decorators.len() >= 3, "expected the 3 built-in passes");
+    // cursor-line + selection; syntax/diagnostics need a grammar/LSP.
+    assert!(bf.decorators.len() >= 2, "expected the built-in passes");
+}
+
+#[test]
+fn precompute_skips_hidden_buffers() {
+    let mut s = test_state();
+    let shown = s.surface.windows.focused_buf();
+    let hidden = s.create_buf(false, None);
+    let (frame, err) = s.precompute_frame();
+    assert!(err.is_none(), "no frame errors expected: {err:?}");
+    assert!(frame.per_buf.contains_key(shown), "visible buffer rendered");
+    assert!(
+        frame.per_buf.contains_key(s.bufs.minibuffer_id()),
+        "minibuffer rendered"
+    );
+    assert!(
+        !frame.per_buf.contains_key(hidden),
+        "hidden buffer must not be precomputed"
+    );
+}
+
+#[test]
+fn precompute_memoizes_unchanged_buffers() {
+    let mut s = test_state();
+    let id = s.surface.windows.focused_buf();
+    s.bufs[id].clear_with("one\ntwo\nthree");
+
+    let (frame1, _) = s.precompute_frame();
+    let (frame2, _) = s.precompute_frame();
+    assert!(
+        Rc::ptr_eq(&frame1.per_buf[id], &frame2.per_buf[id]),
+        "unchanged buffer must reuse the cached RenderedBuffer"
+    );
+
+    s.bufs[id].clear_with("one\ntwo\nthree\nfour");
+    let (frame3, _) = s.precompute_frame();
+    assert!(
+        !Rc::ptr_eq(&frame2.per_buf[id], &frame3.per_buf[id]),
+        "an edit must invalidate the cached RenderedBuffer"
+    );
 }
 
 #[test]

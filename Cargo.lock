@@ -956,6 +956,7 @@ name = "rizz_ts"
 version = "0.1.0"
 dependencies = [
  "libloading",
+ "ropey",
  "thiserror",
  "tree-sitter",
  "tree-sitter-language",

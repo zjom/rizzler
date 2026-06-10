@@ -22,6 +22,7 @@ mod popups;
 mod queries;
 mod registers;
 mod search;
+mod strings;
 mod styling;
 mod text;
 mod textprops;
@@ -43,6 +44,7 @@ pub(super) fn register_all(b: &mut Builtins) {
     queries::register(b);
     registers::register(b);
     search::register(b);
+    strings::register(b);
     wrap::register(b);
     styling::register(b);
     widgets::register(b);

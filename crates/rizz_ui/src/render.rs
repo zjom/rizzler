@@ -4,6 +4,7 @@
 //! `State` hand out a snapshot without exposing its private fields.
 
 use std::io;
+use std::rc::Rc;
 
 use ratatui::text::Line;
 
@@ -63,18 +64,39 @@ pub struct RenderedFrame {
     /// Frame layout with no callables and gutters already pre-rendered.
     pub root: Widget,
     /// Per-buffer precomputed data; only buffers visible this frame are
-    /// populated.
-    pub per_buf: SecondaryMap<BufferId, RenderedBuffer>,
+    /// populated. `Rc` because entries may be shared with (and reused from)
+    /// the frame-to-frame [`crate::precompute::PrecomputeCache`].
+    pub per_buf: SecondaryMap<BufferId, Rc<RenderedBuffer>>,
 }
 
 #[derive(Default)]
 pub struct RenderedBuffer {
     pub gutter: Option<RenderedGutter>,
     pub decorators: Vec<DecoratorRanges>,
+    /// Ranges-by-row index into `decorators`: entry `row - viewport_start`
+    /// holds `(decorator_idx, range_idx)` pairs in paint order, so the
+    /// renderer touches only the ranges on the row it's drawing instead of
+    /// scanning every range of every decorator per row.
+    pub row_index: Vec<Vec<(u32, u32)>>,
+    /// File row of `row_index[0]`.
+    pub viewport_start: usize,
     /// Visual-line layout for soft-wrapped buffers. `None` = no wrap.
     /// When `Some`, the first entry corresponds to `buf.file_pos().row`
     /// and the slice covers at least the viewport height.
     pub wrap: Option<WrapMap>,
+}
+
+impl RenderedBuffer {
+    /// Paint-order ranges that touch file row `row`, resolved through
+    /// `row_index`.
+    pub fn ranges_on_row(&self, row: usize) -> impl Iterator<Item = &StyledRange> {
+        row.checked_sub(self.viewport_start)
+            .and_then(|i| self.row_index.get(i))
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+            .iter()
+            .map(|&(di, ri)| &self.decorators[di as usize].ranges[ri as usize])
+    }
 }
 
 pub struct RenderedGutter {

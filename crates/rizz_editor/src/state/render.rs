@@ -38,6 +38,11 @@ pub(super) struct Render {
     /// defaults to [`GutterWidth::Fit`].
     pub gutter_fn: Option<Rc<Value>>,
     pub gutter_width: GutterWidth,
+    /// Frame-to-frame per-buffer precompute memo; buffers whose
+    /// render-relevant state is unchanged reuse their previous
+    /// `RenderedBuffer` instead of re-running gutter lisp, the tree-sitter
+    /// query, and the decorator walks.
+    pub precompute_cache: precompute::PrecomputeCache,
 }
 
 impl Render {
@@ -48,6 +53,7 @@ impl Render {
             frame_fn: None,
             gutter_fn: None,
             gutter_width: GutterWidth::Fit,
+            precompute_cache: precompute::PrecomputeCache::default(),
         }
     }
 }
@@ -140,6 +146,7 @@ impl State {
         let result = precompute::compute(precompute::PrecomputeInput {
             bufs: self.bufs.raw(),
             windows: &self.surface.windows,
+            panels: &self.surface.panels,
             frame_fn: self.render.frame_fn.as_ref(),
             theme: &self.render.theme,
             minibuffer: self.bufs.minibuffer_id(),
@@ -147,6 +154,7 @@ impl State {
             gutter: self.render.gutter_fn.as_ref(),
             gutter_width: self.render.gutter_width,
             lisp_env: lisp.env(),
+            cache: &mut self.render.precompute_cache,
         });
 
         drop(_phase_guard);

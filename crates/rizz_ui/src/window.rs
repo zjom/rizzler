@@ -255,6 +255,25 @@ impl WindowTree {
         }
     }
 
+    /// Buffer ids of every leaf, in tree order. Buffers shown in more than
+    /// one window appear once per leaf.
+    pub fn leaf_bufs(&self) -> Vec<BufferId> {
+        let mut out = Vec::new();
+        Self::walk(&self.root, &mut |buf| out.push(buf));
+        out
+    }
+
+    fn walk(node: &Window, f: &mut impl FnMut(BufferId)) {
+        match node {
+            Window::Leaf { buf } => f(*buf),
+            Window::Split { children, .. } => {
+                for (_, child) in children {
+                    Self::walk(child, f);
+                }
+            }
+        }
+    }
+
     /// Visit every leaf's buffer id. Used to redirect leaves pointing at
     /// a buffer that's being removed to a fallback id.
     pub fn for_each_leaf_mut(&mut self, mut f: impl FnMut(&mut BufferId)) {

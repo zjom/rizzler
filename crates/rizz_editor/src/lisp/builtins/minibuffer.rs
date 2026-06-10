@@ -44,6 +44,26 @@ pub(super) fn register(b: &mut Builtins) {
         "(command-cancel)\n\nDismisses the command minibuffer without running anything.\nSee also: (command-submit).",
     );
 
+    b.be_doc(
+        "command-history-prev",
+        0,
+        |_, _| {
+            with_editor_mut(|st| st.command_history_prev());
+            Ok(unit())
+        },
+        "(command-history-prev)\n\nReplaces the command minibuffer with the previous (older) command from\nhistory, stashing the in-progress line on the first step so\n(command-history-next) can walk back to it. A no-op at the oldest entry\nor with empty history. Bound to <up> in the command prompt.\nSee also: (command-history-next), (command-history).",
+    );
+
+    b.be_doc(
+        "command-history-next",
+        0,
+        |_, _| {
+            with_editor_mut(|st| st.command_history_next());
+            Ok(unit())
+        },
+        "(command-history-next)\n\nReplaces the command minibuffer with the next (newer) command from\nhistory; stepping past the newest entry restores the line you were\ntyping before recall began. A no-op unless (command-history-prev) has\nbeen used. Bound to <down> in the command prompt.\nSee also: (command-history-prev), (command-history).",
+    );
+
     b.bi_doc(
         "evaluate",
         0,

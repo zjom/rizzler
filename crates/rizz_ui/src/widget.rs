@@ -111,6 +111,18 @@ impl Widget {
     }
 }
 
+/// Collect every explicitly-targeted buffer id (`(w-buffer-view N)`)
+/// reachable from `w`. Used by the precompute pass to find buffers that are
+/// visible without being a window leaf or a panel's backing buffer.
+pub fn collect_buffer_views(w: &Widget, out: &mut Vec<BufferId>) {
+    if let Widget::BufferView { buf: Some(id) } = w {
+        out.push(*id);
+    }
+    for c in w.children() {
+        collect_buffer_views(c, out);
+    }
+}
+
 /// Allocation-free iterator over a widget's direct children.
 pub enum WidgetChildren<'a> {
     Empty,

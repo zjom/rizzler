@@ -358,6 +358,66 @@ mod tests {
     }
 
     #[test]
+    fn str_pad_and_repeat_builtins() {
+        let mut s = test_state();
+        let cases = [
+            (r#"(str-pad-left "42" 5)"#, "   42"),
+            (r#"(str-pad-left "123456" 5)"#, "123456"),
+            (r#"(str-pad-right "ab" 4)"#, "ab  "),
+            (r#"(str-repeat "ab" 3)"#, "ababab"),
+            (r#"(str-repeat "x" 0)"#, ""),
+        ];
+        for (src, want) in cases {
+            let v = s.eval_lisp(src).unwrap();
+            assert_eq!(v.display(), want, "{src}");
+        }
+    }
+
+    #[test]
+    fn selection_size_matches_selected_text_len() {
+        let mut s = test_state();
+        s.eval_lisp("(set-mode 'insert)").unwrap();
+        s.eval_lisp("(insert \"hello\")").unwrap();
+        s.eval_lisp("(newline)").unwrap();
+        s.eval_lisp("(insert \"world\")").unwrap();
+        s.eval_lisp("(set-mode 'normal)").unwrap();
+        assert_eq!(s.eval_lisp("(selection-size)").unwrap().display(), "()");
+        s.eval_lisp("(move-cursor 'file-start)").unwrap();
+        s.eval_lisp("(set-mode 'visual)").unwrap();
+        s.eval_lisp("(move-cursor 'down)").unwrap();
+        let n = s.eval_lisp("(selection-size)").unwrap().display();
+        let len = s.eval_lisp("(len (selected-text))").unwrap().display();
+        assert_eq!(n, len);
+    }
+
+    #[test]
+    fn fuzzy_filter_builtin_subsequence_semantics() {
+        let mut s = test_state();
+        // Map items filtered by their "display" key.
+        let v = s
+            .eval_lisp(
+                r#"(fmap (fn _d (it) (get it "display"))
+                     (fuzzy-filter "cnt"
+                       [{"display": "core/control"}
+                        {"display": "C_O_N_T.rs"}
+                        {"display": "lib.rs"}]
+                       "display"))"#,
+            )
+            .unwrap();
+        assert_eq!(v.display(), r#"["core/control" "C_O_N_T.rs"]"#);
+        // Empty query passes everything; plain strings with KEY = ().
+        let v = s
+            .eval_lisp(r#"(len (fuzzy-filter "" ["a" "b"] ()))"#)
+            .unwrap();
+        assert_eq!(v.display(), "2");
+        // Case-insensitive both ways.
+        let v = s
+            .eval_lisp(r#"(fuzzy-filter "AB" ["xaxbx" "ba"] ())"#)
+            .unwrap();
+        assert_eq!(v.display(), r#"["xaxbx"]"#);
+    }
+
+    #[test]
     fn command_submit_via_minibuffer_does_not_recurse() {
         use crossterm::event::{KeyCode, KeyModifiers};
         let mut s = test_state();

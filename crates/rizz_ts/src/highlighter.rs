@@ -259,6 +259,55 @@ mod tests {
         assert_eq!(span_tuples(&streamed), span_tuples(&contiguous));
     }
 
+    /// Timing probe: incremental reparse + viewport query cost per
+    /// single-char edit in a 20k-line buffer. Run manually with
+    /// `cargo test -p rizz_ts --release -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_incremental_reparse() {
+        let Some(mut h) = installed_grammar("rust", "rs") else {
+            eprintln!("skipping: rust grammar not installed locally");
+            return;
+        };
+        let mut src = String::new();
+        for i in 0..20_000 {
+            src.push_str(&format!(
+                "fn func_{i}(x: u64) -> u64 {{ x.wrapping_mul({i}) + \"lit\".len() as u64 }}\n"
+            ));
+        }
+        let mut rope = Rope::from_str(&src);
+        let t = std::time::Instant::now();
+        h.parse_rope(&rope);
+        println!("initial parse: {:?}", t.elapsed());
+
+        let line_start = rope.line_to_byte(10_000);
+        let at = line_start;
+        let t = std::time::Instant::now();
+        let n = 200;
+        let typed: Vec<char> = "let value = compute_something(input, flags); "
+            .chars()
+            .cycle()
+            .take(n)
+            .collect();
+        for (i, c) in typed.into_iter().enumerate() {
+            let byte = at + i;
+            let mut buf = [0u8; 4];
+            let s = c.encode_utf8(&mut buf);
+            rope.insert(rope.byte_to_char(byte), s);
+            h.record_edit(
+                byte,
+                byte,
+                byte + s.len(),
+                Point { row: 10_000, column: byte - line_start },
+                Point { row: 10_000, column: byte - line_start },
+                Point { row: 10_000, column: byte - line_start + s.len() },
+            );
+            h.parse_rope(&rope);
+            let _ = h.query(&rope, line_start, line_start + 4000);
+        }
+        println!("incremental parse+query: {:?}/edit", t.elapsed() / n as u32);
+    }
+
     /// An incremental edit fed through `record_edit` + `parse_rope` must
     /// yield the same captures as a from-scratch parse of the edited text.
     #[test]

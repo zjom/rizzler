@@ -22,6 +22,7 @@
 - [ ] buffers cycle should by access order instead of creation order
 - [ ] improve latency of lsp completion menu
 - [ ] better tracing/ error handling/ reporting
+- [ ] split default init.rz into multiple files and seed folder instead of single file.
 
 # Bugs
 

@@ -1106,9 +1106,23 @@
           (set! _menu-index 0)
           (command-complete (get cands i))))))
 
-(map 'command "<c-n>" '(_menu-next))
-(map 'command "<c-p>" '(_menu-prev))
-(map 'command "<c-y>" '(_menu-accept))
+(fn _menu-command-submit ()
+  (do
+    (let cands (_menu-cands))
+    (let n (len cands))
+    (if (<= n 0) ()
+        (do
+          (let i (_menu-clamped n))
+          (set! _menu-index 0)
+          (command-complete (get cands i))
+          (command-submit)
+          ))))
+
+(map 'command "<c-n>"       '(_menu-next))
+(map 'command "<c-p>"       '(_menu-prev))
+(map 'command "<c-y>"       '(_menu-accept))
+;; We override the default `<enter>` keymap in command mode to submit the item we have our cursor on.
+(map 'command "<enter>"     '(_menu-command-submit))
 
 ;; The overlay wrapper. Anchors the menu to the bottom of the editor area
 ;; and grows it upward as more candidates appear, so the editor rows

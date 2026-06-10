@@ -110,7 +110,7 @@ params:
         0,
         |_, _| {
             with_editor_mut(|st| {
-                let _ = st.apply(&[Rc::new(Action::LspHover)]);
+                st.apply(&[Rc::new(Action::LspHover)]);
             });
             Ok(unit())
         },
@@ -122,7 +122,7 @@ params:
         0,
         |_, _| {
             with_editor_mut(|st| {
-                let _ = st.apply(&[Rc::new(Action::LspGotoDefinition)]);
+                st.apply(&[Rc::new(Action::LspGotoDefinition)]);
             });
             Ok(unit())
         },
@@ -134,7 +134,7 @@ params:
         0,
         |_, _| {
             with_editor_mut(|st| {
-                let _ = st.apply(&[Rc::new(Action::LspCompletion)]);
+                st.apply(&[Rc::new(Action::LspCompletion)]);
             });
             Ok(unit())
         },
@@ -146,7 +146,7 @@ params:
         0,
         |_, _| {
             with_editor_mut(|st| {
-                let _ = st.apply(&[Rc::new(Action::LspFormat)]);
+                st.apply(&[Rc::new(Action::LspFormat)]);
             });
             Ok(unit())
         },
@@ -158,7 +158,7 @@ params:
         0,
         |_, _| {
             with_editor_mut(|st| {
-                let _ = st.apply(&[Rc::new(Action::LspCodeAction)]);
+                st.apply(&[Rc::new(Action::LspCodeAction)]);
             });
             Ok(unit())
         },

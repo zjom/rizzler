@@ -1,7 +1,5 @@
 //! Buffer lifecycle builtins: create / delete / cycle / edit / write.
 
-use std::str::FromStr;
-
 use rizz_actions::Action;
 
 use super::super::helpers::{Builtins, apply, as_str, unit};
@@ -32,7 +30,7 @@ pub(super) fn register(b: &mut Builtins) {
     b.alias("bp", "buf-prev");
     b.be("edit", 1, |args, _| {
         let p = as_str(&args[0], "edit")?;
-        let path = std::path::PathBuf::from_str(&p).unwrap();
+        let path = std::path::PathBuf::from(&*p);
         apply(Action::BufEdit(path.into()))?;
         Ok(unit())
     });
@@ -44,7 +42,7 @@ pub(super) fn register(b: &mut Builtins) {
     b.alias("w", "write");
     b.be("write-as", 1, |args, _| {
         let p = as_str(&args[0], "write-as")?;
-        let path = std::path::PathBuf::from_str(&p).unwrap();
+        let path = std::path::PathBuf::from(&*p);
         apply(Action::BufWrite(Some(path.into())))?;
         Ok(unit())
     });

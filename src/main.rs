@@ -54,18 +54,11 @@ fn main() -> anyhow::Result<()> {
 
         // Drain pending LSP events and apply synthesized actions before the
         // next render. Re-render only when something actually changed.
-        match state.tick() {
-            Ok(true) => {
-                if let Err(e) = state.render() {
-                    error!(error = %e, "render after lsp tick failed");
-                    return Err(e.into());
-                }
-            }
-            Ok(false) => {}
-            Err(e) => {
-                error!(error = %e, "state.tick() failed");
-                return Err(e.into());
-            }
+        if state.tick()
+            && let Err(e) = state.render()
+        {
+            error!(error = %e, "render after lsp tick failed");
+            return Err(e.into());
         }
     }
 

@@ -4,7 +4,6 @@
 
 use std::rc::Rc;
 
-use anyhow::anyhow;
 use rizz::runtime::{Env, NativeFn, RuntimeError, Value};
 use tracing::{trace, warn};
 
@@ -24,6 +23,18 @@ pub(super) fn buf_id_to_int(id: BufferId) -> i64 {
 /// Reverse of [`buf_id_to_int`]. Caller must verify the id is still live.
 pub(super) fn buf_id_from_int(n: i64) -> BufferId {
     BufferId::from(KeyData::from_ffi(n as u64))
+}
+
+/// Wrap a builtin body in a `tracing` span carrying the builtin's name, so
+/// a misbehaving `init.rz` shows *which* builtin was running in the log.
+fn traced<R>(
+    name: &'static str,
+    f: impl Fn(&[Rc<Value>], &Env) -> R + 'static,
+) -> impl Fn(&[Rc<Value>], &Env) -> R + 'static {
+    move |args, env| {
+        let _span = tracing::trace_span!("builtin", name).entered();
+        f(args, env)
+    }
 }
 
 /// Accumulates `(name, NativeFn)` entries plus deferred aliases, then folds
@@ -47,8 +58,10 @@ impl Builtins {
     where
         F: Fn(&[Rc<Value>], &Env) -> Result<Rc<Value>, RuntimeError> + 'static,
     {
-        self.entries
-            .push((name, NativeFn::with_env(name.into(), nargs, f)));
+        self.entries.push((
+            name,
+            NativeFn::with_env(name.into(), nargs, traced(name, f)),
+        ));
     }
 
     /// Register a `WithEnv` builtin with an attached doc string.
@@ -58,7 +71,7 @@ impl Builtins {
     {
         self.entries.push((
             name,
-            NativeFn::with_env(name.into(), nargs, f).with_doc(Rc::from(doc)),
+            NativeFn::with_env(name.into(), nargs, traced(name, f)).with_doc(Rc::from(doc)),
         ));
     }
 
@@ -69,7 +82,7 @@ impl Builtins {
         F: Fn(&[Rc<Value>], &Env) -> Result<(Rc<Value>, Env), RuntimeError> + 'static,
     {
         self.entries
-            .push((name, NativeFn::impure(name.into(), nargs, f)));
+            .push((name, NativeFn::impure(name.into(), nargs, traced(name, f))));
     }
 
     /// Register an `Impure` builtin with an attached doc string.
@@ -79,7 +92,7 @@ impl Builtins {
     {
         self.entries.push((
             name,
-            NativeFn::impure(name.into(), nargs, f).with_doc(Rc::from(doc)),
+            NativeFn::impure(name.into(), nargs, traced(name, f)).with_doc(Rc::from(doc)),
         ));
     }
 
@@ -87,6 +100,17 @@ impl Builtins {
     /// after every primary entry, so order vs. `be*`/`bi*` doesn't matter.
     pub fn alias(&mut self, a: &'static str, t: &'static str) {
         self.aliases.push((a, t));
+    }
+
+    /// Every name this sink will bind: primary entries plus aliases.
+    /// Used by the builtin smoke test to call each one.
+    #[cfg(test)]
+    pub fn names(&self) -> Vec<&'static str> {
+        self.entries
+            .iter()
+            .map(|(n, _)| *n)
+            .chain(self.aliases.iter().map(|(a, _)| *a))
+            .collect()
     }
 
     pub fn build(self) -> Env {
@@ -118,8 +142,8 @@ pub(super) fn apply(action: Action) -> Result<(), RuntimeError> {
         });
     }
     trace!(?action, "lisp -> action");
-    let result = with_editor_mut(|st| st.apply(&[Rc::new(action)]));
-    result.map_err(|e| RuntimeError::Other(anyhow!("{e}")))
+    with_editor_mut(|st| st.apply(&[Rc::new(action)]));
+    Ok(())
 }
 
 /// Escape `s` so it can be embedded as a rizz string literal.

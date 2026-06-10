@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 use std::process;
 use std::rc::Rc;
-use std::str::FromStr;
 
 use anyhow::anyhow;
 use im::{HashMap as ImHashMap, Vector};
@@ -20,7 +19,7 @@ pub(super) fn register(b: &mut Builtins) {
 
     b.be("fs-parent", 1, |args, _| {
         let s = as_str(&args[0], "fs-parent")?;
-        let path = PathBuf::from_str(&s).unwrap();
+        let path = PathBuf::from(&*s);
         if let Some(parent) = path.parent()
             && parent.exists()
         {

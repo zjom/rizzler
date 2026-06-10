@@ -42,6 +42,11 @@ pub(super) fn register(b: &mut Builtins) {
                     .unwrap_or_else(|| st.focused_buf().text())
             })
         };
+        // The rizz parser asserts on empty input; an empty buffer or
+        // selection is a no-op eval, not a crash.
+        if src.trim().is_empty() {
+            return Ok((unit(), env.clone()));
+        }
         match rizz::parse_and_run_with_env(src.as_bytes(), env) {
             Ok((v, new_env)) => {
                 if !v.is_unit() {

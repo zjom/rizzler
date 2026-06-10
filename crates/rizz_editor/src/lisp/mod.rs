@@ -149,6 +149,15 @@ fn editor_env() -> Env {
     b.build()
 }
 
+/// The name of every registered builtin (including aliases). Test-facing:
+/// lets the smoke test exercise the whole scripting surface.
+#[cfg(test)]
+pub(crate) fn builtin_names() -> Vec<&'static str> {
+    let mut b = helpers::Builtins::new();
+    builtins::register_all(&mut b);
+    b.names()
+}
+
 #[cfg(test)]
 mod tests {
     use super::helpers::wrap_shell_style;
@@ -160,6 +169,24 @@ mod tests {
         let mut s = test_state();
         let v = s.eval_lisp("(+ 1 2)").unwrap();
         assert_eq!(*v, Value::Int(3));
+    }
+
+    /// Every registered builtin must fail gracefully — never panic — when
+    /// called with no arguments and with garbage-typed arguments. This is
+    /// the arity/validation safety net for the whole scripting surface.
+    #[test]
+    fn every_builtin_errors_not_panics_on_bad_args() {
+        let mut s = test_state();
+        let names = builtin_names();
+        assert!(names.len() > 100, "expected the full builtin surface");
+        for name in names {
+            // Zero args: arity error for most, harmless no-arg effect
+            // for the rest. Either way the editor must survive.
+            let _ = s.eval_lisp(&format!("({name})"));
+            // Garbage-typed args: ints where strings/fns are expected
+            // (ints can't be mistaken for paths, so no stray file I/O).
+            let _ = s.eval_lisp(&format!("({name} -987654321 -987654321 -987654321)"));
+        }
     }
 
     #[test]

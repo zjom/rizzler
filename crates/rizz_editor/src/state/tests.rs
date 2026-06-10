@@ -1,4 +1,3 @@
-
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -87,9 +86,8 @@ fn leading_zero_falls_through_as_line_start() {
 #[test]
 fn split_then_close_returns_to_single_window() {
     let mut s = test_state();
-    s.apply(&[Rc::new(Action::WindowSplit(SplitDir::Horizontal))])
-        .unwrap();
-    s.apply(&[Rc::new(Action::WindowClose)]).unwrap();
+    s.apply(&[Rc::new(Action::WindowSplit(SplitDir::Horizontal))]);
+    s.apply(&[Rc::new(Action::WindowClose)]);
     s.render().unwrap();
 }
 
@@ -349,7 +347,7 @@ fn yank_line_fills_unnamed_and_zero() {
     let mut s = test_state();
     let b = primary(&s);
     s.bufs[b].clear_with("hello\nworld\n");
-    s.apply(&[Rc::new(Action::YankLine { count: 1 })]).unwrap();
+    s.apply(&[Rc::new(Action::YankLine { count: 1 })]);
     assert_eq!(reg_text(&s, '"').as_deref(), Some("hello\n"));
     assert_eq!(reg_text(&s, '0').as_deref(), Some("hello\n"));
     // numbered 1-9 stay untouched on yank
@@ -361,11 +359,9 @@ fn delete_line_rotates_numbered_register() {
     let mut s = test_state();
     let b = primary(&s);
     s.bufs[b].clear_with("a\nb\nc\nd\n");
-    s.apply(&[Rc::new(Action::DeleteLine { count: 1 })])
-        .unwrap();
+    s.apply(&[Rc::new(Action::DeleteLine { count: 1 })]);
     assert_eq!(reg_text(&s, '1').as_deref(), Some("a\n"));
-    s.apply(&[Rc::new(Action::DeleteLine { count: 1 })])
-        .unwrap();
+    s.apply(&[Rc::new(Action::DeleteLine { count: 1 })]);
     assert_eq!(reg_text(&s, '1').as_deref(), Some("b\n"));
     assert_eq!(reg_text(&s, '2').as_deref(), Some("a\n"));
     // delete never fills the yank register
@@ -377,14 +373,13 @@ fn yank_then_paste_after_inserts_below() {
     let mut s = test_state();
     let b = primary(&s);
     s.bufs[b].clear_with("hello\nworld\n");
-    s.apply(&[Rc::new(Action::YankLine { count: 1 })]).unwrap();
+    s.apply(&[Rc::new(Action::YankLine { count: 1 })]);
     // move to second line
     s.bufs[b].move_cursor_n(rizz_text::MoveKind::Relative(Position::new(0, 1)), 1);
     s.apply(&[Rc::new(Action::Paste {
         before: false,
         count: 1,
-    })])
-    .unwrap();
+    })]);
     assert_eq!(s.bufs[b].text(), "hello\nworld\nhello\n");
 }
 
@@ -398,8 +393,7 @@ fn paste_count_repeats_entry() {
     s.apply(&[Rc::new(Action::Paste {
         before: false,
         count: 3,
-    })])
-    .unwrap();
+    })]);
     assert_eq!(s.bufs[b].text(), "aXXXbc");
 }
 
@@ -411,8 +405,7 @@ fn register_select_targets_named_register() {
     s.apply(&[
         Rc::new(Action::RegisterSelect('a')),
         Rc::new(Action::YankLine { count: 1 }),
-    ])
-    .unwrap();
+    ]);
     assert_eq!(reg_text(&s, 'a').as_deref(), Some("alpha\n"));
     // pending register is cleared after a consuming action
     assert!(s.pending_register().is_none());
@@ -432,8 +425,7 @@ fn paste_from_named_register() {
             before: false,
             count: 1,
         }),
-    ])
-    .unwrap();
+    ]);
     assert_eq!(s.bufs[b].text(), "aZZbc");
 }
 
@@ -444,7 +436,7 @@ fn delete_selection_fills_unnamed() {
     s.bufs[b].clear_with("hello");
     s.bufs[b].set_mode(EditingMode::Visual);
     s.bufs[b].move_cursor_n(rizz_text::MoveKind::Relative(Position::new(2, 0)), 1);
-    s.apply(&[Rc::new(Action::DeleteSelection)]).unwrap();
+    s.apply(&[Rc::new(Action::DeleteSelection)]);
     assert_eq!(s.bufs[b].text(), "lo");
     assert_eq!(reg_text(&s, '"').as_deref(), Some("hel"));
     assert_eq!(reg_text(&s, '-').as_deref(), Some("hel"));
@@ -457,7 +449,7 @@ fn yank_selection_returns_to_normal() {
     s.bufs[b].clear_with("hello");
     s.bufs[b].set_mode(EditingMode::Visual);
     s.bufs[b].move_cursor_n(rizz_text::MoveKind::Relative(Position::new(2, 0)), 1);
-    s.apply(&[Rc::new(Action::YankSelection)]).unwrap();
+    s.apply(&[Rc::new(Action::YankSelection)]);
     assert_eq!(reg_text(&s, '"').as_deref(), Some("hel"));
     assert_eq!(s.bufs[b].mode(), EditingMode::Normal);
     // buffer text is unchanged by yank
@@ -495,8 +487,7 @@ fn delete_inner_word_under_cursor() {
         object: TextObject::Word,
         around: false,
         count: 1,
-    })])
-    .unwrap();
+    })]);
     assert_eq!(s.bufs[b].text(), " world");
     assert_eq!(reg_text(&s, '"').as_deref(), Some("hello"));
 }
@@ -512,8 +503,7 @@ fn yank_around_paren_block_includes_brackets() {
         object: TextObject::Paren,
         around: true,
         count: 1,
-    })])
-    .unwrap();
+    })]);
     assert_eq!(reg_text(&s, '"').as_deref(), Some("(bar)"));
     // buffer text is unchanged
     assert_eq!(s.bufs[b].text(), "foo(bar)baz");
@@ -530,8 +520,7 @@ fn select_inner_dquote_drops_into_visual() {
         object: TextObject::DoubleQuote,
         around: false,
         count: 1,
-    })])
-    .unwrap();
+    })]);
     assert_eq!(s.bufs[b].mode(), EditingMode::Visual);
     assert_eq!(s.bufs[b].selected_text().as_deref(), Some("hello"));
 }
@@ -663,4 +652,170 @@ fn replace_mode_backspace_restores_original_chars() {
         .unwrap();
     // Nothing was committed — there's no edit to undo.
     assert!(!s.bufs[b].undo());
+}
+
+// ---------------------------------------------------------------------------
+// LSP event drain: synthetic `LspEvent`s routed through `handle_lsp_event`
+// exactly as `tick` does — no live server or async runtime needed.
+// ---------------------------------------------------------------------------
+
+mod lsp_drain {
+    use super::super::lsp_session::PendingLspKind;
+    use super::super::test_support::{test_state, test_state_with_text};
+    use super::*;
+    use rizz_actions::{LspClientId, RangeOwned, TextEditOwned};
+    use rizz_lsp::LspEvent;
+    use std::time::{Duration, Instant};
+
+    fn drain_one(s: &mut State, ev: LspEvent) -> Vec<Rc<Action>> {
+        let mut out = Vec::new();
+        s.handle_lsp_event(ev, &mut out);
+        out
+    }
+
+    #[test]
+    fn hover_response_routes_via_pending_and_notifies() {
+        let mut s = test_state();
+        let b = s.bufs.first_file_buf();
+        let seq = s.lsp_session.alloc_seq();
+        s.lsp_session.pending_requests.insert(
+            seq,
+            PendingLspKind::Hover {
+                buf: b,
+                anchor: Position { row: 0, col: 0 },
+            },
+        );
+        let out = drain_one(
+            &mut s,
+            LspEvent::HoverResponse {
+                client: LspClientId(7),
+                seq,
+                contents: Some("Type: Foo".into()),
+            },
+        );
+        assert_eq!(out.len(), 1, "hover response must yield one show action");
+        s.apply(&out);
+        assert!(
+            s.message_history().any(|m| m.contains("hover: Type: Foo")),
+            "hover contents must reach the user"
+        );
+        assert!(s.lsp_session.pending_requests.is_empty());
+    }
+
+    #[test]
+    fn response_with_unknown_seq_is_dropped() {
+        let mut s = test_state();
+        let out = drain_one(
+            &mut s,
+            LspEvent::HoverResponse {
+                client: LspClientId(7),
+                seq: 999,
+                contents: Some("stale".into()),
+            },
+        );
+        assert!(out.is_empty(), "stale responses must not produce actions");
+    }
+
+    #[test]
+    fn format_response_applies_edits_to_buffer() {
+        let mut s = test_state_with_text("hello world");
+        let b = s.bufs.first_file_buf();
+        let seq = s.lsp_session.alloc_seq();
+        s.lsp_session.pending_requests.insert(
+            seq,
+            PendingLspKind::Format {
+                buf: b,
+                deadline: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        let edits = vec![TextEditOwned {
+            range: RangeOwned {
+                start: Position { row: 0, col: 0 },
+                end: Position { row: 0, col: 5 },
+            },
+            new_text: Arc::from("goodbye"),
+        }];
+        let out = drain_one(
+            &mut s,
+            LspEvent::FormattingResponse {
+                client: LspClientId(7),
+                seq,
+                edits,
+            },
+        );
+        assert_eq!(out.len(), 1);
+        s.apply(&out);
+        assert_eq!(s.bufs[b].text(), "goodbye world");
+    }
+
+    #[test]
+    fn format_response_after_deadline_is_dropped_with_notice() {
+        let mut s = test_state_with_text("untouched");
+        let b = s.bufs.first_file_buf();
+        let seq = s.lsp_session.alloc_seq();
+        s.lsp_session.pending_requests.insert(
+            seq,
+            PendingLspKind::Format {
+                buf: b,
+                deadline: Instant::now() - Duration::from_millis(1),
+            },
+        );
+        let out = drain_one(
+            &mut s,
+            LspEvent::FormattingResponse {
+                client: LspClientId(7),
+                seq,
+                edits: vec![],
+            },
+        );
+        assert!(out.is_empty());
+        assert!(s.message_history().any(|m| m.contains("timed out")));
+        assert_eq!(s.bufs[b].text(), "untouched");
+    }
+
+    #[test]
+    fn empty_definition_response_notifies_no_definition() {
+        let mut s = test_state();
+        let b = s.bufs.first_file_buf();
+        let seq = s.lsp_session.alloc_seq();
+        s.lsp_session
+            .pending_requests
+            .insert(seq, PendingLspKind::GotoDefinition { buf: b });
+        let out = drain_one(
+            &mut s,
+            LspEvent::DefinitionResponse {
+                client: LspClientId(7),
+                seq,
+                locations: vec![],
+            },
+        );
+        s.apply(&out);
+        assert!(
+            s.message_history()
+                .any(|m| m.contains("no definition found"))
+        );
+    }
+
+    #[test]
+    fn request_error_clears_pending_request() {
+        let mut s = test_state();
+        let b = s.bufs.first_file_buf();
+        let seq = s.lsp_session.alloc_seq();
+        s.lsp_session
+            .pending_requests
+            .insert(seq, PendingLspKind::GotoDefinition { buf: b });
+        let out = drain_one(
+            &mut s,
+            LspEvent::RequestError {
+                client: LspClientId(7),
+                seq,
+                message: "server fell over".into(),
+            },
+        );
+        assert!(out.is_empty());
+        assert!(
+            s.lsp_session.pending_requests.is_empty(),
+            "errored requests must not leak in the pending map"
+        );
+    }
 }

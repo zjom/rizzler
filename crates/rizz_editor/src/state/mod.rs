@@ -26,8 +26,10 @@
 //! - [`lang`] — `LangIntegration` (two `LanguageBackend` instances + runtime
 //!   registries); install / attach for tree-sitter and LSP
 //! - [`lsp_session`] — `LspSession` (pending requests, sequence counter,
-//!   completion / code-action callbacks); request/response routing
-//! - [`apply`] — the single-funnel `Action::apply` match
+//!   completion / code-action callbacks) + the per-tick event drain
+//! - [`lsp_requests`] — outgoing `lsp_send_*` request senders
+//! - [`lsp_responses`] — response display (`show_lsp_*`) + edit application
+//! - [`apply`] — the single-funnel `Action::apply` dispatch table
 //!
 //! `State`'s fields are private; all child modules can see them because they
 //! are descendants of this module.
@@ -54,6 +56,8 @@ mod apply;
 mod buffers;
 mod input;
 mod lang;
+mod lsp_requests;
+mod lsp_responses;
 mod lsp_session;
 mod render;
 mod scripting;
@@ -320,5 +324,14 @@ pub mod test_support {
             config_dir: None,
         })
         .unwrap()
+    }
+
+    /// [`test_state`] with `text` loaded into the primary file buffer —
+    /// the dominant fixture shape across the state tests.
+    pub fn test_state_with_text(text: &str) -> State {
+        let mut s = test_state();
+        let b = s.bufs.first_file_buf();
+        s.bufs[b].clear_with(text);
+        s
     }
 }

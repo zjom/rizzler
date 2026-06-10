@@ -1,7 +1,6 @@
 //! Buffer and window management: focused-buffer accessors, file open/edit/
 //! write/delete, window split/close, and the `:bn`/`:bp` cycle.
 
-use std::io;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -104,11 +103,7 @@ impl State {
     }
 
     #[instrument(skip(self))]
-    pub(super) fn create_buf(
-        &mut self,
-        set_active: bool,
-        path: Option<Rc<Path>>,
-    ) -> io::Result<BufferId> {
+    pub(super) fn create_buf(&mut self, set_active: bool, path: Option<Rc<Path>>) -> BufferId {
         let buf = match path {
             Some(p) => self.bufs.buffer_for_path(p),
             None => Buffer::new(),
@@ -120,11 +115,11 @@ impl State {
             self.surface.windows.set_focused_buf(id);
         }
         info!(buf = ?id, set_active, "created buffer");
-        Ok(id)
+        id
     }
 
     #[instrument(skip(self))]
-    pub(super) fn edit_buf(&mut self, path: Rc<Path>) -> io::Result<BufferId> {
+    pub(super) fn edit_buf(&mut self, path: Rc<Path>) -> BufferId {
         let id = match self.bufs.find_by_path(&path) {
             Some(id) => {
                 debug!(buf = ?id, "edit_buf: reusing existing buffer");
@@ -139,19 +134,22 @@ impl State {
             }
         };
         self.surface.windows.set_focused_buf(id);
-        Ok(id)
+        id
     }
 
+    /// Write the focused buffer to `path` (or its own file path). A failed
+    /// write is a user-facing event, not a process error: it's surfaced via
+    /// notify + journal and the editor keeps running.
     #[instrument(skip(self))]
-    pub(super) fn write_buf(&mut self, path: Option<Rc<Path>>) -> io::Result<()> {
+    pub(super) fn write_buf(&mut self, path: Option<Rc<Path>>) {
         let editor = self.surface.windows.focused_buf();
-        let r = buffer_io::write(&mut self.bufs[editor], path);
-        if let Err(e) = &r {
-            error_event(editor, e);
-        } else {
-            info!(buf = ?editor, "wrote buffer");
+        match buffer_io::write(&mut self.bufs[editor], path) {
+            Ok(()) => info!(buf = ?editor, "wrote buffer"),
+            Err(e) => {
+                tracing::error!(buf = ?editor, error = %e, "write_buf failed");
+                self.notify_via_lisp(&format!("write failed: {e}"));
+            }
         }
-        r
     }
 
     #[instrument(skip(self))]
@@ -201,8 +199,4 @@ impl State {
             trace!(?dir, "cycle_buffer: no cycle (single file buffer)");
         }
     }
-}
-
-fn error_event(buf: BufferId, err: &io::Error) {
-    tracing::error!(?buf, error = %err, "write_buf failed");
 }

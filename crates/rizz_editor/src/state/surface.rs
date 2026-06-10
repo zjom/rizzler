@@ -45,7 +45,8 @@ impl State {
     /// Topmost keymap layer of the topmost *overlay* panel, if any. Used by
     /// the `popup-mode` lisp builtin to detect "am I inside a popup of kind X?"
     pub fn top_popup_mode(&self) -> Option<Rc<str>> {
-        self.surface.panels
+        self.surface
+            .panels
             .top_overlay()
             .and_then(|p| p.keymap_layers.last().cloned())
     }

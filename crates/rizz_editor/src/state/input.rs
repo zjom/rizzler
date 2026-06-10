@@ -92,7 +92,7 @@ impl State {
                 actions = action.len(),
                 "keymap resolved -> applying actions"
             );
-            self.apply(&action)?;
+            self.apply(&action);
             self.input.count_prefix.clear();
         } else {
             trace!(?ke, "no action resolved (descent or miss)");
@@ -110,7 +110,7 @@ impl State {
     #[instrument(skip(self, text), fields(len = text.len()))]
     pub fn handle_paste(&mut self, text: String) -> io::Result<()> {
         if !text.is_empty() {
-            self.apply(&[Rc::new(rizz_actions::Action::InsertMany(Rc::from(text)))])?;
+            self.apply(&[Rc::new(rizz_actions::Action::InsertMany(Rc::from(text)))]);
         }
         self.refresh_viewport();
         let focused = self.focused_buf_id();

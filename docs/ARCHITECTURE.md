@@ -12,7 +12,18 @@ There is one rule that holds the system together. Read it first.
 
 This is what makes undo, scripting, tests, and reasoning tractable. Resist new entry points.
 
-`Action` lives in [`crates/rizz_actions/src/action.rs`](../crates/rizz_actions/src/action.rs); `State::apply` lives in [`crates/rizz_editor/src/state/apply.rs`](../crates/rizz_editor/src/state/apply.rs).
+`Action` lives in [`crates/rizz_actions/src/action.rs`](../crates/rizz_actions/src/action.rs); `State::apply` lives in [`crates/rizz_editor/src/state/apply/`](../crates/rizz_editor/src/state/apply/) — `mod.rs` is a one-line-per-variant dispatch table, with the arm bodies grouped by category in `text.rs`, `registers.rs`, and `search.rs`.
+
+**Error policy.** Applying an action is infallible from the caller's point of view. User-visible failures (a `:w` that can't write, a lisp form that errors, a missing LSP attachment) are routed to `notify_via_lisp` + the message journal and logged via `tracing` — they never abort the funnel or the editor. The only fallible `State` paths are terminal I/O (`State::render`) and startup (`State::with_config`).
+
+### Sanctioned side doors
+
+A small set of mutations intentionally bypass `apply`. They configure *hooks around* editor state rather than editor state itself, or run inside an `apply` arm as part of buffer attachment. Anything not on this list that mutates `State` without an `Action` is a bug:
+
+- `set_frame_fn` / `set_gutter` ([`state/render.rs`](../crates/rizz_editor/src/state/render.rs)) — UI render callbacks.
+- `set_lsp_completion_fn` / `set_lsp_code_action_fn` ([`state/lsp_session.rs`](../crates/rizz_editor/src/state/lsp_session.rs)) — LSP response callbacks.
+- `install_highlighter` / `install_lsp_client` ([`state/lang.rs`](../crates/rizz_editor/src/state/lang.rs)) — attach a highlighter / LSP handle to a freshly opened buffer; called from inside `BufCreate`/`BufEdit` arms.
+- `apply_minibuffer_completion` / `set_buffer_contents` ([`state/buffers.rs`](../crates/rizz_editor/src/state/buffers.rs)) — minibuffer/popup plumbing driven by lisp builtins.
 
 ## A keystroke, end to end
 
@@ -26,7 +37,7 @@ crossterm event loop                       (src/main.rs)
        └─ KeymapRegistry::resolve(modes, ke, timedout)
             ├─ active_modes()               (panel layers + buffer mode)
             └─ Action(s)                    (rizz_actions)
-                 └─ State::apply            (state/apply.rs)
+                 └─ State::apply            (state/apply/mod.rs)
                       └─ buffer / window / lsp / lisp mutation
                             └─ refresh_viewport + render
 ```
@@ -48,7 +59,7 @@ For paste events, the keymap is bypassed entirely: `Event::Paste(text)` becomes 
 | Scripting              | `scripting: Scripting`         | `lisp`, `pending_notifications`                                                                           | [`state/scripting.rs`](../crates/rizz_editor/src/state/scripting.rs)           |
 | Workspace paths        | `workspace: Workspace`         | `workdir`, `config_dir`                                                                                   | [`state/workspace.rs`](../crates/rizz_editor/src/state/workspace.rs)           |
 | Lang integration       | `lang: LangIntegration`        | `ts: LanguageBackend<GrammarSpec>`, `ts_registry`, `lsp: LanguageBackend<ServerSpec>`, `lsp_registry`     | [`state/lang.rs`](../crates/rizz_editor/src/state/lang.rs)                     |
-| LSP session            | `lsp_session: LspSession`      | `pending_requests`, `next_seq`, `completion_fn`, `code_action_fn`, `pending_completion`, `pending_code_actions` | [`state/lsp_session.rs`](../crates/rizz_editor/src/state/lsp_session.rs) |
+| LSP session            | `lsp_session: LspSession`      | `pending_requests`, `next_seq`, `completion_fn`, `code_action_fn`, `pending_completion`, `pending_code_actions` | [`state/lsp_session.rs`](../crates/rizz_editor/src/state/lsp_session.rs) (bookkeeping + event drain), [`lsp_requests.rs`](../crates/rizz_editor/src/state/lsp_requests.rs) (senders), [`lsp_responses.rs`](../crates/rizz_editor/src/state/lsp_responses.rs) (display + edit application) |
 | Yank/paste registers   | `registers: Registers`, `pending_register: Option<char>` | —                                                                                       | yank-paste flows                                                               |
 | Other top-level fields | `journal: Journal`, `search: Search`, `quit: bool`       | —                                                                                       | scripting / search / quit flag                                                 |
 
@@ -126,6 +137,8 @@ The user-facing surface is in [`crates/rizz_editor/src/lisp/builtins/`](../crate
 
 The submodules under `buffer/` already split it by concern (`cursor.rs`, `edits.rs`, `marks.rs`, `text_object.rs`, `yank.rs`, `lsp.rs`) but share `pub(crate)` access to the same fields.
 
+Three of `Buffer`'s fields are view-layer state living in the text model: `viewport` (visible size), `wrap_cache` (computed visual-row layout), and `goal_col` (sticky column for vertical motion). This is a deliberate trade-off — one struct carries everything a document needs, and the wrap cache is invalidated on every edit so it can't go stale — but it does mean the text model isn't fully independent of render concerns. If wrap logic grows, extract a `ViewState` sub-struct before adding a fourth field.
+
 Buffers are owned by [`BufferList`](../crates/rizz_editor/src/buffer_list.rs) — a `SlotMap` keyed by `BufferId`, with a parallel ordered list of _file_ buffers (the minibuffer and panel-backing buffers are not in the file cycle).
 
 ## Rendering
@@ -149,7 +162,12 @@ The request/response shape mirrors the LSP protocol: `Action::LspHover` etc. _re
 
 ## Testing
 
-`State::test_support::test_state()` constructs a `State` with a `NullRenderer` (no terminal). Most editor tests go through `state.apply(&actions)` or `state.handle_key_event(...)` and assert on observable state. Lisp builtins are tested through `state.eval_lisp("...")`.
+`State::test_support::test_state()` constructs a `State` with a `NullRenderer` (no terminal); `test_state_with_text("...")` pre-loads the primary buffer. Most editor tests go through `state.apply(&actions)` or `state.handle_key_event(...)` and assert on observable state. Lisp builtins are tested through `state.eval_lisp("...")`.
+
+Two safety nets cover the surfaces that are too broad to test case-by-case:
+
+- `every_builtin_errors_not_panics_on_bad_args` ([`lisp/mod.rs`](../crates/rizz_editor/src/lisp/mod.rs)) calls all registered builtins with zero and garbage-typed args — any builtin that panics instead of erroring fails the suite.
+- The `lsp_drain` tests ([`state/tests.rs`](../crates/rizz_editor/src/state/tests.rs)) feed synthetic `LspEvent`s through `handle_lsp_event` exactly as `tick` does, so request/response routing is tested without a live server.
 
 There are no integration tests of the binary itself; if you need to exercise the live terminal path, use `cargo run -- /path/to/file`.
 
@@ -164,7 +182,8 @@ There are no integration tests of the binary itself; if you need to exercise the
 
 ## Conventions
 
-- All mutations go through `Action::apply`. If you find yourself reaching for a side door, the test/undo story breaks.
+- All mutations go through `Action::apply`. If you find yourself reaching for a side door that isn't on the sanctioned list above, the test/undo story breaks.
+- Failures inside the funnel notify the user and keep running; only `render` and startup return `Result`. Don't add `?` to an `apply` arm — surface the error via `notify_via_lisp`.
 - Lisp builtins should call methods on `State` (via `with_editor_mut`); not poke at fields directly through `State`'s public surface.
 - New `Action` variants live in [`rizz_actions/src/action.rs`](../crates/rizz_actions/src/action.rs) with a doc comment that names the Vim/Emacs analogue when there is one.
 - Tests for `State`-level behaviour live in [`crates/rizz_editor/src/state/tests.rs`](../crates/rizz_editor/src/state/tests.rs).

@@ -149,7 +149,16 @@ pub(super) fn register(b: &mut Builtins) {
             apply(Action::InsertNewline)?;
             Ok(unit())
         },
-        "(newline)\n\nInserts a line break at the cursor, splitting the current line.\nSee also: (insert STR).",
+        "(newline)\n\nInserts a line break at the cursor, splitting the current line. The new\nline copies the leading whitespace of the line being split (autoindent).\nSee also: (insert STR), (open-line-above).",
+    );
+    b.be_doc(
+        "open-line-above",
+        0,
+        |_, _| {
+            apply(Action::OpenLineAbove)?;
+            Ok(unit())
+        },
+        "(open-line-above)\n\nOpens a blank line above the cursor's line and moves the cursor onto it,\ncopying that line's leading whitespace (autoindent). Drives vim `O`.\nSee also: (newline).",
     );
     b.be_doc(
         "undo",

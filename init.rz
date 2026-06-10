@@ -1,5 +1,6 @@
 ;; =============================================================================
 ;;
+;;
 ;;     ██████╗ ██╗███████╗███████╗██╗     ███████╗██████╗
 ;;     ██╔══██╗██║╚══███╔╝╚══███╔╝██║     ██╔════╝██╔══██╗
 ;;     ██████╔╝██║  ███╔╝   ███╔╝ ██║     █████╗  ██████╔╝
@@ -216,10 +217,8 @@
 (map 'normal "o"      '(do (set-mode 'insert)
                            (move-cursor 'line-end)
                            (newline)))
-(map 'normal "O"      '(do (move-cursor 'line-start)
-                           (set-mode 'insert)
-                           (newline)
-                           (move-cursor 'up)))
+(map 'normal "O"      '(do (set-mode 'insert)
+                           (open-line-above)))
 
 ;; Deletion is operator + motion: `d` followed by any motion deletes the
 ;; range covered by that motion. The motion vocabulary mirrors the cursor

@@ -18,7 +18,6 @@
 - [ ] add more known tree-sitter languages to grammars.toml
 - [ ] add more known lsps to lsp.toml
 - [ ] support more default tree-sitter highlights
-- [ ] `o`/`O`/`enter` should be whitespace aware. put you on col of start of prev line
 - [ ] filetype on buffers
 - [ ] buffers cycle should by access order instead of creation order
 - [ ] improve latency of lsp completion menu

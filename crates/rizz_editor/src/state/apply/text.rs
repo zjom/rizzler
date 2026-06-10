@@ -14,6 +14,16 @@ pub(super) fn insert_char(st: &mut State, c: char) {
     st.bufs[f].insert_char(c);
 }
 
+pub(super) fn insert_newline(st: &mut State) {
+    let f = st.focused_buf_id();
+    st.bufs[f].insert_newline();
+}
+
+pub(super) fn open_line_above(st: &mut State) {
+    let f = st.focused_buf_id();
+    st.bufs[f].open_line_above();
+}
+
 pub(super) fn replace_char(st: &mut State, c: char) {
     let count = st.input.count_prefix.or_one();
     let f = st.focused_buf_id();

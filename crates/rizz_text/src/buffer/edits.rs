@@ -125,6 +125,55 @@ impl Buffer {
         });
     }
 
+    /// Vim `<enter>` / the back half of `o`: split the line at the cursor and
+    /// carry the current line's leading whitespace onto the new line, landing
+    /// the cursor just past it (autoindent). Reuses [`Buffer::insert_char`] so
+    /// the break and the copied indent coalesce into the in-flight insert
+    /// batch alongside any typing that follows.
+    pub fn insert_newline(&mut self) {
+        let indent = self.autoindent_prefix();
+        self.insert_char('\n');
+        for c in indent.chars() {
+            self.insert_char(c);
+        }
+    }
+
+    /// Vim `O`: open a blank line above the cursor's line and land the cursor
+    /// on it, copying that line's leading whitespace so the new line starts at
+    /// the same indent. Recorded as a single tracked edit.
+    pub fn open_line_above(&mut self) {
+        self.close_insert_batch();
+        let row = self.abs_row();
+        let indent: String = leading_whitespace(self.buf.line(row).chars());
+        let cidx = self.buf.line_to_char(row);
+        let inserted = format!("{indent}\n");
+
+        let abs_before = self.abs_pos();
+        self.buf.insert(cidx, &inserted);
+        self.record_text_edit(cidx, "", &inserted);
+        self.invalidate_wrap_cache();
+        self.goal_col = None;
+        self.land_cursor_at(row, indent.chars().count());
+        let abs_after = self.abs_pos();
+
+        self.changetree.track_change(Delta {
+            at: cidx,
+            removed: Rc::from(""),
+            inserted: Rc::from(inserted),
+            cursor_before: (abs_before.row, abs_before.col),
+            cursor_after: (abs_after.row, abs_after.col),
+        });
+    }
+
+    /// Leading whitespace of the current line up to the cursor — the indent an
+    /// autoindenting newline copies onto the line it opens. Capped at the
+    /// cursor so splitting inside the indent never synthesizes more whitespace
+    /// than precedes the break.
+    fn autoindent_prefix(&self) -> String {
+        let col = self.abs_col();
+        leading_whitespace(self.cur_line().chars().take(col))
+    }
+
     pub fn delete_char(&mut self) {
         self.close_insert_batch();
         let cidx = self.cur_line_start() + self.file_pos.col + self.cursor_pos.col as usize;
@@ -821,6 +870,12 @@ impl Buffer {
 /// Columns one `>>` / `<<` shifts a line by, and the count of spaces an
 /// indent inserts.
 const SHIFT_WIDTH: usize = 4;
+
+/// Collect the run of leading spaces/tabs from `chars` — the indent an
+/// autoindenting newline or `O` carries onto the line it opens.
+fn leading_whitespace(chars: impl Iterator<Item = char>) -> String {
+    chars.take_while(|c| *c == ' ' || *c == '\t').collect()
+}
 
 /// Leading bytes to drop to dedent `line` by one shift width: each space is
 /// one column, a tab a full shift width; stops once a shift width has been

@@ -62,7 +62,12 @@ pub enum Action {
     RollbackSpeculation,
     /// Insert a whole string at the cursor as a single undo step.
     InsertMany(Rc<str>),
+    /// Vim `<enter>` / `o`: split the line at the cursor, copying the current
+    /// line's leading whitespace onto the new line (autoindent).
     InsertNewline,
+    /// Vim `O`: open an indented blank line above the cursor's line and land
+    /// the cursor on it.
+    OpenLineAbove,
     DeleteChar,
     DeleteCharAt(FilePos),
     /// Remove the focused buffer's current visual selection and return to

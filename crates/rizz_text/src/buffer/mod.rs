@@ -474,6 +474,74 @@ mod tests {
     }
 
     #[test]
+    fn insert_newline_carries_indent_from_line_start() {
+        // `o` / `<enter>` at end of an indented line: the new line copies the
+        // indent and the cursor lands just past it.
+        let mut s = mk("    foo");
+        s.mode = EditingMode::Insert;
+        s.move_cursor(MoveKind::LineEnd);
+        s.insert_newline();
+        assert_eq!(s.buf.to_string(), "    foo\n    ");
+        assert_eq!(cur_row(&s), 1);
+        assert_eq!(cur_col(&s), 4);
+    }
+
+    #[test]
+    fn insert_newline_midline_indents_continuation() {
+        // Splitting mid-line carries the indent onto the text pushed down.
+        let mut s = mk("    foobar");
+        s.mode = EditingMode::Insert;
+        s.cursor_pos = ScreenPos::new(7, 0);
+        s.insert_newline();
+        assert_eq!(s.buf.to_string(), "    foo\n    bar");
+        assert_eq!(cur_row(&s), 1);
+        assert_eq!(cur_col(&s), 4);
+    }
+
+    #[test]
+    fn insert_newline_unindented_line_adds_no_indent() {
+        let mut s = mk("foo");
+        s.mode = EditingMode::Insert;
+        s.move_cursor(MoveKind::LineEnd);
+        s.insert_newline();
+        assert_eq!(s.buf.to_string(), "foo\n");
+        assert_eq!(cur_col(&s), 0);
+    }
+
+    #[test]
+    fn insert_newline_inside_indent_is_capped_at_cursor() {
+        // Breaking inside the indent only copies whitespace up to the cursor.
+        let mut s = mk("        x");
+        s.mode = EditingMode::Insert;
+        s.cursor_pos = ScreenPos::new(2, 0);
+        s.insert_newline();
+        assert_eq!(s.buf.to_string(), "  \n        x");
+        assert_eq!(cur_col(&s), 2);
+    }
+
+    #[test]
+    fn open_line_above_copies_indent() {
+        let mut s = mk("    foo");
+        s.mode = EditingMode::Insert;
+        s.cursor_pos = ScreenPos::new(2, 0);
+        s.open_line_above();
+        assert_eq!(s.buf.to_string(), "    \n    foo");
+        assert_eq!(cur_row(&s), 0);
+        assert_eq!(cur_col(&s), 4);
+    }
+
+    #[test]
+    fn open_line_above_on_middle_line() {
+        let mut s = mk("fn f() {\n    body\n}");
+        s.mode = EditingMode::Insert;
+        s.cursor_pos = ScreenPos::new(4, 1);
+        s.open_line_above();
+        assert_eq!(s.buf.to_string(), "fn f() {\n    \n    body\n}");
+        assert_eq!(cur_row(&s), 1);
+        assert_eq!(cur_col(&s), 4);
+    }
+
+    #[test]
     fn insert_at_end_of_buffer() {
         let mut s = mk("ab");
         s.cursor_pos = ScreenPos::new(2, 0);

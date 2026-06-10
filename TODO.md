@@ -1,6 +1,5 @@
 # Features
 
-- [ ] `<up>`/ `down` to autofill command history
 - [ ] lifecycle hooks (autocommands)
   - see vim help autocmd
 - [ ] widgets
@@ -29,11 +28,8 @@
 
 # Bugs
 
-- [ ] user defined functions not showing in completion menu
-- [ ] cursor-* reporting is not tied to editor window
-  - [ ] moving cursor in command buffer and popups updates cursor-line of editor
-  - [ ] gutter shifts when entering command buffer
 - [ ] cursor clamped to row length instead of min(row length, buffer width)
   - open vertical split
   - type line longer than buffer width
   - cursor reaches into other buffer
+

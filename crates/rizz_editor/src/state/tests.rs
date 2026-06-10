@@ -131,7 +131,8 @@ fn default_precompute_produces_expected_frame() {
     let id = s.surface.windows.focused_buf();
     let bf = &frame.per_buf[id];
     assert!(bf.gutter.is_some(), "expected a gutter");
-    assert!(bf.decorators.len() >= 3, "expected the 3 built-in passes");
+    // cursor-line + selection; syntax/diagnostics need a grammar/LSP.
+    assert!(bf.decorators.len() >= 2, "expected the built-in passes");
 }
 
 #[test]

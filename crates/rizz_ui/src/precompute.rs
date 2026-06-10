@@ -133,6 +133,13 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
             }
         }
 
+        rb.viewport_start = buf.file_pos().row.min(buf.len_lines());
+        rb.row_index = build_row_index(
+            &rb.decorators,
+            rb.viewport_start,
+            buf.viewport.row as usize,
+        );
+
         if !matches!(buf.wrap_mode(), WrapMode::None) && buf.viewport.row > 0 {
             let gutter_w: u16 = rb.gutter.as_ref().map(|g| g.width).unwrap_or(0);
             let content_w = buf
@@ -256,11 +263,30 @@ fn pad_line_to_width(spans: Vec<Span<'static>>, used: usize, width: u16) -> Line
     Line::from(spans)
 }
 
-/// Order matters: later passes paint over earlier ones. Base-fg first,
-/// then optional syntax/diagnostics, then cursor-line and selection
-/// backgrounds on top.
+/// Index `decorators` by viewport-relative row. Pairs are pushed in
+/// `(decorator, range)` iteration order, which is exactly the paint order
+/// the renderer used when it scanned every decorator per row.
+pub(crate) fn build_row_index(
+    decorators: &[DecoratorRanges],
+    start: usize,
+    rows: usize,
+) -> Vec<Vec<(u32, u32)>> {
+    let mut index: Vec<Vec<(u32, u32)>> = vec![Vec::new(); rows];
+    for (di, d) in decorators.iter().enumerate() {
+        for (ri, r) in d.ranges.iter().enumerate() {
+            if let Some(slot) = r.row.checked_sub(start).and_then(|i| index.get_mut(i)) {
+                slot.push((di as u32, ri as u32));
+            }
+        }
+    }
+    index
+}
+
+/// Order matters: later passes paint over earlier ones. Optional
+/// syntax/diagnostics first, then cursor-line and selection backgrounds on
+/// top. (The frame-level background fill already paints the `default`
+/// face, so there is no base-fg pass.)
 fn push_builtin_decorators(buf: &Buffer, theme: &Theme, rb: &mut RenderedBuffer) {
-    rb.decorators.push(base_fg_ranges(buf, theme));
     let syntax = syntax_ranges(buf, theme);
     if !syntax.ranges.is_empty() {
         rb.decorators.push(syntax);
@@ -395,28 +421,6 @@ fn syntax_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
                 display: None,
             });
         }
-    }
-    DecoratorRanges { ranges }
-}
-
-fn base_fg_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
-    let mut ranges = Vec::new();
-    let Some(style) = theme.resolve("default") else {
-        return DecoratorRanges { ranges };
-    };
-    let start = buf.file_pos().row.min(buf.len_lines());
-    let visible = buf.viewport.row as usize;
-    for (i, line) in buf.lines_at(start).take(visible).enumerate() {
-        let text = line.to_string();
-        let len = text.trim_end_matches(['\n', '\r']).chars().count();
-        ranges.push(StyledRange {
-            row: start + i,
-            col: 0,
-            len,
-            style: style.clone(),
-            pad_to_width: false,
-            display: None,
-        });
     }
     DecoratorRanges { ranges }
 }

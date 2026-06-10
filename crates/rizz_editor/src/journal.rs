@@ -33,4 +33,14 @@ impl Journal {
     pub fn commands(&self) -> impl Iterator<Item = &Rc<str>> {
         self.commands.iter()
     }
+
+    pub fn command_count(&self) -> usize {
+        self.commands.len()
+    }
+
+    /// The recorded command at `idx` counting from the oldest (front), or
+    /// `None` if out of range. Backs `<up>`/`<down>` history recall.
+    pub fn command(&self, idx: usize) -> Option<&Rc<str>> {
+        self.commands.iter().nth(idx)
+    }
 }

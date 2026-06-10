@@ -233,6 +233,7 @@ impl State {
             }
             self.bufs.minibuffer_mut().clear();
             self.bufs.minibuffer_mut().set_mode(mode);
+            self.reset_cmd_history_nav();
             // Re-entering while already in a minibuffer mode is a no-op.
             if !self.surface.panels.iter().any(|p| p.is_minibuffer()) {
                 let mb = self.bufs.minibuffer_id();

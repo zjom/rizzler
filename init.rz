@@ -500,6 +500,9 @@
 (map 'command "<esc>"       '(command-cancel))
 (map 'command "<left>"      '(move-cursor 'left))
 (map 'command "<right>"     '(move-cursor 'right))
+;; <up>/<down> recall older/newer commands from history into the minibuffer.
+(map 'command "<up>"        '(command-history-prev))
+(map 'command "<down>"      '(command-history-next))
 
 ;; ============================================================================
 ;; Search mode (`/` — minibuffer)
@@ -1110,7 +1113,7 @@
   (do
     (let cands (_menu-cands))
     (let n (len cands))
-    (if (<= n 0) ()
+    (if (<= n 0) (command-submit)
         (do
           (let i (_menu-clamped n))
           (set! _menu-index 0)

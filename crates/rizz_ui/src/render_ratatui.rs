@@ -322,7 +322,7 @@ fn walk_buffer_view(
     let Some(buf) = snap.bufs.get(buf_id) else {
         return;
     };
-    let buf_frame = fd.per_buf.get(buf_id);
+    let buf_frame = fd.per_buf.get(buf_id).map(|rc| &**rc);
     EditorView::render(buf, area, buf_frame, f);
 
     if let Some(octx) = ctx.overlay
@@ -355,7 +355,7 @@ fn walk_editor_tree(
         let Some(buf) = snap.bufs.get(leaf.buf) else {
             continue;
         };
-        let buf_frame = fd.per_buf.get(leaf.buf);
+        let buf_frame = fd.per_buf.get(leaf.buf).map(|rc| &**rc);
         EditorView::render(buf, leaf.area, buf_frame, f);
         if &leaf.path == focused_path {
             let (cx, cy) = match buf_frame.and_then(|bf| bf.wrap.as_ref()) {

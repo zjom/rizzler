@@ -59,6 +59,9 @@ impl Style {
 #[derive(Clone, Debug, Default)]
 pub struct Theme {
     faces: HashMap<Rc<str>, Style>,
+    /// Bumped on every [`Self::insert`] so render caches can tell whether
+    /// any face changed since they last resolved styles.
+    generation: u64,
 }
 
 impl Theme {
@@ -66,7 +69,12 @@ impl Theme {
         Self::default()
     }
 
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn insert(&mut self, name: Rc<str>, style: Style) {
+        self.generation += 1;
         self.faces.insert(name, style);
     }
 

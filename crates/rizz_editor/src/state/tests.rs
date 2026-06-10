@@ -154,6 +154,27 @@ fn precompute_skips_hidden_buffers() {
 }
 
 #[test]
+fn precompute_memoizes_unchanged_buffers() {
+    let mut s = test_state();
+    let id = s.surface.windows.focused_buf();
+    s.bufs[id].clear_with("one\ntwo\nthree");
+
+    let (frame1, _) = s.precompute_frame();
+    let (frame2, _) = s.precompute_frame();
+    assert!(
+        Rc::ptr_eq(&frame1.per_buf[id], &frame2.per_buf[id]),
+        "unchanged buffer must reuse the cached RenderedBuffer"
+    );
+
+    s.bufs[id].clear_with("one\ntwo\nthree\nfour");
+    let (frame3, _) = s.precompute_frame();
+    assert!(
+        !Rc::ptr_eq(&frame2.per_buf[id], &frame3.per_buf[id]),
+        "an edit must invalidate the cached RenderedBuffer"
+    );
+}
+
+#[test]
 fn register_grammar_rejects_missing_library() {
     let mut s = test_state();
     // A non-existent library path should fail the pre-flight in

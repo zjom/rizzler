@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use rizz::Env;
 use rizz::runtime::{self, Value};
 
-use rizz_core::EditingMode;
+use rizz_core::{EditingMode, FilePos, ScreenPos};
 use rizz_text::{
     Buffer, BufferId,
     props::{PropEntry, PropStore},
@@ -26,6 +26,76 @@ use crate::render::{
 use crate::styling::{Color, Style, Theme, ThemeCell, spans_from_value, style_from_value};
 use crate::widget::{Widget, collect_buffer_views, parse_widget};
 use crate::window::WindowTree;
+
+/// Frame-to-frame memo of per-buffer precompute output. Owned by the
+/// editor's render plumbing and threaded into [`compute`]; an entry is
+/// reused when its [`RenderKey`] — every input the per-buffer pass reads —
+/// is unchanged. That makes scrolling a popup over an untouched file buffer
+/// skip the buffer's gutter lisp calls, tree-sitter query, and decorator
+/// walks entirely.
+///
+/// Caveat: a user gutter fn that reads state outside the key (say, git
+/// status) renders stale until any keyed field changes.
+#[derive(Default)]
+pub struct PrecomputeCache {
+    entries: SecondaryMap<BufferId, (RenderKey, Rc<RenderedBuffer>)>,
+}
+
+/// Everything the per-buffer precompute pass depends on, snapshot as a
+/// comparable value. Two equal keys ⇒ the pass would produce the same
+/// [`RenderedBuffer`].
+#[derive(PartialEq)]
+struct RenderKey {
+    edit_gen: u64,
+    props_gen: u64,
+    diag_version: u64,
+    theme_gen: u64,
+    file_pos: FilePos,
+    viewport: ScreenPos,
+    abs_pos: FilePos,
+    mode: EditingMode,
+    selection_anchor: Option<FilePos>,
+    len_lines: usize,
+    is_file: bool,
+    is_minibuffer: bool,
+    gutter_ptr: usize,
+    gutter_width: GutterWidth,
+    wrap_mode: WrapMode,
+    wrap_column: Option<u16>,
+    breakindent: bool,
+}
+
+impl RenderKey {
+    #[allow(clippy::too_many_arguments)]
+    fn snapshot(
+        buf: &Buffer,
+        theme_gen: u64,
+        is_file: bool,
+        is_minibuffer: bool,
+        gutter: Option<&Rc<Value>>,
+        gutter_width: GutterWidth,
+    ) -> Self {
+        Self {
+            edit_gen: buf.edit_gen(),
+            props_gen: buf.props().generation(),
+            diag_version: buf.diagnostics_version(),
+            theme_gen,
+            file_pos: buf.file_pos(),
+            viewport: buf.viewport,
+            abs_pos: buf.abs_pos(),
+            mode: buf.mode(),
+            selection_anchor: buf.selection_anchor(),
+            len_lines: buf.len_lines(),
+            is_file,
+            is_minibuffer,
+            gutter_ptr: gutter.map_or(0, |g| Rc::as_ptr(g) as *const () as usize),
+            gutter_width,
+            wrap_mode: buf.wrap_mode(),
+            wrap_column: buf.wrap_column(),
+            breakindent: buf.breakindent(),
+        }
+    }
+}
 
 /// Inputs the precompute pass reads from `State`. All references are
 /// immutable; the only mutation it performs is on its own local builders.
@@ -44,6 +114,8 @@ pub struct PrecomputeInput<'a> {
     pub gutter: Option<&'a Rc<Value>>,
     pub gutter_width: GutterWidth,
     pub lisp_env: &'a Env,
+    /// Frame-to-frame per-buffer memo; see [`PrecomputeCache`].
+    pub cache: &'a mut PrecomputeCache,
 }
 
 pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
@@ -58,6 +130,7 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
         gutter,
         gutter_width,
         lisp_env,
+        cache,
     } = input;
 
     let theme_snap = theme.borrow().clone();
@@ -101,7 +174,7 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
     }
     collect_buffer_views(&root, &mut visible);
 
-    let mut per_buf: SecondaryMap<BufferId, RenderedBuffer> = SecondaryMap::new();
+    let mut per_buf: SecondaryMap<BufferId, Rc<RenderedBuffer>> = SecondaryMap::new();
     for id in visible {
         if per_buf.contains_key(id) {
             continue;
@@ -109,10 +182,26 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
         let Some(buf) = bufs.get(id) else {
             continue;
         };
-        let mut rb = RenderedBuffer::default();
 
         let is_file = file_bufs.contains(&id);
         let is_minibuffer = id == minibuffer;
+
+        let key = RenderKey::snapshot(
+            buf,
+            theme_snap.generation(),
+            is_file,
+            is_minibuffer,
+            gutter,
+            gutter_width,
+        );
+        if let Some((cached_key, rb)) = cache.entries.get(id)
+            && *cached_key == key
+        {
+            per_buf.insert(id, rb.clone());
+            continue;
+        }
+
+        let mut rb = RenderedBuffer::default();
 
         if is_file && gutter.is_some() && !matches!(gutter_width, GutterWidth::Fixed(0)) {
             let g = build_gutter(buf, gutter_width, gutter, &theme_snap, lisp_env);
@@ -157,8 +246,13 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
             }
         }
 
+        let rb = Rc::new(rb);
+        cache.entries.insert(id, (key, rb.clone()));
         per_buf.insert(id, rb);
     }
+
+    // Entries for buffers that left the visible set keep no value alive.
+    cache.entries.retain(|id, _| per_buf.contains_key(id));
 
     let _ = &mut root;
 

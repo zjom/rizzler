@@ -4,6 +4,7 @@
 //! `State` hand out a snapshot without exposing its private fields.
 
 use std::io;
+use std::rc::Rc;
 
 use ratatui::text::Line;
 
@@ -63,8 +64,9 @@ pub struct RenderedFrame {
     /// Frame layout with no callables and gutters already pre-rendered.
     pub root: Widget,
     /// Per-buffer precomputed data; only buffers visible this frame are
-    /// populated.
-    pub per_buf: SecondaryMap<BufferId, RenderedBuffer>,
+    /// populated. `Rc` because entries may be shared with (and reused from)
+    /// the frame-to-frame [`crate::precompute::PrecomputeCache`].
+    pub per_buf: SecondaryMap<BufferId, Rc<RenderedBuffer>>,
 }
 
 #[derive(Default)]

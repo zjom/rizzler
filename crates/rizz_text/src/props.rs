@@ -53,6 +53,9 @@ pub struct PropStore {
     /// Named overlays keyed by `OverlayId`. The id space is per-buffer.
     pub overlays: Vec<(OverlayId, PropEntry)>,
     next_id: u64,
+    /// Bumped by every mutator so render caches can tell whether the store
+    /// changed since they last walked it.
+    generation: u64,
 }
 
 /// Opaque handle for an overlay, returned by `overlay-create`. Wraps a `u64`
@@ -61,28 +64,39 @@ pub struct PropStore {
 pub struct OverlayId(pub u64);
 
 impl PropStore {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn push_text_property(&mut self, e: PropEntry) {
+        self.generation += 1;
         self.text_properties.push(e);
     }
 
     pub fn clear_text_properties(&mut self) {
+        self.generation += 1;
         self.text_properties.clear();
     }
 
     pub fn create_overlay(&mut self, e: PropEntry) -> OverlayId {
+        self.generation += 1;
         let id = OverlayId(self.next_id);
         self.next_id += 1;
         self.overlays.push((id, e));
         id
     }
 
+    /// Handing out `&mut` counts as a mutation — the generation bumps
+    /// unconditionally.
     pub fn overlay_mut(&mut self, id: OverlayId) -> Option<&mut PropEntry> {
+        self.generation += 1;
         self.overlays
             .iter_mut()
             .find_map(|(oid, e)| (*oid == id).then_some(e))
     }
 
     pub fn delete_overlay(&mut self, id: OverlayId) -> bool {
+        self.generation += 1;
         let before = self.overlays.len();
         self.overlays.retain(|(oid, _)| *oid != id);
         self.overlays.len() < before

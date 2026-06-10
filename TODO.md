@@ -3,12 +3,16 @@
 - [ ] `<up>`/ `down` to autofill command history
 - [ ] lifecycle hooks (autocommands)
   - see vim help autocmd
-- [ ] named mutable widgets
+- [ ] widgets
+  - [ ] named mutable widgets
+  - [ ] declarative widget api
+  - [ ] more prebuilt widgets for common things
 - [ ] lspconfig
 - [ ] add (non-lsp) formatter support
-- [ ] shiftwidth/ expandtab/ tab-width config
+- [ ] editor options and buffer options
+  - [ ] shiftwidth/ expandtab/ tab-width config
+  - [ ] line wrap
 - [ ] highlight matching pair (parens, brackets, etc)
-- [ ] picker (telescope like)
 - [ ] add support for package manager installation of lsps, formatters, linters (look at what mason.nvim does)
 - [ ] sed
 - [ ] multicursor editing
@@ -18,9 +22,8 @@
 - [ ] add more known tree-sitter languages to grammars.toml
 - [ ] add more known lsps to lsp.toml
 - [ ] support more default tree-sitter highlights
-- [ ] filetype on buffers
+- [ ] /after/filetype
 - [ ] buffers cycle should by access order instead of creation order
-- [ ] improve latency of lsp completion menu
 - [ ] better tracing/ error handling/ reporting
 - [ ] split default init.rz into multiple files and seed folder instead of single file.
 
@@ -30,3 +33,7 @@
 - [ ] cursor-* reporting is not tied to editor window
   - [ ] moving cursor in command buffer and popups updates cursor-line of editor
   - [ ] gutter shifts when entering command buffer
+- [ ] cursor clamped to row length instead of min(row length, buffer width)
+  - open vertical split
+  - type line longer than buffer width
+  - cursor reaches into other buffer

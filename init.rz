@@ -1553,35 +1553,29 @@
 (let! _picker-items [])
 
 ;; ----- the fuzzy matcher ----------------------------------------------
-;; Case-insensitive subsequence test: are all of `needle`'s chars found in
-;; `hay`, in order (gaps allowed)? Typing " control" matches "core/control"
-;; and "c_o_n_t.rs". We fold across `hay` once, advancing a pointer into
-;; `needle` each time the current hay char matches the char the pointer is
-;; on; a full traversal of `needle` means it matched. Both args are assumed
-;; already lowercased by the caller.
-(fn _fuzzy-match? (needle hay)
-  (do
-    (let nlen (len needle))
-    (if (= nlen 0)
-        1
-        (>= (reduce
-              (fn _step (i ch)
-                (if (>= i nlen)
-                    i
-                    (if (= ch (get needle i)) (+ i 1) i)))
-              0 hay)
-            nlen))))
+;; The match itself is the native `fuzzy-filter` builtin: a case-
+;; insensitive subsequence test (are all of the query's chars found in the
+;; candidate's "display", in order, gaps allowed?). Typing " control"
+;; matches "core/control" and "c_o_n_t.rs". Filtering thousands of items
+;; per keystroke in interpreted lisp was the picker's bottleneck.
+;;
+;; The result is memoized per query: `_picker-render` and the navigation
+;; handlers each ask for the match list, so without the cache every
+;; keypress would filter twice. `picker-open` resets the cache (that's the
+;; only place the item list changes).
+(let! _picker-matches-cache [])
+(let! _picker-cache-query  ())
 
-;; The live candidate list: every item whose "display" fuzzy-matches the
-;; current query, in source order (an empty query passes everything).
 (fn _picker-matches ()
   (do
-    (let q     (str-lower (deref _picker-query)))
-    (let items (deref _picker-items))
-    (if (= q "")
-        items
-        (filter (fn _m (it) (_fuzzy-match? q (str-lower (get it "display"))))
-                items))))
+    (let q (deref _picker-query))
+    (if (= q (deref _picker-cache-query))
+        (deref _picker-matches-cache)
+        (do
+          (let m (fuzzy-filter q (deref _picker-items) "display"))
+          (set! _picker-matches-cache m)
+          (set! _picker-cache-query q)
+          m))))
 
 ;; Clamp the persisted highlight to the live match count (wrapping a stale
 ;; index back to 0), mirroring the completion menu's `_menu-clamped`.
@@ -1664,6 +1658,7 @@
     (set! _picker-items (get spec "items"))
     (set! _picker-query "")
     (set! _picker-index 0)
+    (set! _picker-cache-query ())
     (_picker-render)))
 
 ;; ----- input handlers -------------------------------------------------

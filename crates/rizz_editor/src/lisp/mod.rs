@@ -374,6 +374,33 @@ mod tests {
     }
 
     #[test]
+    fn fuzzy_filter_builtin_subsequence_semantics() {
+        let mut s = test_state();
+        // Map items filtered by their "display" key.
+        let v = s
+            .eval_lisp(
+                r#"(fmap (fn _d (it) (get it "display"))
+                     (fuzzy-filter "cnt"
+                       [{"display": "core/control"}
+                        {"display": "C_O_N_T.rs"}
+                        {"display": "lib.rs"}]
+                       "display"))"#,
+            )
+            .unwrap();
+        assert_eq!(v.display(), r#"["core/control" "C_O_N_T.rs"]"#);
+        // Empty query passes everything; plain strings with KEY = ().
+        let v = s
+            .eval_lisp(r#"(len (fuzzy-filter "" ["a" "b"] ()))"#)
+            .unwrap();
+        assert_eq!(v.display(), "2");
+        // Case-insensitive both ways.
+        let v = s
+            .eval_lisp(r#"(fuzzy-filter "AB" ["xaxbx" "ba"] ())"#)
+            .unwrap();
+        assert_eq!(v.display(), r#"["xaxbx"]"#);
+    }
+
+    #[test]
     fn command_submit_via_minibuffer_does_not_recurse() {
         use crossterm::event::{KeyCode, KeyModifiers};
         let mut s = test_state();

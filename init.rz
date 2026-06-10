@@ -900,10 +900,10 @@
 
 (fn _seg-selection-hint ()
   (do
-    (let sel (selected-text))
-    (if (= sel ())
+    (let n (selection-size))
+    (if (= n ())
         (w-span "" "vague.muted")
-        (w-span (str-join [" " (to-str (len sel)) " chars selected "] "")
+        (w-span (str-join [" " (to-str n) " chars selected "] "")
                 "vague.accent"))))
 
 (fn _seg-cursor ()
@@ -983,12 +983,12 @@
 ;; chord-prefix hint, ...).
 (fn _selection-badge ()
   (do
-    (let sel (selected-text))
-    (if (= sel ())
+    (let n (selection-size))
+    (if (= n ())
         (w-empty)
         (w-overlay
           (placement-anchored 'top 1)
-          (w-line [(w-span (str-join ["  " (to-str (len sel)) " chars selected  "] "")
+          (w-line [(w-span (str-join ["  " (to-str n) " chars selected  "] "")
                            "vague.warn")]
                   'right)))))
 
@@ -1016,11 +1016,26 @@
 ;; Candidate list visible to the menu. Empty unless we're in command mode
 ;; with a non-empty prefix — otherwise an empty minibuffer would balloon
 ;; the bottom of the screen with every binding in the env.
+;;
+;; `command-completions` walks the entire env and sorts, and this fn runs
+;; once per frame (from the overlay) plus once per <c-n>/<c-p>/<c-y>
+;; keypress — so the result is memoized per prefix.
+(let! _menu-cands-cache  [])
+(let! _menu-cache-prefix ())
+
 (fn _menu-cands ()
   (if (= (focused-mode) "command")
-      (if (= (command-prefix) "")
-          []
-          (command-completions))
+      (do
+        (let prefix (command-prefix))
+        (if (= prefix "")
+            []
+            (if (= prefix (deref _menu-cache-prefix))
+                (deref _menu-cands-cache)
+                (do
+                  (let cands (command-completions))
+                  (set! _menu-cands-cache cands)
+                  (set! _menu-cache-prefix prefix)
+                  cands))))
       []))
 
 ;; Clamp the persisted index to the live candidate count.

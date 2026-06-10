@@ -44,7 +44,12 @@ impl EditorView {
         let content_area = cols[cols.len() - 1];
 
         if let Some(g) = gutter {
-            frame.render_widget(Paragraph::new(g.rows.clone()), cols[0]);
+            // Write rows directly instead of cloning them into a Paragraph.
+            let gutter_area = cols[0];
+            let buf = frame.buffer_mut();
+            for (i, line) in g.rows.iter().take(gutter_area.height as usize).enumerate() {
+                buf.set_line(gutter_area.x, gutter_area.y + i as u16, line, gutter_area.width);
+            }
         }
 
         let visible_rows = content_area.height as usize;

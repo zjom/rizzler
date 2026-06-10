@@ -374,6 +374,23 @@ mod tests {
     }
 
     #[test]
+    fn selection_size_matches_selected_text_len() {
+        let mut s = test_state();
+        s.eval_lisp("(set-mode 'insert)").unwrap();
+        s.eval_lisp("(insert \"hello\")").unwrap();
+        s.eval_lisp("(newline)").unwrap();
+        s.eval_lisp("(insert \"world\")").unwrap();
+        s.eval_lisp("(set-mode 'normal)").unwrap();
+        assert_eq!(s.eval_lisp("(selection-size)").unwrap().display(), "()");
+        s.eval_lisp("(move-cursor 'file-start)").unwrap();
+        s.eval_lisp("(set-mode 'visual)").unwrap();
+        s.eval_lisp("(move-cursor 'down)").unwrap();
+        let n = s.eval_lisp("(selection-size)").unwrap().display();
+        let len = s.eval_lisp("(len (selected-text))").unwrap().display();
+        assert_eq!(n, len);
+    }
+
+    #[test]
     fn fuzzy_filter_builtin_subsequence_semantics() {
         let mut s = test_state();
         // Map items filtered by their "display" key.

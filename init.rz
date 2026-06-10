@@ -1014,7 +1014,10 @@
 ;; having to wire up any "candidates changed" callback.
 
 (let _menu-max-rows 8)
-(let _menu-index    (ref 0))
+;; -1 is the "no selection" sentinel: the menu opens with nothing highlighted,
+;; so <enter> submits the typed minibuffer text. <c-n>/<c-p> move the cursor
+;; onto a real item, at which point <enter> submits that item instead.
+(let _menu-index    (ref -1))
 
 ;; Candidate list visible to the menu. Empty unless we're in command mode
 ;; with a non-empty prefix — otherwise an empty minibuffer would balloon
@@ -1041,13 +1044,16 @@
                   cands))))
       []))
 
-;; Clamp the persisted index to the live candidate count.
+;; Resolve the persisted index against the live candidate count. Returns the
+;; in-range selection, or -1 when there's no valid selection (empty menu or
+;; the cursor is out of bounds) — so callers can tell "on an item" apart from
+;; "nothing selected".
 (fn _menu-clamped (n)
   (do
     (let i (deref _menu-index))
-    (if (<= n 0) 0
-    (if (< i 0) 0
-    (if (>= i n) 0
+    (if (<= n 0) -1
+    (if (< i 0) -1
+    (if (>= i n) -1
                  i)))))
 
 ;; Pad every candidate to the same width so the selection highlight covers
@@ -1105,21 +1111,26 @@
     (let n (len cands))
     (if (<= n 0) ()
         (do
+          ;; With no explicit selection, accept the top candidate.
           (let i (_menu-clamped n))
-          (set! _menu-index 0)
-          (command-complete (get cands i))))))
+          (let j (if (< i 0) 0 i))
+          (set! _menu-index -1)
+          (command-complete (get cands j))))))
 
+;; <enter> in command mode. If the cursor is on a menu item, complete to it and
+;; submit; otherwise (empty menu or cursor out of bounds) submit the minibuffer
+;; text as typed.
 (fn _menu-command-submit ()
   (do
     (let cands (_menu-cands))
     (let n (len cands))
-    (if (<= n 0) (command-submit)
+    (let i (_menu-clamped n))
+    (if (< i 0)
+        (command-submit)
         (do
-          (let i (_menu-clamped n))
-          (set! _menu-index 0)
+          (set! _menu-index -1)
           (command-complete (get cands i))
-          (command-submit)
-          ))))
+          (command-submit)))))
 
 (map 'command "<c-n>"       '(_menu-next))
 (map 'command "<c-p>"       '(_menu-prev))

@@ -1843,9 +1843,9 @@
               {"display": "help"            "data": '(popup-help)}]
      "on-accept": (fn _run (it) (eval (get it "data")))}))
 
-;; Telescope's `<leader>f…` family: <space>ff finds files, <space>fc opens
-;; the command palette. Both are also callable by name from command mode.
-(keymap-set 'normal "<space>ff" '(picker-files))
+;; ff finds files, <space>fc opens the command palette.
+;; Both are also callable by name from command mode.
+(keymap-set 'normal "ff" '(picker-files))
 (keymap-set 'normal "<space>fc" '(picker-commands))
 
 

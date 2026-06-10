@@ -1,19 +1,31 @@
-- [ ] buffers cycle should by access order instead of creation order
-- [ ] clean up comments and architecture
-- [ ] filetype on buffers
+# Features
+
+- [ ] `<up>`/ `down` to autofill command history
 - [ ] lifecycle hooks (autocommands)
-- [ ] moving cursor in command buffer and popups updates cursor-line of editor
-- [ ] lsp completion menu is slow
-- [ ] `o`/`O`/`enter` should be whitespace aware. put you on col of start of prev line
-- [ ] documentation for builtins
+  - see vim help autocmd
 - [ ] named mutable widgets
-- [ ] support more default tree-sitter highlights
-- [ ] add more known tree-sitter languages to grammars.toml
 - [ ] lspconfig
-- [ ] add more known lsps to lsp.toml
-- [ ] add support for package manager installation of lsps/ look at what mason does
-- [ ] add formatter support
+- [ ] add (non-lsp) formatter support
 - [ ] add `<<` and `>>` like vim
 - [ ] highlight matching pair (parens, brackets, etc)
-- [ ] better tracing/ error handling/ reporting
 - [ ] picker (telescope like)
+- [ ] add support for package manager installation of lsps, formatters, linters (look at what mason.nvim does)
+
+# Improvements
+
+- [ ] add more known tree-sitter languages to grammars.toml
+- [ ] add more known lsps to lsp.toml
+- [ ] support more default tree-sitter highlights
+- [ ] documentation for builtins
+- [ ] `o`/`O`/`enter` should be whitespace aware. put you on col of start of prev line
+- [ ] filetype on buffers
+- [ ] buffers cycle should by access order instead of creation order
+- [ ] improve latency of lsp completion menu
+- [ ] better tracing/ error handling/ reporting
+- [x] clean up comments and architecture
+
+# Bugs
+
+- [ ] cursor-* reporting is not tied to editor window
+  - [ ] moving cursor in command buffer and popups updates cursor-line of editor
+  - [ ] gutter shifts when entering command buffer

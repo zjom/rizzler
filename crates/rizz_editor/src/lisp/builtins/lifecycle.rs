@@ -12,7 +12,7 @@ pub(super) fn register(b: &mut Builtins) {
             apply(Action::Quit)?;
             Ok(unit())
         },
-        "(quit/0)\nexit the application",
+        "(quit)\n\nExits the application. Aliased as (q).",
     );
     b.alias("q", "quit");
 
@@ -24,6 +24,6 @@ pub(super) fn register(b: &mut Builtins) {
             apply(Action::SetMode(mode))?;
             Ok(unit())
         },
-        "(set-mode/1)\nchange the editing mode.\naccepts one of: 'normal | 'insert | 'visual | 'visual-line | 'visual-block | 'command",
+        "(set-mode MODE)\n\nSwitches the focused buffer to editing mode MODE.\n\nMODE — mode: one of 'normal 'insert 'visual 'visual-line\n       'visual-block 'command.\n\nErrors when MODE is not one of those idents.\nSee also: (focused-mode).",
     );
 }

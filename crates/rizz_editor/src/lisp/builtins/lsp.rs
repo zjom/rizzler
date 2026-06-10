@@ -33,7 +33,7 @@ pub(super) fn register(b: &mut Builtins) {
             });
             Ok(unit())
         },
-        "(lsp-register/4)\nregister an LSP server programmatically (bypasses lsp.toml).\nargs: <name str> <command str> <args [str ...]> <extensions [str ...]>",
+        "(lsp-register NAME COMMAND ARGS EXTS)\n\nRegisters an LSP server programmatically, bypassing lsp.toml. An escape\nhatch for ad-hoc servers — (lsp-install NAME) is the curated path.\n\nNAME    — str: the server name.\nCOMMAND — str: the executable to launch.\nARGS    — array of str: launch arguments (or () for none).\nEXTS    — array of str: file extensions this server handles.\nSee also: (lsp-install NAME), (lsp-restart [NAME]).",
     );
 
     b.be_doc(
@@ -58,19 +58,22 @@ pub(super) fn register(b: &mut Builtins) {
                 },
             }))
         },
-        r#"(lsp-install name opts?)
-install an LSP server by name from the curated lsp.toml manifest.
-runs the install recipe if the binary is missing from $PATH and the cache.
-idempotent on cache hit.
+        r#"(lsp-install NAME [OPTS])
 
-params:
-- `name`: str | ident
-- `opts`: map
-   recognised keys:
-   - "command": override the binary name
-   - "args":    override the launch args
-   - "install": override the install recipe
-   - "force":   truthy → re-run the recipe even on cache hit"#,
+Installs an LSP server by NAME from the curated lsp.toml manifest. Runs
+the install recipe if the binary is missing from $PATH and the cache.
+Idempotent on cache hit.
+
+NAME — ident | str: the server name.
+OPTS — map: optional overrides. Recognized keys:
+         "command": str — override the binary name
+         "args":    array of str — override the launch args
+         "install": str — override the install recipe
+         "force":   truthy — re-run the recipe even on cache hit
+
+Returns a pair: (ok . PATH) on success, or (err . MESSAGE) on failure.
+See also: (lsp-installed? NAME), (set-lsp-auto-install ON),
+(lsp-register ...)."#,
     );
 
     b.be_doc(
@@ -81,7 +84,7 @@ params:
             let installed = with_editor_mut(|st| st.lsp_installed(&name));
             Ok(Rc::new(installed.into()))
         },
-        "(lsp-installed?/1)\ntrue when the cache or $PATH holds a binary for the named lsp server.",
+        "(lsp-installed? NAME)\n\nReturns 1 if the cache or $PATH holds a binary for the LSP server NAME,\nelse 0.\n\nNAME — ident | str: the server name.\nSee also: (lsp-install NAME).",
     );
 
     b.be_doc(
@@ -92,7 +95,7 @@ params:
             with_editor_mut(|st| st.set_lsp_auto_install(on));
             Ok(unit())
         },
-        "(set-lsp-auto-install/1)\ntoggle automatic install of lsp servers on file open.\nwhen on (the default), opening a file whose extension matches an lsp.toml entry shells out to the install recipe if the binary is missing.",
+        "(set-lsp-auto-install ON)\n\nToggles automatic install of LSP servers on file open. When ON (the\ndefault), opening a file whose extension matches an lsp.toml entry runs\nthe install recipe if the binary is missing.\n\nON — int: nonzero to enable, 0 to disable.\nSee also: (lsp-auto-install?), (lsp-install NAME).",
     );
 
     b.be_doc(
@@ -102,7 +105,7 @@ params:
             let on = with_editor_mut(|st| st.lsp_auto_install());
             Ok(Rc::new(on.into()))
         },
-        "(lsp-auto-install?/0)\ntrue when lsp servers are auto-installed on first file open (the default).",
+        "(lsp-auto-install?)\n\nReturns 1 if LSP servers are auto-installed on first file open (the\ndefault), else 0.\nSee also: (set-lsp-auto-install ON).",
     );
 
     b.be_doc(
@@ -114,7 +117,7 @@ params:
             });
             Ok(unit())
         },
-        "(lsp-hover/0)\nrequest textDocument/hover at the cursor and show the result in a notify.",
+        "(lsp-hover)\n\nRequests textDocument/hover at the cursor and shows the result via\n(notify). A no-op when no server is attached to the focused buffer.\nSee also: (lsp-goto-definition), (lsp-completion).",
     );
 
     b.be_doc(
@@ -126,7 +129,7 @@ params:
             });
             Ok(unit())
         },
-        "(lsp-goto-definition/0)\nrequest textDocument/definition at the cursor and jump to the first location.",
+        "(lsp-goto-definition)\n\nRequests textDocument/definition at the cursor and jumps to the first\nlocation returned. A no-op when no server is attached.\nSee also: (lsp-hover), (lsp-completion).",
     );
 
     b.be_doc(
@@ -138,7 +141,7 @@ params:
             });
             Ok(unit())
         },
-        "(lsp-completion/0)\nrequest textDocument/completion at the cursor and surface the first item.",
+        "(lsp-completion)\n\nRequests textDocument/completion at the cursor. The response is handed\nto the (set-lsp-completion-fn) callback if one is installed, else the\nfirst item is surfaced via (notify).\nSee also: (set-lsp-completion-fn FN), (lsp-apply-completion ID).",
     );
 
     b.be_doc(
@@ -150,7 +153,7 @@ params:
             });
             Ok(unit())
         },
-        "(lsp-format/0)\nrequest textDocument/formatting and apply the edits as one tracked changetree node.",
+        "(lsp-format)\n\nRequests textDocument/formatting for the focused buffer and applies the\nreturned edits as a single tracked (undoable) change. A no-op when no\nserver is attached.\nSee also: (lsp-code-action).",
     );
 
     b.be_doc(
@@ -162,7 +165,7 @@ params:
             });
             Ok(unit())
         },
-        "(lsp-code-action/0)\nrequest textDocument/codeAction at the cursor and surface the first action.",
+        "(lsp-code-action)\n\nRequests textDocument/codeAction at the cursor. The response is handed\nto the (set-lsp-code-action-fn) callback if one is installed, else the\nfirst action is surfaced via (notify).\nSee also: (set-lsp-code-action-fn FN), (lsp-invoke-code-action ID).",
     );
 
     b.be_doc(
@@ -177,7 +180,7 @@ params:
             with_editor_mut(|st| st.lsp_restart(name.as_deref()));
             Ok(unit())
         },
-        "(lsp-restart [name])\nshut down a running lsp client and re-attach the focused buffer.\nwith no argument, restarts the server for the focused buffer's language.",
+        "(lsp-restart [NAME])\n\nShuts down a running LSP client and re-attaches the focused buffer.\n\nNAME — ident | str: optional server to restart. With no argument,\n       restarts the server for the focused buffer's language.\nSee also: (lsp-install NAME), (lsp-register ...).",
     );
 
     b.be_doc(
@@ -189,28 +192,29 @@ params:
             with_editor_mut(|st| st.set_lsp_completion_fn(opt));
             Ok(unit())
         },
-        r#"(set-lsp-completion-fn/1)
-install the lisp callback for textDocument/completion responses. the fn
-receives `(items anchor)`:
-  items  — array of maps: {"id": int, "label": str, "detail": str|(),
-            "insert-text": str, "kind": 'function|'method|'variable|…}
-  anchor — map {"row": int, "col": int} for the position the request
-            was issued at.
+        r#"(set-lsp-completion-fn FN)
 
-an empty `items` array means the response carried no completions (or
-the most recent batch was cleared); use it to dismiss any popup the
-callback opened previously.
+Installs the lisp callback for textDocument/completion responses.
 
-pass () to clear the callback — the editor falls back to a one-line
-notify summary of the first item.
+FN — fn: receives (ITEMS ANCHOR). Pass () to clear the callback — the
+     editor then falls back to a one-line notify summary of the first
+     item.
+       ITEMS  — array of map: each {"id": int, "label": str,
+                "detail": str | (), "insert-text": str,
+                "kind": 'function | 'method | 'variable | …}. An empty
+                array means no completions (or the batch was cleared) —
+                use it to dismiss a popup the callback opened earlier.
+       ANCHOR — map {"row": int, "col": int}: where the request was
+                issued.
 
-example:
+Example:
   (fn _completion-popup (items anchor)
     (popup-show 'completion
       (w-block {"border": "rounded"} (w-popup-self))
       {"text": (str-join (fmap (fn (i) (get i "label")) items) "\n")
        "placement": (placement-anchored 'bottom 'fit)}))
-  (set-lsp-completion-fn _completion-popup)"#,
+  (set-lsp-completion-fn _completion-popup)
+See also: (lsp-completion), (lsp-apply-completion ID)."#,
     );
 
     b.be_doc(
@@ -222,18 +226,19 @@ example:
             with_editor_mut(|st| st.set_lsp_code_action_fn(opt));
             Ok(unit())
         },
-        r#"(set-lsp-code-action-fn/1)
-install the lisp callback for textDocument/codeAction responses. the fn
-receives `(actions)`:
-  actions — array of maps: {"id": int, "title": str, "kind": str|(),
-             "has-edit": 0|1, "has-command": 0|1}
+        r#"(set-lsp-code-action-fn FN)
 
-call `(lsp-invoke-code-action id)` from inside the picker to apply the
-chosen action's edit + command. an empty array means no actions were
-returned at the cursor.
+Installs the lisp callback for textDocument/codeAction responses.
 
-pass () to clear the callback — the editor falls back to a one-line
-notify summary of the first action."#,
+FN — fn: receives (ACTIONS). Pass () to clear the callback — the editor
+     then falls back to a one-line notify summary of the first action.
+       ACTIONS — array of map: each {"id": int, "title": str,
+                 "kind": str | (), "has-edit": 0|1, "has-command": 0|1}.
+                 An empty array means no actions at the cursor.
+
+Call (lsp-invoke-code-action ID) from inside the picker to apply the
+chosen action's edit and command.
+See also: (lsp-code-action), (lsp-invoke-code-action ID)."#,
     );
 
     b.be_doc(
@@ -244,15 +249,18 @@ notify summary of the first action."#,
             with_editor_mut(|st| st.apply_lsp_completion_by_id(id));
             Ok(unit())
         },
-        r#"(lsp-apply-completion/1)
-apply the completion item with the given id from the most recent
-`textDocument/completion` batch — inserts its `insert-text` at the
-originating buffer's cursor. id is the `id` field from the item map
-handed to the `set-lsp-completion-fn` callback.
+        r#"(lsp-apply-completion ID)
 
-no-op (with a notify) when the id is out of range or no batch is
-pending. call `(popup-hide 'your-popup)` separately if you opened one
-for the picker."#,
+Applies the completion item ID from the most recent
+textDocument/completion batch — inserts its "insert-text" at the
+originating buffer's cursor.
+
+ID — int: the "id" field from an item map handed to the
+     (set-lsp-completion-fn) callback.
+
+A no-op (with a notify) when ID is out of range or no batch is pending.
+If you opened a picker popup, call (popup-hide 'your-popup) separately.
+See also: (set-lsp-completion-fn FN), (lsp-completion)."#,
     );
 
     b.be_doc(
@@ -263,15 +271,17 @@ for the picker."#,
             with_editor_mut(|st| st.invoke_lsp_code_action_by_id(id));
             Ok(unit())
         },
-        r#"(lsp-invoke-code-action/1)
-invoke the code action with the given id from the most recent
-`textDocument/codeAction` batch — applies its workspace edit if any,
-then forwards its server command (if any) via
-`workspace/executeCommand`. id is the `id` field from the action map
-handed to the `set-lsp-code-action-fn` callback.
+        r#"(lsp-invoke-code-action ID)
 
-no-op (with a notify) when the id is out of range or no batch is
-pending."#,
+Invokes the code action ID from the most recent textDocument/codeAction
+batch — applies its workspace edit if any, then forwards its server
+command (if any) via workspace/executeCommand.
+
+ID — int: the "id" field from an action map handed to the
+     (set-lsp-code-action-fn) callback.
+
+A no-op (with a notify) when ID is out of range or no batch is pending.
+See also: (set-lsp-code-action-fn FN), (lsp-code-action)."#,
     );
 }
 

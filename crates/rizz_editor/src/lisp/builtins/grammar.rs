@@ -28,7 +28,7 @@ pub(super) fn register(b: &mut Builtins) {
                 .map_err(|e| RuntimeError::Other(anyhow!("{e}")))?;
             Ok(unit())
         },
-        "(grammar-register/4)\nregister a tree-sitter grammar loaded from a shared library (.so/.dylib/.dll).\nthe library must export `tree_sitter_<name>` — Neovim's `parser/*.so` ABI.\nargs: <name str> <library-path str> <highlights.scm path str> <ext: str | [str ...]>",
+        "(grammar-register NAME LIB-PATH SCM-PATH EXTS)\n\nRegisters a tree-sitter grammar loaded from a pre-built shared library.\nAn escape hatch — (grammar-install NAME) is the curated wrapper most\nconfigs want.\n\nNAME     — str: the grammar name; the library must export\n           `tree_sitter_<NAME>` (Neovim's parser/*.so ABI).\nLIB-PATH — path: the .so / .dylib / .dll to load.\nSCM-PATH — path: a highlights.scm query file, read at registration.\nEXTS     — str | array of str: file extension(s) to index by.\n\nErrors when the library or query file can't be loaded.\nSee also: (grammar-install NAME), (grammar-installed? NAME).",
     );
 
     b.be_doc(
@@ -53,24 +53,30 @@ pub(super) fn register(b: &mut Builtins) {
                 },
             }))
         },
-        r#"(grammar-install name opts?)
-install a tree-sitter grammar by name from the curated grammars.toml manifest.
-clones via git, builds via the `tree-sitter` CLI, and caches the result.
-idempotent on cache hit. `git` and `tree-sitter` must be on $PATH.
+        r#"(grammar-install NAME [OPTS])
 
-params:
-- `name`: str | ident
-- `opts`: map
-   recognised keys:
-   - "repo":       git URL (overrides manifest)
-   - "path":       use a local checkout instead of cloning
-   - "branch":     git branch to clone
-   - "rev":        git ref to check out
-   - "subdir":     subdir inside the repo where parser.c lives
-   - "extensions": [str ...] file extensions to index by
-   - "language":   override the tree_sitter_<…> C symbol suffix
-   - "queries":    override the highlights.scm path (relative to source root)
-   - "force":      truthy → rebuild even if the cache stamp matches"#,
+Installs a tree-sitter grammar by NAME from the curated grammars.toml
+manifest: clones via git, builds via the `tree-sitter` CLI, and caches
+the result. Idempotent on cache hit.
+
+NAME — ident | str: the grammar name.
+OPTS — map: optional overrides. Recognized keys:
+         "repo":       str — git URL (overrides the manifest)
+         "path":       path — use a local checkout instead of cloning
+         "branch":     str — git branch to clone
+         "rev":        str — git ref to check out
+         "subdir":     str — subdir where parser.c lives
+         "extensions": array of str — file extensions to index by
+         "language":   str — override the tree_sitter_<…> symbol suffix
+         "queries":    str — highlights.scm path, relative to source root
+         "force":      truthy — rebuild even if the cache stamp matches
+
+Returns a pair: (ok . NAME) on success, or (err . MESSAGE) on failure.
+
+Errors are returned in the result pair rather than raised; the process
+still needs `git` and `tree-sitter` on $PATH.
+See also: (grammar-installed? NAME), (set-grammar-auto-install ON),
+(grammar-register ...)."#,
     );
 
     b.be_doc(
@@ -81,7 +87,7 @@ params:
             let installed = with_editor_mut(|st| st.grammar_installed(&name));
             Ok(Rc::new(installed.into()))
         },
-        "(grammar-installed?/1)\ntrue when the local cache holds a parser library + highlights query for <name>.\npurely local — never touches the network.",
+        "(grammar-installed? NAME)\n\nReturns 1 if the local cache holds a parser library and highlights query\nfor NAME, else 0. Purely local — never touches the network.\n\nNAME — ident | str: the grammar name.\nSee also: (grammar-install NAME).",
     );
 
     b.be_doc(
@@ -92,7 +98,7 @@ params:
             with_editor_mut(|st| st.set_grammar_auto_install(on));
             Ok(unit())
         },
-        "(set-grammar-auto-install/1)\ntoggle automatic grammar install on file open.\nwhen on (the default), opening a file whose extension matches an entry in grammars.toml shells out\nto `git` + `tree-sitter` once to install + cache the grammar. when off, the missing grammar surfaces\na one-time notify pointing at `(grammar-install '<name>)` instead.",
+        "(set-grammar-auto-install ON)\n\nToggles automatic grammar install on file open. When ON (the default),\nopening a file whose extension matches a grammars.toml entry shells out\nto `git` + `tree-sitter` once to install and cache the grammar. When off,\na missing grammar surfaces a one-time notify pointing at\n(grammar-install '<name>) instead.\n\nON — int: nonzero to enable, 0 to disable.\nSee also: (grammar-auto-install?), (grammar-install NAME).",
     );
 
     b.be_doc(
@@ -102,7 +108,7 @@ params:
             let on = with_editor_mut(|st| st.grammar_auto_install());
             Ok(Rc::new(on.into()))
         },
-        "(grammar-auto-install?/0)\ntrue when grammars are auto-installed on first file open (the default).",
+        "(grammar-auto-install?)\n\nReturns 1 if grammars are auto-installed on first file open (the\ndefault), else 0.\nSee also: (set-grammar-auto-install ON).",
     );
 }
 

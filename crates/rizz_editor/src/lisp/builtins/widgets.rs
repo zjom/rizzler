@@ -31,19 +31,25 @@ pub(super) fn register(b: &mut Builtins) {
             }
             Ok(Rc::new(Value::Map(m)))
         },
-        r#"(w-span/2)
-build a styled span — a map {"text": <str>, "style"?: <style>}. usable both as
-a top-level widget (the parser promotes it to a single line) and as one of the
-elements in (w-line [...]).
-style is one of:
-  - ()                              no styling
-  - 'face-name | "face-name"        a face name resolved against the theme
-  - {"fg": <color> "bg": <color>    inline style; keys: fg, bg, bold,
-     "bold": 1 ...}                 italic, underline, reverse, inherit
-example:
+        r#"(w-span TEXT [STYLE])
+
+Returns widget: a styled span, the map {"text": TEXT, "style"?: STYLE}.
+Usable both as a top-level widget (the parser promotes it to a single
+line) and as an element of (w-line [...]).
+
+TEXT  — str: the span's text.
+STYLE — style: optional. One of:
+          ()                       no styling
+          face                     a face name resolved against the theme
+          {"fg": color "bold": 1 ...}
+                                   inline style; keys fg, bg, bold,
+                                   italic, underline, reverse, inherit
+
+Example:
   (w-span "hello" 'header)
   (w-span "x" {"fg": 'red "bold": 1})
-  (w-span "plain" ())"#,
+  (w-span "plain" ())
+See also: (w-line SPANS), (face-define NAME STYLE)."#,
     );
 
     b.be_doc(
@@ -55,16 +61,21 @@ example:
             with_editor_mut(|st| st.set_frame_fn(opt));
             Ok(unit())
         },
-        r#"(set-frame/1)
-install the per-frame render callback. the fn takes no arguments and returns
-the widget tree to render. pass () to clear the installed callback and revert
-to the default empty layout.
-example:
+        r#"(set-frame FN)
+
+Installs the per-frame render callback. FN is called once per frame and
+must return the widget tree to draw.
+
+FN — fn: takes no arguments, returns a widget. Pass () to clear the
+     callback and revert to the default empty layout.
+
+Example:
   (fn _frame ()
-    (w-vstack [(w-min-cells 1 (w-editor-tree))
-               (w-cells 1 (w-minibuffer))]))
+    (w-vstack [(w-size 'min   1 (w-editor-tree))
+               (w-size 'cells 1 (w-minibuffer))]))
   (set-frame _frame)
-  (set-frame ())   ; clear"#,
+  (set-frame ())   ;; clear
+See also: (get-frame), (set-gutter FN WIDTH), (w-editor-tree)."#,
     );
 
     b.be_doc(
@@ -77,8 +88,11 @@ example:
                 None => Ok(unit()),
             }
         },
-        r#"(get-frame/0)
-returns the currently active per-frame render callback fn if set. returns () otherwise."#,
+        r#"(get-frame)
+
+Returns fn: the per-frame render callback installed by (set-frame), or
+() if none is set.
+See also: (set-frame FN)."#,
     );
 
     b.be_doc(
@@ -112,46 +126,58 @@ returns the currently active per-frame render callback fn if set. returns () oth
             }
             Ok(line)
         },
-        r#"(w-line/1)
-build a single-row line widget from a sequence of spans. accepts an optional
-2nd arg — the alignment ident 'left | 'center | 'right (defaults to 'left).
-spans is an array of span maps — typically results of (w-span ...).
-example:
+        r#"(w-line SPANS [ALIGN])
+
+Returns widget: a single-row line built from a sequence of spans.
+
+SPANS — array of widget: span maps, typically results of (w-span ...).
+ALIGN — ident: optional. 'left | 'center | 'right (default 'left).
+
+Example:
   (w-line [(w-span "left" ())
            (w-span " · " "vague.muted")
            (w-span "right" 'header)])
-  (w-line [(w-span "10:42" 'header)] 'right)"#,
+  (w-line [(w-span "10:42" 'header)] 'right)
+See also: (w-span TEXT [STYLE]), (w-vstack CHILDREN)."#,
     );
 
     b.be_doc(
         "w-vstack",
         1,
         |args, _| Ok(widget_stack("vertical", &args[0])),
-        r#"(w-vstack/1)
-build a vertical stack widget. children are laid out top-to-bottom and honour
-their outer constraint (see (w-size ...)); unconstrained children default
-to Min(1).
-children is an array of widgets.
-example:
+        r#"(w-vstack CHILDREN)
+
+Returns widget: a vertical stack. Children are laid out top-to-bottom
+and honor their outer constraint (see (w-size ...)); unconstrained
+children default to Min(1).
+
+CHILDREN — array of widget.
+
+Example:
   (w-vstack
     [(w-size 'min   1 (w-editor-tree))
      (w-size 'cells 1 (_status-line))
-     (w-size 'cells 1 (w-minibuffer))])"#,
+     (w-size 'cells 1 (w-minibuffer))])
+See also: (w-hstack CHILDREN), (w-size KIND N CHILD)."#,
     );
 
     b.be_doc(
         "w-hstack",
         1,
         |args, _| Ok(widget_stack("horizontal", &args[0])),
-        r#"(w-hstack/1)
-build a horizontal stack widget. children are laid out left-to-right and honour
-their outer constraint (see (w-size ...)); unconstrained children default
-to Min(1).
-children is an array of widgets.
-example:
+        r#"(w-hstack CHILDREN)
+
+Returns widget: a horizontal stack. Children are laid out left-to-right
+and honor their outer constraint (see (w-size ...)); unconstrained
+children default to Min(1).
+
+CHILDREN — array of widget.
+
+Example:
   (w-hstack
     [(w-size 'min  1 (w-line [(w-span "left" ())]))
-     (w-size 'fill 1 (w-line [(w-span "right" ())] 'right))])"#,
+     (w-size 'fill 1 (w-line [(w-span "right" ())] 'right))])
+See also: (w-vstack CHILDREN), (w-size KIND N CHILD)."#,
     );
 
     b.be_doc(
@@ -195,20 +221,31 @@ example:
                 }),
             }
         },
-        r#"(w-size/3 | /4)
-wrap child with a ratatui Constraint. kind picks the constraint flavour:
-  'cells    — fixed length of N cells (Constraint::Length)
-  'min      — minimum length of N cells, grows to fill leftover (Constraint::Min)
-  'fill     — weight N share of the remaining space (Constraint::Fill)
-  'frac     — exactly N/M of the parent stack's space (Constraint::Ratio).
-              takes one extra arg: (w-size 'frac N M child)
-constraints only matter inside (w-vstack ...) / (w-hstack ...); outside a
-stack they're ignored. N is clamped to [0, u16::MAX]; M to [1, u16::MAX].
-example:
+        r#"(w-size KIND N CHILD)
+(w-size 'frac N M CHILD)   ;; 'frac takes a denominator
+
+Returns widget: CHILD wrapped with a layout constraint. Constraints only
+matter inside (w-vstack ...) / (w-hstack ...); outside a stack they are
+ignored.
+
+KIND  — ident: the constraint flavour:
+          'cells — fixed length of N cells
+          'min   — at least N cells, grows to fill leftover space
+          'fill  — weight-N share of the remaining space
+          'frac  — exactly N/M of the parent stack's space; takes the
+                   extra denominator arg
+N     — int: clamped to [0, 65535].
+M     — int: the 'frac denominator, clamped to [1, 65535].
+CHILD — widget: the wrapped widget.
+
+Errors when KIND is none of 'cells 'min 'fill 'frac.
+
+Example:
   (w-vstack [(w-size 'cells 1 (_status-line))
              (w-size 'min   1 (w-editor-tree))])
   (w-hstack [(w-size 'frac 1 3 left)
-             (w-size 'frac 2 3 right)])"#,
+             (w-size 'frac 2 3 right)])
+See also: (w-vstack CHILDREN), (w-hstack CHILDREN)."#,
     );
 
     b.be_doc(
@@ -237,21 +274,27 @@ example:
             }
             Ok(Rc::new(Value::Map(m)))
         },
-        r#"(w-block/2)
-wrap child with a bordered/titled box. props comes first, child second —
-the options-then-content shape matches (w-overlay PLACEMENT CHILD).
-props is a map (or ()) with optional keys:
-  "border":      "none" | "plain" | "rounded" | "double" | "thick"  (default "plain")
-  "title":       <str> shown in the top border
-  "face":        face name (str|ident) for the content area
-  "border-face": face name for the border itself
-  "title-face":  face name for the title text
-unrecognized keys are silently dropped. omit a key to use its default.
-example:
+        r#"(w-block PROPS CHILD)
+
+Returns widget: CHILD wrapped in a bordered / titled box. PROPS comes
+first, CHILD second — the options-then-content shape matches
+(w-overlay PLACEMENT CHILD).
+
+PROPS — map | (): optional keys (unrecognized keys are dropped):
+          "border":      "none" | "plain" | "rounded" | "double" |
+                         "thick" (default "plain")
+          "title":       str shown in the top border
+          "face":        face for the content area
+          "border-face": face for the border itself
+          "title-face":  face for the title text
+CHILD — widget: the boxed widget.
+
+Example:
   (w-block {"border":      "rounded"
             "title":       " Status "
             "border-face": "vague.muted"}
-           (w-line [(w-span "hello" ())]))"#,
+           (w-line [(w-span "hello" ())]))
+See also: (w-overlay PLACEMENT CHILD), (w-popup-self)."#,
     );
 
     b.be_doc(
@@ -266,44 +309,36 @@ example:
             m.insert(strkey("child"), child);
             Ok(Rc::new(Value::Map(m)))
         },
-        r#"(w-overlay/2)
-paint child on top of the rest of the frame at placement. an overlay has
-no backing buffer and never receives keys — it is pure decoration. use it
-for floating status indicators, toast notifications, hover hints, or any
+        r#"(w-overlay PLACEMENT CHILD)
+
+Returns widget: CHILD painted on top of the rest of the frame at
+PLACEMENT. An overlay has no backing buffer and never receives keys — it
+is pure decoration: floating status indicators, toasts, hover hints, any
 chrome that should sit above the editor without stealing focus.
 
-placement is the same shape as the "placement" key in (popup-show ...):
-  'centered | 'full
-  {"kind": "centered" "w": <dim> "h": <dim>}
-  {"kind": "at"       "x": N "y": N "w": <dim> "h": <dim>}
-  {"kind": "side"     "side": 'top|'bottom|'left|'right "size": <dim>}
-  {"kind": "full"}
-<dim> is an int (cells), a float (fraction of parent), or 'fit (sized to
-the child's natural area — for overlay this falls back to the available
-area since there's no backing buffer to measure).
+PLACEMENT — placement: from a (placement-*) constructor, the same shape
+            as the "placement" key in (popup-show ...). Resolved against
+            the rect the overlay sits inside; when the overlay is a child
+            of a (w-vstack)/(w-hstack) it floats over the *whole* stack
+            (the layout pretends it isn't there). Nest it deeper to scope
+            it.
+CHILD     — widget: any widget — (w-block), (w-vstack), (w-line),
+            (w-buffer-view BUFNO), … are all available.
 
-child is any widget — the entire vocabulary of (w-block), (w-vstack),
-(w-line), (w-buffer-view BUFID), … is available.
+Overlays are transparent by default: only the cells CHILD actually draws
+are touched, and what was painted underneath stays visible everywhere
+else. Wrap CHILD in (w-block {"face": "popup.default"} …) for an opaque
+popup-style backdrop.
 
-placement is resolved against the rect the overlay sits inside. when
-the overlay is a child of (w-vstack) or (w-hstack), it floats over the
-*whole* stack — the layout pretends it isn't there, so the flowing
-siblings still share the entire area, and the overlay's placement
-resolves against that same full area. nest it deeper to scope it.
-
-overlays are transparent by default: only the cells the child actually
-draws are touched, and what was painted underneath stays visible
-everywhere else. wrap the child in (w-block {"face": "popup.default"}
-…) to get an opaque backdrop popup-style.
-
-example:
+Example:
   (w-vstack
     [(w-size 'min 1 (w-editor-tree))
      (w-size 'cells 1 (_status-line))
      ;; floats over the whole vstack, doesn't steal a row from anyone,
      ;; doesn't erase what's behind it.
      (w-overlay (placement-anchored 'top 1)
-                (w-line [(w-span " saving… " 'header)] 'right))])"#,
+                (w-line [(w-span " saving… " 'header)] 'right))])
+See also: (popup-show NAME WIDGET), (placement-anchored SIDE SIZE)."#,
     );
 
     b.be_doc(
@@ -314,13 +349,16 @@ example:
             m.insert(strkey("type"), Rc::new(Value::Str("editor-tree".into())));
             Ok(Rc::new(Value::Map(m)))
         },
-        r#"(w-editor-tree/0)
-the leaf widget that the renderer expands into the current window tree
-(with all open splits and their buffers). takes no arguments — the gutter
-is configured separately via (set-gutter fn width), since it's a per-
-buffer concern, not a per-layout one.
-example:
-  (w-editor-tree)"#,
+        r#"(w-editor-tree)
+
+Returns widget: the leaf the renderer expands into the current window
+tree — all open splits and their buffers. The gutter is configured
+separately via (set-gutter FN WIDTH), since it's a per-buffer concern,
+not a per-layout one.
+
+Example:
+  (w-editor-tree)
+See also: (set-frame FN), (set-gutter FN WIDTH), (w-minibuffer)."#,
     );
 
     b.be_doc(
@@ -333,22 +371,28 @@ example:
             with_editor_mut(|st| st.set_gutter(fn_opt, width));
             Ok(unit())
         },
-        r#"(set-gutter/2)
-install the per-row gutter callback used by every file buffer. fn is called
-once per visible row with either the file row number (int) or () for rows
-past EOF; it must return a widget — typically (w-text ...). width controls
-how many columns are reserved on the left of the buffer view:
-  'fit | ()   — size to the widest row the fn returns this frame (default)
-  <int>       — reserve exactly N columns (0 disables)
-pass () for fn to disable the gutter entirely.
-example:
+        r#"(set-gutter FN WIDTH)
+
+Installs the per-row gutter callback used by every file buffer.
+
+FN    — fn: called once per visible row with the file row number (int)
+        or () for rows past EOF; must return a widget, typically a
+        (w-line ...). Pass () to disable the gutter entirely.
+WIDTH — int | ident: columns reserved on the left of the buffer view:
+          'fit | ()  — size to the widest row FN returns this frame
+                       (default)
+          int        — reserve exactly that many columns (0 disables)
+
+Example:
   (fn _gutter (n)
     (if (= n ())
-        (w-text "     " "vague.gutter")
-        (w-text (str-join [" " (to-str n) " "] "") "vague.gutter")))
-  (set-gutter _gutter 'fit)   ; shrinks/grows with content
-  (set-gutter _gutter 5)      ; fixed 5-column gutter
-  (set-gutter () 0)           ; disable"#,
+        (w-line [(w-span "     " "vague.gutter")])
+        (w-line [(w-span (str-join [" " (to-str n) " "] "")
+                         "vague.gutter")])))
+  (set-gutter _gutter 'fit)   ;; shrinks/grows with content
+  (set-gutter _gutter 5)      ;; fixed 5-column gutter
+  (set-gutter () 0)           ;; disable
+See also: (set-frame FN), (w-editor-tree)."#,
     );
 
     b.be_doc(
@@ -359,13 +403,16 @@ example:
             m.insert(strkey("type"), Rc::new(Value::Str("minibuffer".into())));
             Ok(Rc::new(Value::Map(m)))
         },
-        r#"(w-minibuffer/0)
-the single-row minibuffer leaf widget. put it somewhere in your frame tree
-(typically the bottom row of an outer (w-vstack ...)) so command-mode input
-has a place to render.
-example:
-  (w-vstack [(w-min-cells 1 (w-editor-tree))
-             (w-cells 1 (w-minibuffer))])"#,
+        r#"(w-minibuffer)
+
+Returns widget: the single-row minibuffer leaf. Place it in your frame
+tree — typically the bottom row of an outer (w-vstack ...) — so command-
+mode input has somewhere to render.
+
+Example:
+  (w-vstack [(w-size 'min   1 (w-editor-tree))
+             (w-size 'cells 1 (w-minibuffer))])
+See also: (w-editor-tree), (minibuffer-bufno)."#,
     );
 
     b.be_doc(
@@ -376,15 +423,18 @@ example:
             m.insert(strkey("type"), Rc::new(Value::Str("empty".into())));
             Ok(Rc::new(Value::Map(m)))
         },
-        r#"(w-empty/0)
-a widget that draws nothing and takes zero layout cells. use it as the
-"off" branch of a conditional in a stack — the slot vanishes instead of
-leaving an empty row behind.
-example:
+        r#"(w-empty)
+
+Returns widget: a widget that draws nothing and takes zero layout cells.
+Use it as the "off" branch of a conditional in a stack — the slot
+vanishes instead of leaving an empty row behind.
+
+Example:
   (w-vstack
     [(w-size 'min 1 (w-editor-tree))
      (w-size 'cells 1 (w-minibuffer))
-     (if show-help (_help-banner) (w-empty))])   ; row disappears if off"#,
+     (if show-help (_help-banner) (w-empty))])  ;; row gone when off
+See also: (w-vstack CHILDREN)."#,
     );
 
     b.be_doc(
@@ -397,20 +447,22 @@ example:
             m.insert(strkey("bufno"), Rc::new(Value::Int(bufno)));
             Ok(Rc::new(Value::Map(m)))
         },
-        r#"(w-buffer-view/1)
-renders the buffer identified by BUFID into its allocated rect. bufid is
-the opaque integer returned by (buf-no), (popup-bufno NAME), or
-(minibuffer-bufno).
+        r#"(w-buffer-view BUFNO)
 
-for the popup-specific "render the popup's own backing buffer" case,
-prefer (w-popup-self) — it's an explicit name for that pattern and
-doesn't need a bufid argument.
+Returns widget: a view that renders buffer BUFNO into its allocated rect.
 
-example:
-  (w-buffer-view (buf-no))                  ; the focused buffer
-  (w-buffer-view (popup-bufno 'messages))   ; a named popup's buf
+BUFNO — bufno: from (buf-no), (popup-bufno NAME), or (minibuffer-bufno).
+
+For the popup-specific "render the popup's own backing buffer" case,
+prefer (w-popup-self) — it names that pattern explicitly and needs no
+BUFNO argument.
+
+Example:
+  (w-buffer-view (buf-no))                  ;; the focused buffer
+  (w-buffer-view (popup-bufno 'messages))   ;; a named popup's buf
   (w-block {"face": "popup.default"}
-           (w-buffer-view (minibuffer-bufno)))"#,
+           (w-buffer-view (minibuffer-bufno)))
+See also: (w-popup-self), (buf-no), (popup-bufno NAME)."#,
     );
 
     b.be_doc(
@@ -421,21 +473,22 @@ example:
             m.insert(strkey("type"), Rc::new(Value::Str("buffer-view".into())));
             Ok(Rc::new(Value::Map(m)))
         },
-        r#"(w-popup-self/0)
-inside a popup widget tree (the one passed to popup-show), renders the
-popup's own backing buffer — the buf that holds the popup's text content.
-no bufid argument: the renderer fills it in from the enclosing popup.
+        r#"(w-popup-self)
 
-useful precisely because the bufid isn't known until popup-show creates
-the panel, so the widget tree can't name it explicitly.
+Returns widget: inside a popup widget tree (the one passed to
+(popup-show)), a view of the popup's own backing buffer — the buf
+holding its text content. No BUFNO argument: the renderer fills it in
+from the enclosing popup, which is exactly why it's needed — the bufno
+isn't known until (popup-show) creates the panel.
 
-a no-op outside a popup — there's no enclosing buffer for a (w-popup-self)
-in the main frame fn. use (w-buffer-view BUFID) there.
+A no-op outside a popup; there's no enclosing buffer in the main frame
+fn, so use (w-buffer-view BUFNO) there.
 
-example:
+Example:
   (popup-show 'messages
     (w-block {"face": "popup.default"} (w-popup-self))
-    {"text": "hi"})"#,
+    {"text": "hi"})
+See also: (popup-show NAME WIDGET), (w-buffer-view BUFNO)."#,
     );
 
     b.be_doc(
@@ -448,14 +501,19 @@ example:
             m.insert(strkey("h"), args[1].clone());
             Ok(Rc::new(Value::Map(m)))
         },
-        r#"(placement-centered/2)
-returns a placement map suitable for (popup-show)'s "placement" option or
-(w-overlay). w / h are each an int (cells), a float in [0.0, 1.0]
-(fraction of parent), or 'fit (sized to content). defaults match the
-parser's defaults of 0.6 frac on both axes.
-example:
+        r#"(placement-centered W H)
+
+Returns placement: a centered placement, for (popup-show)'s "placement"
+option or (w-overlay PLACEMENT CHILD).
+
+W, H — each a dim: an int (cells), a float in [0.0, 1.0] (fraction of
+       parent), or 'fit (sized to content).
+
+Example:
   (placement-centered 0.6 0.6)
-  (placement-centered 40 'fit)"#,
+  (placement-centered 40 'fit)
+See also: (placement-anchored SIDE SIZE), (placement-at X Y W H),
+(placement-at-cursor W H)."#,
     );
 
     b.be_doc(
@@ -468,13 +526,19 @@ example:
             m.insert(strkey("size"), args[1].clone());
             Ok(Rc::new(Value::Map(m)))
         },
-        r#"(placement-anchored/2)
-returns a placement map that pins the overlay to one side of the parent
-rect. side is 'top | 'bottom | 'left | 'right. size is an int (cells),
-a float (fraction), or 'fit (size to content).
-example:
+        r#"(placement-anchored SIDE SIZE)
+
+Returns placement: a placement that pins the overlay to one side of the
+parent rect.
+
+SIDE — ident: 'top | 'bottom | 'left | 'right.
+SIZE — dim: an int (cells), a float (fraction), or 'fit (size to
+       content).
+
+Example:
   (placement-anchored 'bottom 5)
-  (placement-anchored 'top 'fit)"#,
+  (placement-anchored 'top 'fit)
+See also: (placement-centered W H), (placement-at X Y W H)."#,
     );
 
     b.be_doc(
@@ -489,13 +553,18 @@ example:
             m.insert(strkey("h"), args[3].clone());
             Ok(Rc::new(Value::Map(m)))
         },
-        r#"(placement-at/4)
-returns a placement map anchored at (x, y) in the parent rect with the
-given width and height. x and y are int cell offsets from the parent's
-origin. w / h follow the same shape as in (placement-centered).
-example:
+        r#"(placement-at X Y W H)
+
+Returns placement: a placement anchored at (X, Y) in the parent rect with
+the given width and height.
+
+X, Y — int: cell offsets from the parent's origin.
+W, H — dim: same shape as in (placement-centered) — int, float, or 'fit.
+
+Example:
   (placement-at 0 0 40 10)
-  (placement-at 10 5 'fit 'fit)"#,
+  (placement-at 10 5 'fit 'fit)
+See also: (placement-centered W H), (placement-at-cursor W H)."#,
     );
 
     b.be_doc(
@@ -508,18 +577,23 @@ example:
             m.insert(strkey("h"), args[1].clone());
             Ok(Rc::new(Value::Map(m)))
         },
-        r#"(placement-at-cursor/2)
-returns a placement map anchored next to the focused editor cursor. the
-renderer drops the popup one row below the cursor when there's room and
-above it otherwise, keeping it inside the focused window leaf — so the
-placement stays correct under splits and custom frame layouts.
-w / h follow the same shape as in (placement-centered):
-  - int        absolute cell count
-  - float      fraction of the leaf's width / height (0.0..=1.0)
-  - 'fit       hug content (the popup's text bounds)
-example:
-  (placement-at-cursor 'fit 8)         ; hug width, 8 rows tall
-  (placement-at-cursor 'fit 'fit)      ; hug both axes"#,
+        r#"(placement-at-cursor W H)
+
+Returns placement: a placement anchored next to the focused editor
+cursor. The renderer drops the popup one row below the cursor when
+there's room and above it otherwise, keeping it inside the focused window
+leaf — so the placement stays correct under splits and custom frame
+layouts.
+
+W, H — dim: same shape as in (placement-centered):
+         int    — absolute cell count
+         float  — fraction of the leaf's width / height (0.0..=1.0)
+         'fit   — hug content (the popup's text bounds)
+
+Example:
+  (placement-at-cursor 'fit 8)      ;; hug width, 8 rows tall
+  (placement-at-cursor 'fit 'fit)   ;; hug both axes
+See also: (placement-centered W H), (cursor-screen-row)."#,
     );
 }
 

@@ -27,35 +27,39 @@ pub(super) fn register(b: &mut Builtins) {
             let id = with_editor_mut(|st| st.show_popup(name, spec));
             Ok(Rc::new(Value::Int(buf_id_to_int(id))))
         },
-        r#"(popup-show/2 | /3)
-open the overlay panel named name, or update it in place if a popup with
-that name is already on the stack. either way, raises the popup to the
-top. returns the backing buffer's opaque id.
+        r#"(popup-show NAME WIDGET [OPTS])
 
-name is an ident (or str). use the same name across calls to update the
-popup's widget / placement / text without stacking; pick distinct names
-when you want multiple popups visible at once.
+Opens the overlay panel named NAME, or updates it in place if a popup
+with that name is already on the stack. Either way, raises it to the
+top.
 
-widget is the widget tree drawn inside the popup's outer rect — usually
-something like (w-block PROPS (w-popup-self)) for a buf-backed popup.
+NAME   — ident | str: reuse a name to update a popup's widget /
+         placement / text without stacking; pick distinct names when you
+         want several popups visible at once.
+WIDGET — widget: the tree drawn inside the popup's outer rect, usually
+         (w-block PROPS (w-popup-self)) for a buf-backed popup.
+OPTS   — map: optional. Recognized keys, all optional:
+           "text":         str — seed text for the backing buffer
+                           (overwrites existing)
+           "modes":        array of layer — keymap layers, specific last
+           "mode":         layer — shorthand for "modes": [m]
+           "buffer-mode":  mode — editing mode for the buffer
+           "placement":    placement — see (placement-centered ...)
+           "show-cursor":  truthy to draw the cursor over the buf
+           "wrap-mode":    'none | 'char | 'word
+           "wrap-column":  int — column to wrap at
+           "break-indent": truthy to honor leading indentation on wrap
 
-options is an optional map. recognized keys (all optional):
-  "text":        seed text for the backing buffer (overwrites existing)
-  "modes":       array of keymap layer names, most-specific last
-  "mode":        single keymap layer (shorthand for "modes": [m])
-  "buffer-mode": editing mode for the buffer ('normal | 'insert | …)
-  "placement":   placement value (see (placement-centered ...))
-  "show-cursor": truthy to draw the cursor over the popup's buf
-  "wrap-mode":   'none | 'char | 'word
-  "wrap-column": int, column to wrap at
-  "break-indent": truthy to honour leading indentation on wrap
+Returns bufno: the backing buffer's opaque id.
 
-example:
+Example:
   (popup-show 'help
     (w-block {"border": "rounded" "title": " help "} (w-popup-self))
     {"text": "press q to dismiss"
      "modes": ['popup]
-     "placement": (placement-centered 0.4 0.4)})"#,
+     "placement": (placement-centered 0.4 0.4)})
+
+See also: (popup-hide NAME), (popup-close), (popup-visible? NAME)."#,
     );
 
     b.be_doc(
@@ -66,12 +70,18 @@ example:
             let closed = with_editor_mut(|st| st.hide_popup(&name));
             Ok(Rc::new(Value::Int(closed as i64)))
         },
-        r#"(popup-hide/1)
-close the named overlay panel and free its backing buffer. returns 1 if
-the popup was visible, 0 otherwise. for the "close whatever's on top"
-case, use (popup-close).
-example:
-  (popup-hide 'help)"#,
+        r#"(popup-hide NAME)
+
+Closes the named overlay panel and frees its backing buffer. For the
+"close whatever's on top" case, use (popup-close) instead.
+
+NAME — ident | str: the popup to close.
+
+Returns 1 if the popup was visible, else 0.
+
+Example:
+  (popup-hide 'help)
+See also: (popup-show NAME WIDGET), (popup-close)."#,
     );
 
     b.be_doc(
@@ -81,12 +91,17 @@ example:
             let closed = with_editor_mut(|st| st.close_popup());
             Ok(Rc::new(Value::Int(closed as i64)))
         },
-        r#"(popup-close/0)
-close the topmost overlay panel (skipping the minibuffer if it sits on
-top). useful for generic dismiss bindings like q/<esc> in the 'popup
+        r#"(popup-close)
+
+Closes the topmost overlay panel (skipping the minibuffer if it sits on
+top). Useful for generic dismiss bindings like q / <esc> in the 'popup
 keymap layer that shouldn't know which popup they're closing.
-example:
-  (keymap-set 'popup "q" '(popup-close))"#,
+
+Returns 1 if a popup was closed, else 0.
+
+Example:
+  (keymap-set 'popup "q" '(popup-close))
+See also: (popup-hide NAME), (popup?)."#,
     );
 
     b.be_doc(
@@ -97,11 +112,15 @@ example:
             let v = with_editor_mut(|st| st.popup_buf_by_name(&name).is_some());
             Ok(Rc::new(Value::Int(v as i64)))
         },
-        r#"(popup-visible?/1)
-returns 1 if a popup with that name is currently on the stack, 0
-otherwise.
-example:
-  (if (popup-visible? 'help) (popup-hide 'help) (popup-show 'help ...))"#,
+        r#"(popup-visible? NAME)
+
+Returns 1 if a popup named NAME is currently on the stack, else 0.
+
+NAME — ident | str: the popup to test.
+
+Example:
+  (if (popup-visible? 'help) (popup-hide 'help) (popup-show 'help ...))
+See also: (popup?), (popup-show NAME WIDGET)."#,
     );
 
     b.be_doc(
@@ -116,12 +135,17 @@ example:
             });
             Ok(Rc::new(v))
         },
-        r#"(popup-bufno/1)
-returns the backing buffer's opaque id for the named popup, or () if no
-popup with that name is visible. used to feed (w-buffer-view BUFID) or
-(buf-text-set BUFID ...) for cross-popup queries.
-example:
-  (buf-text-set (popup-bufno 'messages) new-text)"#,
+        r#"(popup-bufno NAME)
+
+Returns bufno: the backing buffer's opaque id for the named popup, or ()
+if no popup with that name is visible. Feed it to (w-buffer-view BUFNO)
+or (buf-text-set BUFNO ...) for cross-popup queries.
+
+NAME — ident | str: the popup to look up.
+
+Example:
+  (buf-text-set (popup-bufno 'messages) new-text)
+See also: (buf-no), (minibuffer-bufno)."#,
     );
 
     b.be_doc(
@@ -131,11 +155,14 @@ example:
             let id = with_editor_mut(|st| st.minibuffer_id());
             Ok(Rc::new(Value::Int(buf_id_to_int(id))))
         },
-        r#"(minibuffer-bufno/0)
-returns the minibuffer's stable opaque buffer id. unlike popup bufnos
-this never changes — there's exactly one minibuffer per editor.
-example:
-  (w-buffer-view (minibuffer-bufno))"#,
+        r#"(minibuffer-bufno)
+
+Returns bufno: the minibuffer's stable opaque buffer id. Unlike popup
+bufnos this never changes — there's exactly one minibuffer per editor.
+
+Example:
+  (w-buffer-view (minibuffer-bufno))
+See also: (popup-bufno NAME), (buf-no)."#,
     );
 
     b.be_doc(
@@ -146,12 +173,15 @@ example:
                 with_editor_mut(|st| st.top_popup_mode().map(Value::Str).unwrap_or(Value::Unit));
             Ok(Rc::new(v))
         },
-        r#"(popup-mode/0)
-returns the topmost keymap layer of the topmost overlay panel, or () if
-no popup is visible. useful for "am I inside a popup of kind X?" checks
-in shared helpers like (notify).
-example:
-  (if (= (popup-mode) "popup") ... ...)"#,
+        r#"(popup-mode)
+
+Returns str: the topmost keymap layer of the topmost overlay panel, or
+() if no popup is visible. Useful for "am I inside a popup of kind X?"
+checks in shared helpers like (notify).
+
+Example:
+  (if (= (popup-mode) "popup") ... ...)
+See also: (popup?), (popup-visible? NAME)."#,
     );
 
     b.be_doc(
@@ -161,11 +191,14 @@ example:
             let v = with_editor_mut(|st| st.has_popup());
             Ok(Rc::new(Value::Int(v as i64)))
         },
-        r#"(popup?/0)
-returns 1 if any overlay panel is on the stack, 0 otherwise. coarser than
+        r#"(popup?)
+
+Returns 1 if any overlay panel is on the stack, else 0. Coarser than
 (popup-visible? NAME) — useful for "is the editor currently obstructed"
 checks that don't care which popup is up.
-example:
-  (if (popup?) (popup-close) (set-mode 'command))"#,
+
+Example:
+  (if (popup?) (popup-close) (set-mode 'command))
+See also: (popup-visible? NAME), (popup-close)."#,
     );
 }

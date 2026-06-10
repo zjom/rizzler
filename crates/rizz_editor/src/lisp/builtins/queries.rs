@@ -9,74 +9,125 @@ use super::super::helpers::{Builtins, as_int, as_usize, buf_id_from_int, buf_id_
 use super::super::with_editor_mut;
 
 pub(super) fn register(b: &mut Builtins) {
-    b.be("buf-text-set", 2, |args, _| {
-        let raw = as_int(&args[0], "buf-text-set")?;
-        let id = buf_id_from_int(raw);
-        let text = args[1].display();
-        let exists = with_editor_mut(|st| st.buf_exists(id));
-        if !exists {
-            return Err(RuntimeError::Other(anyhow!(
-                "bad input. no buffer with id {raw}"
-            )));
-        }
-        with_editor_mut(|st| st.set_buffer_contents(id, &text));
-        Ok(unit())
-    });
+    b.be_doc(
+        "buf-text-set",
+        2,
+        |args, _| {
+            let raw = as_int(&args[0], "buf-text-set")?;
+            let id = buf_id_from_int(raw);
+            let text = args[1].display();
+            let exists = with_editor_mut(|st| st.buf_exists(id));
+            if !exists {
+                return Err(RuntimeError::Other(anyhow!(
+                    "bad input. no buffer with id {raw}"
+                )));
+            }
+            with_editor_mut(|st| st.set_buffer_contents(id, &text));
+            Ok(unit())
+        },
+        "(buf-text-set BUFNO TEXT)\n\nReplaces the entire contents of buffer BUFNO with TEXT. Used to drive\npopup buffers from lisp (e.g. seeding a `:messages` popup).\n\nBUFNO — bufno: target buffer, from (buf-no), (popup-bufno NAME), etc.\nTEXT  — str: the new contents.\n\nErrors when no live buffer has id BUFNO.\nSee also: (buf-text), (popup-bufno NAME).",
+    );
 
-    b.be("buf-text", 0, |_, _| {
-        let s = with_editor_mut(|st| st.focused_buf().text());
-        Ok(Rc::new(s.into()))
-    });
+    b.be_doc(
+        "buf-text",
+        0,
+        |_, _| {
+            let s = with_editor_mut(|st| st.focused_buf().text());
+            Ok(Rc::new(s.into()))
+        },
+        "(buf-text)\n\nReturns str: the full text of the focused buffer.\nSee also: (buf-text-set BUFNO TEXT), (selected-text), (line-at N).",
+    );
 
-    b.be("buf-nlines", 0, |_, _| {
-        let n = with_editor_mut(|st| st.focused_buf().len_lines() as i64);
-        Ok(Rc::new(n.into()))
-    });
+    b.be_doc(
+        "buf-nlines",
+        0,
+        |_, _| {
+            let n = with_editor_mut(|st| st.focused_buf().len_lines() as i64);
+            Ok(Rc::new(n.into()))
+        },
+        "(buf-nlines)\n\nReturns int: the number of lines in the focused buffer.\nSee also: (line-at N), (cursor-line).",
+    );
 
-    b.be("buf-no", 0, |_, _| {
-        let id = with_editor_mut(|st| st.focused_buf_id());
-        Ok(Rc::new(Value::Int(buf_id_to_int(id))))
-    });
+    b.be_doc(
+        "buf-no",
+        0,
+        |_, _| {
+            let id = with_editor_mut(|st| st.focused_buf_id());
+            Ok(Rc::new(Value::Int(buf_id_to_int(id))))
+        },
+        "(buf-no)\n\nReturns bufno: the opaque id of the focused buffer, for feeding\n(w-buffer-view BUFNO) or (buf-text-set BUFNO ...).\nSee also: (buf-index), (popup-bufno NAME), (minibuffer-bufno).",
+    );
 
-    b.be("buf-index", 0, |_, _| {
-        let v = with_editor_mut(|st| {
-            let id = st.focused_buf_id();
-            st.buf_display_index(id)
-                .map(|n| Value::Int(n as i64))
-                .unwrap_or(Value::Unit)
-        });
-        Ok(Rc::new(v))
-    });
+    b.be_doc(
+        "buf-index",
+        0,
+        |_, _| {
+            let v = with_editor_mut(|st| {
+                let id = st.focused_buf_id();
+                st.buf_display_index(id)
+                    .map(|n| Value::Int(n as i64))
+                    .unwrap_or(Value::Unit)
+            });
+            Ok(Rc::new(v))
+        },
+        "(buf-index)\n\nReturns int: the focused buffer's 0-based position in the file buffer\nlist (its order in the bufferline), or () if it has no slot.\nSee also: (buf-no).",
+    );
 
-    b.be("buf-path", 0, |_, _| {
-        let v: Value = with_editor_mut(|st| st.focused_buf().fs_path())
-            .map(|p| p.to_string_lossy().as_ref().into())
-            .map(|s: Rc<str>| Value::Str(s))
-            .unwrap_or(Value::Unit);
-        Ok(Rc::new(v))
-    });
+    b.be_doc(
+        "buf-path",
+        0,
+        |_, _| {
+            let v: Value = with_editor_mut(|st| st.focused_buf().fs_path())
+                .map(|p| p.to_string_lossy().as_ref().into())
+                .map(|s: Rc<str>| Value::Str(s))
+                .unwrap_or(Value::Unit);
+            Ok(Rc::new(v))
+        },
+        "(buf-path)\n\nReturns str: the filesystem path backing the focused buffer, or () for\nan unsaved scratch buffer. Aliased as (%).\nSee also: (workdir), (edit PATH).",
+    );
     b.alias("%", "buf-path");
 
-    b.be("selected-text", 0, |_, _| {
-        let s = with_editor_mut(|st| st.focused_buf().selected_text());
-        Ok(Rc::new(s.into()))
-    });
+    b.be_doc(
+        "selected-text",
+        0,
+        |_, _| {
+            let s = with_editor_mut(|st| st.focused_buf().selected_text());
+            Ok(Rc::new(s.into()))
+        },
+        "(selected-text)\n\nReturns str: the text covered by the active visual selection, or () if\nnothing is selected.\nSee also: (buf-text).",
+    );
 
-    b.be("cursor-line", 0, |_, _| {
-        let n = with_editor_mut(|st| st.focused_buf().abs_row() as i64);
-        Ok(Rc::new(n.into()))
-    });
+    b.be_doc(
+        "cursor-line",
+        0,
+        |_, _| {
+            let n = with_editor_mut(|st| st.focused_buf().abs_row() as i64);
+            Ok(Rc::new(n.into()))
+        },
+        "(cursor-line)\n\nReturns int: the cursor's row in the focused buffer, absolute and\n0-indexed (counts from the top of the buffer, not the viewport).\nSee also: (cursor-col), (cursor-screen-row).",
+    );
 
-    b.be("line-at", 1, |args, _| {
-        let idx = as_usize(&args[0], "line-at")?;
-        let s = with_editor_mut(|st| st.focused_buf().lines_at(idx).next().map(|s| s.to_string()));
-        Ok(Rc::new(s.into()))
-    });
+    b.be_doc(
+        "line-at",
+        1,
+        |args, _| {
+            let idx = as_usize(&args[0], "line-at")?;
+            let s =
+                with_editor_mut(|st| st.focused_buf().lines_at(idx).next().map(|s| s.to_string()));
+            Ok(Rc::new(s.into()))
+        },
+        "(line-at N)\n\nReturns str: the text of line N (0-indexed) in the focused buffer, or ()\nif N is past the end.\n\nN — int: line number.\nSee also: (buf-nlines), (cursor-line).",
+    );
 
-    b.be("cursor-col", 0, |_, _| {
-        let n = with_editor_mut(|st| st.focused_buf().abs_col() as i64);
-        Ok(Rc::new(n.into()))
-    });
+    b.be_doc(
+        "cursor-col",
+        0,
+        |_, _| {
+            let n = with_editor_mut(|st| st.focused_buf().abs_col() as i64);
+            Ok(Rc::new(n.into()))
+        },
+        "(cursor-col)\n\nReturns int: the cursor's column in the focused buffer, absolute and\n0-indexed.\nSee also: (cursor-line), (cursor-screen-col).",
+    );
 
     b.be_doc(
         "cursor-screen-row",
@@ -85,7 +136,7 @@ pub(super) fn register(b: &mut Builtins) {
             let n = with_editor_mut(|st| st.focused_buf().cursor_pos().row as i64);
             Ok(Rc::new(n.into()))
         },
-        "(cursor-screen-row/0)\nthe focused buffer's cursor row within its viewport (0-indexed from\nthe top of the visible region). pair with (viewport-rows) to decide\nwhether a popup fits below the cursor.",
+        "(cursor-screen-row)\n\nReturns int: the cursor's row within its viewport, 0-indexed from the\ntop of the visible region. Pair with (viewport-rows) to decide whether a\npopup fits below the cursor.\nSee also: (cursor-line), (cursor-screen-col), (viewport-rows).",
     );
 
     b.be_doc(
@@ -95,7 +146,7 @@ pub(super) fn register(b: &mut Builtins) {
             let n = with_editor_mut(|st| st.focused_buf().cursor_pos().col as i64);
             Ok(Rc::new(n.into()))
         },
-        "(cursor-screen-col/0)\nthe focused buffer's cursor column within its viewport (0-indexed\nfrom the left). useful for positioning cursor-anchored popups.",
+        "(cursor-screen-col)\n\nReturns int: the cursor's column within its viewport, 0-indexed from the\nleft. Useful for positioning cursor-anchored popups.\nSee also: (cursor-col), (cursor-screen-row), (viewport-cols).",
     );
 
     b.be_doc(
@@ -105,7 +156,7 @@ pub(super) fn register(b: &mut Builtins) {
             let n = with_editor_mut(|st| st.focused_buf().viewport.row as i64);
             Ok(Rc::new(n.into()))
         },
-        "(viewport-rows/0)\nthe focused buffer's visible viewport height in cells.",
+        "(viewport-rows)\n\nReturns int: the focused buffer's visible viewport height in cells.\nSee also: (viewport-cols), (cursor-screen-row).",
     );
 
     b.be_doc(
@@ -115,6 +166,6 @@ pub(super) fn register(b: &mut Builtins) {
             let n = with_editor_mut(|st| st.focused_buf().viewport.col as i64);
             Ok(Rc::new(n.into()))
         },
-        "(viewport-cols/0)\nthe focused buffer's visible viewport width in cells.",
+        "(viewport-cols)\n\nReturns int: the focused buffer's visible viewport width in cells.\nSee also: (viewport-rows), (cursor-screen-col).",
     );
 }

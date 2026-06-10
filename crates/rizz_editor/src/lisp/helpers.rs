@@ -53,18 +53,9 @@ impl Builtins {
         }
     }
 
-    /// Register a `WithEnv` builtin (reads env, returns a value).
-    pub fn be<F>(&mut self, name: &'static str, nargs: usize, f: F)
-    where
-        F: Fn(&[Rc<Value>], &Env) -> Result<Rc<Value>, RuntimeError> + 'static,
-    {
-        self.entries.push((
-            name,
-            NativeFn::with_env(name.into(), nargs, traced(name, f)),
-        ));
-    }
-
-    /// Register a `WithEnv` builtin with an attached doc string.
+    /// Register a `WithEnv` builtin (reads env, returns a value) with its
+    /// doc string. Every builtin is documented — see
+    /// `docs/LISP_BUILTIN_DOCS.md` for the format `doc` must follow.
     pub fn be_doc<F>(&mut self, name: &'static str, nargs: usize, f: F, doc: &'static str)
     where
         F: Fn(&[Rc<Value>], &Env) -> Result<Rc<Value>, RuntimeError> + 'static,
@@ -76,16 +67,9 @@ impl Builtins {
     }
 
     /// Register an `Impure` builtin (may return an extended env that the
-    /// evaluator threads back into the caller's scope).
-    pub fn bi<F>(&mut self, name: &'static str, nargs: usize, f: F)
-    where
-        F: Fn(&[Rc<Value>], &Env) -> Result<(Rc<Value>, Env), RuntimeError> + 'static,
-    {
-        self.entries
-            .push((name, NativeFn::impure(name.into(), nargs, traced(name, f))));
-    }
-
-    /// Register an `Impure` builtin with an attached doc string.
+    /// evaluator threads back into the caller's scope) with its doc string.
+    /// Every builtin is documented — see `docs/LISP_BUILTIN_DOCS.md` for the
+    /// format `doc` must follow.
     pub fn bi_doc<F>(&mut self, name: &'static str, nargs: usize, f: F, doc: &'static str)
     where
         F: Fn(&[Rc<Value>], &Env) -> Result<(Rc<Value>, Env), RuntimeError> + 'static,

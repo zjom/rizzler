@@ -11,24 +11,39 @@ use super::super::helpers::{Builtins, unit};
 use super::super::with_editor_mut;
 
 pub(super) fn register(b: &mut Builtins) {
-    b.be("focused-mode", 0, |_, _| {
-        let s = with_editor_mut(|st| st.focused_buf().mode().as_str());
-        Ok(Rc::new(Value::Str(s.into())))
-    });
+    b.be_doc(
+        "focused-mode",
+        0,
+        |_, _| {
+            let s = with_editor_mut(|st| st.focused_buf().mode().as_str());
+            Ok(Rc::new(Value::Str(s.into())))
+        },
+        "(focused-mode)\n\nReturns str: the editing mode of the focused buffer (\"normal\",\n\"insert\", \"visual\", …). Drives mode-dependent status lines.\nSee also: (set-mode MODE), (last-key).",
+    );
 
-    b.be("last-key", 0, |_, _| {
-        let s = with_editor_mut(|st| {
-            st.last_key()
-                .map(|k| k.code.to_string())
-                .unwrap_or_else(|| "None".to_string())
-        });
-        Ok(Rc::new(Value::Str(s.into())))
-    });
+    b.be_doc(
+        "last-key",
+        0,
+        |_, _| {
+            let s = with_editor_mut(|st| {
+                st.last_key()
+                    .map(|k| k.code.to_string())
+                    .unwrap_or_else(|| "None".to_string())
+            });
+            Ok(Rc::new(Value::Str(s.into())))
+        },
+        "(last-key)\n\nReturns str: a rendering of the most recently pressed key, or \"None\" if\nnone has been seen. Useful for a which-key style status display.\nSee also: (focused-mode).",
+    );
 
-    b.be("workdir", 0, |_, _| {
-        let d: Value = with_editor_mut(|st| st.workdir()).as_ref().into();
-        Ok(Rc::new(d))
-    });
+    b.be_doc(
+        "workdir",
+        0,
+        |_, _| {
+            let d: Value = with_editor_mut(|st| st.workdir()).as_ref().into();
+            Ok(Rc::new(d))
+        },
+        "(workdir)\n\nReturns str: the editor's current working directory, the root that\nrelative paths and (fs-readdir) resolve against.\nSee also: (config-dir), (buf-path).",
+    );
 
     b.be_doc(
         "config-dir",
@@ -37,7 +52,7 @@ pub(super) fn register(b: &mut Builtins) {
             let d: Value = with_editor_mut(|st| st.config_dir()).as_ref().into();
             Ok(Rc::new(d))
         },
-        "(config-dir/0)\nreturn the directory holding init.rz",
+        "(config-dir)\n\nReturns str: the directory holding init.rz, where (reload-config) reads\nfrom and (open) resolves bare config-relative paths.\nSee also: (workdir), (reload-config).",
     );
 
     b.bi_doc(
@@ -55,6 +70,6 @@ pub(super) fn register(b: &mut Builtins) {
                 .map_err(|e| RuntimeError::Other(anyhow!("{e}")))?;
             Ok((unit(), new_env.with_base_dir(prev_basedir)))
         },
-        "(reload-config/0)\nre-read init.rz from the config dir and evaluate it",
+        "(reload-config)\n\nRe-reads init.rz from the config dir and evaluates it in the running\nenv, so config edits take effect without a restart.\n\nErrors when init.rz cannot be read or raises during evaluation.\nSee also: (config-dir), (evaluate).",
     );
 }

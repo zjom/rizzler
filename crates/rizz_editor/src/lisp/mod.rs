@@ -189,6 +189,33 @@ mod tests {
         }
     }
 
+    /// Per docs/LISP_BUILTIN_DOCS.md, every builtin carries a doc string
+    /// whose first line is a signature naming it. `(show 'name)` must surface
+    /// that doc, and it must start with `(name`. Guards the doc standard so a
+    /// new builtin can't ship undocumented or with a mismatched signature.
+    #[test]
+    fn every_builtin_has_a_doc_whose_signature_names_it() {
+        // Aliases share their target's doc (which names the target, not the
+        // alias), so check primary entries only.
+        let aliases = ["q", "bc", "bd", "bn", "bp", "e", "w", "%", "ls", "readdir"];
+        let mut s = test_state();
+        for name in builtin_names() {
+            if aliases.contains(&name) {
+                continue;
+            }
+            let doc = s.eval_lisp(&format!("(show '{name})")).unwrap();
+            let Value::Str(text) = &*doc else {
+                panic!("builtin `{name}` has no doc string (show returned {doc:?})");
+            };
+            assert!(
+                text.starts_with(&format!("({name}")),
+                "builtin `{name}` doc must open with its signature `({name} ...)`, \
+                 got: {:?}",
+                text.lines().next().unwrap_or_default()
+            );
+        }
+    }
+
     #[test]
     fn insert_char_from_lisp_mutates_buffer() {
         let mut s = test_state();

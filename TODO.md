@@ -1,5 +1,6 @@
 # Features
 
+- [ ] headless mode
 - [ ] `<up>`/ `down` to autofill command history
 - [ ] lifecycle hooks (autocommands)
   - see vim help autocmd
@@ -15,17 +16,25 @@
 
 # Improvements
 
+- [ ] quit enhancements
+  - [ ] to close current buffer (unless last one)
+  - [ ] quit-all to exit
+  - [ ] quit-force to exit without flushing to disk
+  - [ ] prevent quit when buffer has changes not flushed
 - [ ] add more known tree-sitter languages to grammars.toml
 - [ ] add more known lsps to lsp.toml
 - [ ] support more default tree-sitter highlights
 - [ ] filetype on buffers
 - [ ] buffers cycle should by access order instead of creation order
-- [ ] improve latency of lsp completion menu
+- [ ] make rendering more efficient.
+  - currently rendering everything on every frame. very dynamic stuff is slow
+  - e.g., lsp completion menu, telescope picker
 - [ ] better tracing/ error handling/ reporting
 - [ ] split default init.rz into multiple files and seed folder instead of single file.
 
 # Bugs
 
+- [ ] user defined functions not showing in completion menu
 - [ ] cursor-* reporting is not tied to editor window
   - [ ] moving cursor in command buffer and popups updates cursor-line of editor
   - [ ] gutter shifts when entering command buffer

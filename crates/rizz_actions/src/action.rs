@@ -79,6 +79,18 @@ pub enum Action {
         kind: MoveKind,
         count: u32,
     },
+    /// Vim `>>` / `<<` — shift `count` lines starting at the cursor row one
+    /// shift width right (`dedent=false`) or left (`dedent=true`), as a
+    /// single tracked edit. Blank lines are left untouched when indenting.
+    ShiftLine {
+        count: u32,
+        dedent: bool,
+    },
+    /// Vim `>` / `<` in a visual mode — shift the selected lines and drop
+    /// back to Normal mode (mirrors `DeleteSelection`'s mode handling).
+    ShiftSelection {
+        dedent: bool,
+    },
     Undo,
     Redo,
     /// Vim `g;` — jump to the position of the last edit. Repeated calls walk

@@ -1571,4 +1571,85 @@ mod tests {
         assert!(s.undo());
         assert_eq!(s.buf.to_string(), "hello world");
     }
+
+    #[test]
+    fn shift_line_indents_and_lands_on_first_non_blank() {
+        let mut s = mk("foo\nbar");
+        s.cursor_pos = Position::<u16>::new(2, 0);
+        assert!(s.shift_line(1, false));
+        assert_eq!(s.buf.to_string(), "    foo\nbar");
+        assert_eq!(cur_row(&s), 0);
+        assert_eq!(cur_col(&s), 4);
+    }
+
+    #[test]
+    fn shift_line_count_indents_multiple_lines() {
+        let mut s = mk("a\nb\nc\nd");
+        assert!(s.shift_line(3, false));
+        assert_eq!(s.buf.to_string(), "    a\n    b\n    c\nd");
+    }
+
+    #[test]
+    fn shift_line_dedent_removes_one_shift_width() {
+        let mut s = mk("        foo");
+        assert!(s.shift_line(1, true));
+        assert_eq!(s.buf.to_string(), "    foo");
+        assert_eq!(cur_col(&s), 4);
+    }
+
+    #[test]
+    fn shift_line_dedent_clamps_to_available_whitespace() {
+        let mut s = mk("  foo");
+        assert!(s.shift_line(1, true));
+        assert_eq!(s.buf.to_string(), "foo");
+        assert_eq!(cur_col(&s), 0);
+    }
+
+    #[test]
+    fn shift_line_dedent_treats_tab_as_full_width() {
+        let mut s = mk("\tfoo");
+        assert!(s.shift_line(1, true));
+        assert_eq!(s.buf.to_string(), "foo");
+    }
+
+    #[test]
+    fn shift_line_indent_skips_blank_lines() {
+        let mut s = mk("a\n\nb");
+        assert!(s.shift_line(3, false));
+        assert_eq!(s.buf.to_string(), "    a\n\n    b");
+    }
+
+    #[test]
+    fn shift_line_dedent_with_no_indent_is_noop() {
+        let mut s = mk("foo\nbar");
+        assert!(!s.shift_line(1, true));
+        assert_eq!(s.buf.to_string(), "foo\nbar");
+    }
+
+    #[test]
+    fn shift_line_indent_is_one_undo_step() {
+        let mut s = mk("a\nb");
+        assert!(s.shift_line(2, false));
+        assert_eq!(s.buf.to_string(), "    a\n    b");
+        assert!(s.undo());
+        assert_eq!(s.buf.to_string(), "a\nb");
+        assert!(!s.undo());
+    }
+
+    #[test]
+    fn shift_selection_indents_spanned_lines_and_exits_visual() {
+        let mut s = mk("a\nb\nc");
+        s.set_mode(EditingMode::VisualLine);
+        s.cursor_pos = Position::<u16>::new(0, 1);
+        assert!(s.shift_selection(false));
+        assert_eq!(s.buf.to_string(), "    a\n    b\nc");
+        assert_eq!(s.mode(), EditingMode::Normal);
+    }
+
+    #[test]
+    fn shift_selection_outside_visual_is_noop() {
+        let mut s = mk("a\nb");
+        assert!(!s.shift_selection(false));
+        assert_eq!(s.buf.to_string(), "a\nb");
+    }
 }

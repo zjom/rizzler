@@ -86,6 +86,50 @@ pub(super) fn register(b: &mut Builtins) {
         "(delete-line)\n\nDeletes the current line linewise (vim `dd`), honoring the pending count\nprefix so `3 (delete-line)` removes three lines.\nSee also: (delete-motion KIND), (yank-line).",
     );
     b.be_doc(
+        "indent-line",
+        0,
+        |_, _| {
+            let count = with_editor_mut(|st| st.pending_count_or_one());
+            apply(Action::ShiftLine {
+                count,
+                dedent: false,
+            })?;
+            Ok(unit())
+        },
+        "(indent-line)\n\nShifts the current line one shift width to the right (vim `>>`), honoring\nthe pending count prefix so `3 (indent-line)` shifts three lines. Blank\nlines are left untouched; the cursor lands on the first non-blank char.\nSee also: (dedent-line), (indent-selection).",
+    );
+    b.be_doc(
+        "dedent-line",
+        0,
+        |_, _| {
+            let count = with_editor_mut(|st| st.pending_count_or_one());
+            apply(Action::ShiftLine {
+                count,
+                dedent: true,
+            })?;
+            Ok(unit())
+        },
+        "(dedent-line)\n\nShifts the current line one shift width to the left (vim `<<`), removing\nup to a shift width of leading whitespace and honoring the pending count\nprefix. The cursor lands on the first non-blank char.\nSee also: (indent-line), (dedent-selection).",
+    );
+    b.be_doc(
+        "indent-selection",
+        0,
+        |_, _| {
+            apply(Action::ShiftSelection { dedent: false })?;
+            Ok(unit())
+        },
+        "(indent-selection)\n\nShifts every line the visual selection spans one shift width to the\nright (vim `>`), then returns to Normal mode. No-op outside a visual\nmode.\nSee also: (dedent-selection), (indent-line).",
+    );
+    b.be_doc(
+        "dedent-selection",
+        0,
+        |_, _| {
+            apply(Action::ShiftSelection { dedent: true })?;
+            Ok(unit())
+        },
+        "(dedent-selection)\n\nShifts every line the visual selection spans one shift width to the left\n(vim `<`), then returns to Normal mode. No-op outside a visual mode.\nSee also: (indent-selection), (dedent-line).",
+    );
+    b.be_doc(
         "delete-motion",
         1,
         |args, _| {

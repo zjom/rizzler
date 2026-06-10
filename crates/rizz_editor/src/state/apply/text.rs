@@ -64,6 +64,18 @@ pub(super) fn delete_char_at(st: &mut State, pos: Position<usize>) {
     st.bufs[f].delete_char_at(pos);
 }
 
+pub(super) fn shift_line(st: &mut State, count: u32, dedent: bool) {
+    let f = st.focused_buf_id();
+    debug!(buf = ?f, count, dedent, "Action::ShiftLine");
+    st.bufs[f].shift_line(count, dedent);
+}
+
+pub(super) fn shift_selection(st: &mut State, dedent: bool) {
+    let f = st.focused_buf_id();
+    debug!(buf = ?f, dedent, "Action::ShiftSelection");
+    st.bufs[f].shift_selection(dedent);
+}
+
 pub(super) fn undo(st: &mut State) {
     let f = st.focused_buf_id();
     debug!(buf = ?f, "Action::Undo");

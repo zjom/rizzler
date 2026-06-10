@@ -84,6 +84,38 @@ fn leading_zero_falls_through_as_line_start() {
 }
 
 #[test]
+fn shift_right_chord_indents_with_count_prefix() {
+    use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+    let mut s = test_state();
+    let b = primary(&s);
+    s.bufs[b].clear_with("a\nb\nc");
+    s.handle_key_event(CT::new(KeyCode::Char('2'), KeyModifiers::NONE))
+        .unwrap();
+    s.handle_key_event(CT::new(KeyCode::Char('>'), KeyModifiers::NONE))
+        .unwrap();
+    s.handle_key_event(CT::new(KeyCode::Char('>'), KeyModifiers::NONE))
+        .unwrap();
+    assert_eq!(s.bufs[b].text(), "    a\n    b\nc");
+}
+
+#[test]
+fn visual_line_shift_left_chord_dedents_selection() {
+    use crossterm::event::{KeyCode, KeyEvent as CT, KeyModifiers};
+    let mut s = test_state();
+    let b = primary(&s);
+    s.bufs[b].clear_with("        a\n        b\nc");
+    // V to select the line, j to extend over two lines, < to dedent.
+    s.handle_key_event(CT::new(KeyCode::Char('V'), KeyModifiers::SHIFT))
+        .unwrap();
+    s.handle_key_event(CT::new(KeyCode::Char('j'), KeyModifiers::NONE))
+        .unwrap();
+    s.handle_key_event(CT::new(KeyCode::Char('<'), KeyModifiers::NONE))
+        .unwrap();
+    assert_eq!(s.bufs[b].text(), "    a\n    b\nc");
+    assert_eq!(s.bufs[b].mode(), rizz_core::EditingMode::Normal);
+}
+
+#[test]
 fn split_then_close_returns_to_single_window() {
     let mut s = test_state();
     s.apply(&[Rc::new(Action::WindowSplit(SplitDir::Horizontal))]);

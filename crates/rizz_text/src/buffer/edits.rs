@@ -440,6 +440,114 @@ impl Buffer {
         self.delete_range(s, e)
     }
 
+    /// Shift lines `lo_row..=hi_row` by one shift width — right when
+    /// `dedent` is false (vim `>>`), left when true (vim `<<`) — recorded
+    /// as a single tracked edit. Indenting prepends a shift width of spaces
+    /// to every non-blank line and leaves blank lines untouched; dedenting
+    /// removes up to one shift width of leading whitespace per line (a tab
+    /// counts as a full shift width). The cursor lands on the first
+    /// non-blank char of `lo_row`. Returns whether anything changed.
+    pub fn shift_lines(&mut self, lo_row: usize, hi_row: usize, dedent: bool) -> bool {
+        self.close_insert_batch();
+        let total = self.buf.len_lines();
+        if total == 0 {
+            return false;
+        }
+        let last_line = total.saturating_sub(1);
+        let lo_row = lo_row.min(last_line);
+        let hi_row = hi_row.min(last_line).max(lo_row);
+
+        let s = self.buf.line_to_char(lo_row);
+        let e = if hi_row + 1 >= total {
+            self.buf.len_chars()
+        } else {
+            self.buf.line_to_char(hi_row + 1)
+        };
+
+        let removed = self.buf.slice(s..e).to_string();
+        let mut inserted = String::with_capacity(removed.len() + SHIFT_WIDTH);
+        let mut changed = false;
+        for line in removed.split_inclusive('\n') {
+            let (body, nl) = match line.strip_suffix('\n') {
+                Some(b) => (b, "\n"),
+                None => (line, ""),
+            };
+            if dedent {
+                let drop = leading_dedent_bytes(body);
+                changed |= drop > 0;
+                inserted.push_str(&body[drop..]);
+            } else if body.chars().all(char::is_whitespace) {
+                // Vim leaves blank lines untouched on `>>`.
+                inserted.push_str(body);
+            } else {
+                changed = true;
+                inserted.extend(std::iter::repeat_n(' ', SHIFT_WIDTH));
+                inserted.push_str(body);
+            }
+            inserted.push_str(nl);
+        }
+
+        if !changed {
+            return false;
+        }
+
+        let abs_before = self.abs_pos();
+        self.buf.remove(s..e);
+        self.buf.insert(s, &inserted);
+        self.record_text_edit(s, &removed, &inserted);
+        self.invalidate_wrap_cache();
+
+        // Land on the first shifted line's first non-blank column (vim).
+        let col = inserted
+            .split('\n')
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .count();
+        self.land_cursor_at(lo_row, col);
+        let abs_after = self.abs_pos();
+
+        self.changetree.track_change(Delta {
+            at: s,
+            removed: Rc::from(removed),
+            inserted: Rc::from(inserted),
+            cursor_before: (abs_before.row, abs_before.col),
+            cursor_after: (abs_after.row, abs_after.col),
+        });
+        true
+    }
+
+    /// Vim `>>` / `<<` — shift `count` lines starting at the cursor row one
+    /// shift width right (`dedent=false`) or left (`dedent=true`). Returns
+    /// whether anything changed.
+    pub fn shift_line(&mut self, count: u32, dedent: bool) -> bool {
+        let n = count.max(1) as usize;
+        let lo = self.abs_row();
+        let last = self.buf.len_lines().saturating_sub(1);
+        if lo > last {
+            return false;
+        }
+        let hi = (lo + n - 1).min(last);
+        self.shift_lines(lo, hi, dedent)
+    }
+
+    /// Vim `>` / `<` in a visual mode — shift the lines the selection spans
+    /// and return to Normal mode. No-op when not in a visual mode.
+    pub fn shift_selection(&mut self, dedent: bool) -> bool {
+        let changed = match self.selection_anchor {
+            Some(anchor) if self.mode.is_visual() => {
+                let cursor = self.abs_pos();
+                let lo = anchor.row.min(cursor.row);
+                let hi = anchor.row.max(cursor.row);
+                self.shift_lines(lo, hi, dedent)
+            }
+            _ => false,
+        };
+        self.set_mode(EditingMode::Normal);
+        changed
+    }
+
     /// Vim `r<char>` — replace up to `count` chars starting at the cursor
     /// with `c`, recorded as a single tracked edit. Stops at the trailing
     /// newline (so the line's length never changes) and cursor lands on the
@@ -708,6 +816,31 @@ impl Buffer {
         self.cursor_pos.col = (col - self.file_pos.col) as u16;
         self.clamp_cursor();
     }
+}
+
+/// Columns one `>>` / `<<` shifts a line by, and the count of spaces an
+/// indent inserts.
+const SHIFT_WIDTH: usize = 4;
+
+/// Leading bytes to drop to dedent `line` by one shift width: each space is
+/// one column, a tab a full shift width; stops once a shift width has been
+/// consumed or a non-whitespace char is hit. Leading whitespace is ASCII,
+/// so the byte count equals the char count.
+fn leading_dedent_bytes(line: &str) -> usize {
+    let mut cols = 0;
+    let mut bytes = 0;
+    for c in line.chars() {
+        if cols >= SHIFT_WIDTH {
+            break;
+        }
+        match c {
+            ' ' => cols += 1,
+            '\t' => cols += SHIFT_WIDTH,
+            _ => break,
+        }
+        bytes += c.len_utf8();
+    }
+    bytes
 }
 
 /// Motions whose `d<motion>` form deletes whole lines instead of a char

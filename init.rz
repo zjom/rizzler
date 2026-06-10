@@ -301,6 +301,14 @@
 (map 'normal "<c-r>"  '(redo))
 (map 'normal "g;"     '(goto-last-edit))
 
+;; ----- indent / dedent -------------------------------------------------
+;;
+;; `>>` shifts the current line one shift width right, `<<` one left (the
+;; `<` key is written `<lt>` since a bare `<` opens a special-key token).
+;; Both honor the count prefix, so `3>>` shifts three lines.
+(map 'normal ">>"        '(indent-line))
+(map 'normal "<lt><lt>"  '(dedent-line))
+
 ;; ----- yank / paste / registers ---------------------------------------
 ;;
 ;; Yank is the read-only twin of delete: `y<motion>` peeks at the same range
@@ -432,6 +440,8 @@
       (map mode "x"        '(delete-selection))
       (map mode "d"        '(delete-selection))
       (map mode "c"        '(do (delete-selection) (set-mode 'insert)))
+      (map mode ">"        '(indent-selection))
+      (map mode "<lt>"     '(dedent-selection))
       (map mode "y"        '(yank))
       (map mode "p"        '(paste))
       (map mode "P"        '(paste-before))))

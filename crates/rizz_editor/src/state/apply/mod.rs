@@ -79,6 +79,8 @@ impl State {
             Action::InsertNewline => text::insert_char(self, '\n'),
             Action::DeleteChar => text::delete_char(self),
             Action::DeleteCharAt(pos) => text::delete_char_at(self, *pos),
+            Action::ShiftLine { count, dedent } => text::shift_line(self, *count, *dedent),
+            Action::ShiftSelection { dedent } => text::shift_selection(self, *dedent),
             Action::Undo => text::undo(self),
             Action::Redo => text::redo(self),
             Action::GotoLastEdit { count } => text::goto_last_edit(self, *count),

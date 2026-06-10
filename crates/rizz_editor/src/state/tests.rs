@@ -135,6 +135,24 @@ fn default_precompute_produces_expected_frame() {
 }
 
 #[test]
+fn precompute_skips_hidden_buffers() {
+    let mut s = test_state();
+    let shown = s.surface.windows.focused_buf();
+    let hidden = s.create_buf(false, None);
+    let (frame, err) = s.precompute_frame();
+    assert!(err.is_none(), "no frame errors expected: {err:?}");
+    assert!(frame.per_buf.contains_key(shown), "visible buffer rendered");
+    assert!(
+        frame.per_buf.contains_key(s.bufs.minibuffer_id()),
+        "minibuffer rendered"
+    );
+    assert!(
+        !frame.per_buf.contains_key(hidden),
+        "hidden buffer must not be precomputed"
+    );
+}
+
+#[test]
 fn register_grammar_rejects_missing_library() {
     let mut s = test_state();
     // A non-existent library path should fail the pre-flight in

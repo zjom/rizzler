@@ -19,11 +19,12 @@ use rizz_text::{
 };
 use slotmap::{SecondaryMap, SlotMap};
 
+use crate::panel::PanelStack;
 use crate::render::{
     DecoratorRanges, GutterWidth, RenderedBuffer, RenderedFrame, RenderedGutter, StyledRange,
 };
 use crate::styling::{Color, Style, Theme, ThemeCell, spans_from_value, style_from_value};
-use crate::widget::{Widget, parse_widget};
+use crate::widget::{Widget, collect_buffer_views, parse_widget};
 use crate::window::WindowTree;
 
 /// Inputs the precompute pass reads from `State`. All references are
@@ -31,6 +32,7 @@ use crate::window::WindowTree;
 pub struct PrecomputeInput<'a> {
     pub bufs: &'a SlotMap<BufferId, Buffer>,
     pub windows: &'a WindowTree,
+    pub panels: &'a PanelStack,
     pub frame_fn: Option<&'a Rc<Value>>,
     pub theme: &'a ThemeCell,
     /// Skipped from decorator passes — the minibuffer is plain text.
@@ -47,7 +49,8 @@ pub struct PrecomputeInput<'a> {
 pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
     let PrecomputeInput {
         bufs,
-        windows: _,
+        windows,
+        panels,
         frame_fn,
         theme,
         minibuffer,
@@ -84,8 +87,28 @@ pub fn compute(input: PrecomputeInput<'_>) -> (RenderedFrame, Option<String>) {
         None => default_layout(),
     };
 
+    // Only buffers that can appear this frame: window leaves, the
+    // minibuffer, panel backing buffers, and explicit (w-buffer-view N)
+    // targets in the frame tree or any panel's widget. Hidden buffers pay
+    // no gutter/decorator/wrap cost.
+    let mut visible: Vec<BufferId> = windows.leaf_bufs();
+    visible.push(minibuffer);
+    for p in panels.iter() {
+        visible.push(p.buf);
+        if let Some(w) = p.widget.as_ref() {
+            collect_buffer_views(w, &mut visible);
+        }
+    }
+    collect_buffer_views(&root, &mut visible);
+
     let mut per_buf: SecondaryMap<BufferId, RenderedBuffer> = SecondaryMap::new();
-    for (id, buf) in bufs.iter() {
+    for id in visible {
+        if per_buf.contains_key(id) {
+            continue;
+        }
+        let Some(buf) = bufs.get(id) else {
+            continue;
+        };
         let mut rb = RenderedBuffer::default();
 
         let is_file = file_bufs.contains(&id);

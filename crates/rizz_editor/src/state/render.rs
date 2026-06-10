@@ -140,6 +140,7 @@ impl State {
         let result = precompute::compute(precompute::PrecomputeInput {
             bufs: self.bufs.raw(),
             windows: &self.surface.windows,
+            panels: &self.surface.panels,
             frame_fn: self.render.frame_fn.as_ref(),
             theme: &self.render.theme,
             minibuffer: self.bufs.minibuffer_id(),

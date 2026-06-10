@@ -11,10 +11,10 @@
 //!    by file extension.
 //! 2. `TsRegistry::highlighter_for_path(...)` hands back a [`Highlighter`]
 //!    sharing the cached `Query` and language pointer.
-//! 3. Feed text in via [`Highlighter::set_source`], call
-//!    [`Highlighter::ensure_parsed`] to refresh the tree, then
-//!    [`Highlighter::query`] to iterate styled captures clipped to a byte
-//!    range — typically the visible viewport.
+//! 3. Call [`Highlighter::parse_rope`] to refresh the tree (streamed
+//!    chunk-by-chunk, no text snapshot), then [`Highlighter::query`] to
+//!    iterate styled captures clipped to a byte range — typically the
+//!    visible viewport.
 //!
 //! Capture names follow the conventional `nvim-treesitter` shorthand
 //! (`keyword`, `string`, `function`, …); the renderer maps them to face

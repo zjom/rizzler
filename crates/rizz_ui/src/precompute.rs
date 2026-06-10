@@ -477,7 +477,7 @@ fn syntax_ranges(buf: &Buffer, theme: &Theme) -> DecoratorRanges {
         return DecoratorRanges { ranges };
     }
 
-    for span in h.query(start_byte, end_byte) {
+    for span in h.query(rope, start_byte, end_byte) {
         let Some(style) = resolve_syntax_face(theme, &span.capture) else {
             continue;
         };

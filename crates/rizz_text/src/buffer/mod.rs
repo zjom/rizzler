@@ -288,17 +288,16 @@ impl Buffer {
         self.lsp.as_deref().map_or(&[], |h| h.diagnostics())
     }
 
-    /// If a highlighter is attached and dirty, snapshot the rope into it and
-    /// reparse. Cheap when clean: the dirty flag short-circuits before any
-    /// allocation.
+    /// If a highlighter is attached and dirty, reparse against the rope.
+    /// Cheap when clean (the dirty flag short-circuits), and never copies
+    /// the rope: tree-sitter streams its chunks directly.
     pub fn refresh_highlight(&mut self) {
         if !self.highlight.as_ref().is_some_and(|h| h.is_dirty()) {
             return;
         }
-        let src = self.buf.to_string();
+        let rope = &self.buf;
         if let Some(h) = self.highlight.as_mut() {
-            h.set_source(src);
-            h.ensure_parsed();
+            h.parse_rope(rope);
         }
     }
 

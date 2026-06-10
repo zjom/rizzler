@@ -132,7 +132,7 @@ pub(super) fn register(b: &mut Builtins) {
         |_, env| {
             let prefix = with_editor_mut(|st| st.minibuffer_completion_prefix());
             let mut names: Vec<Rc<str>> = Vec::new();
-            let _ = env.clone().filter(|(name, _)| {
+            let _ = env.clone().filter(|name, _| {
                 if name.starts_with(prefix.as_str()) && !name.starts_with('_') {
                     names.push(name.clone());
                 }

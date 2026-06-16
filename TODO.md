@@ -18,11 +18,11 @@
 
 # Improvements
 
-- [ ] quit enhancements
-  - [ ] to close current buffer (unless last one)
-  - [ ] quit-all to exit
-  - [ ] quit-force to exit without flushing to disk
-  - [ ] prevent quit when buffer has changes not flushed
+- [x] quit enhancements
+  - [x] to close current buffer (unless last one)
+  - [x] quit-all to exit
+  - [x] quit-force to exit without flushing to disk
+  - [x] prevent quit when buffer has changes not flushed
 - [ ] add more known tree-sitter languages to grammars.toml
 - [ ] add more known lsps to lsp.toml
 - [ ] support more default tree-sitter highlights

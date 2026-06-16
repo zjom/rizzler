@@ -54,6 +54,7 @@ pub fn write(buffer: &mut Buffer, path: Option<Rc<Path>>) -> io::Result<()> {
                 }
                 info!(path = %path.display(), bytes = buffer.buf.len_bytes(), "wrote buffer to disk");
                 buffer.fs_path = Some(path);
+                buffer.mark_saved();
             }
             Err(e) => {
                 warn!(path = %path.display(), error = %e, "could not open file for write");

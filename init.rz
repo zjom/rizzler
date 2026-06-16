@@ -151,7 +151,11 @@
 ;;                  → try `(typeof "hi")` to inspect a value's type
 ;;                  → try `reload-config` to re-eval this file in place
 ;;   :messages    shows the notification log when a popup auto-dismisses
-;;   :quit        exits
+;;   :quit        closes the focused buffer; exits when it's the last one
+;;   :quit-all    exits the editor (refuses if any buffer is unsaved)
+;;
+;; `:quit` / `:quit-all` refuse to abandon unsaved changes; add a `!`
+;; (`:quit!`, `:quit-all!`) to discard them. Aliases: `q` `q!` `qa` `qa!`.
 ;;
 ;; In command mode you can type a bare word `quit` or a full form
 ;; `(quit)` — the shell-style wrapper adds the parens for you. A bare
@@ -1838,6 +1842,8 @@
               {"display": "file explorer"   "data": '(popup-files)}
               {"display": "reload config"   "data": '(reload-config)}
               {"display": "write buffer"    "data": '(write)}
+              {"display": "close buffer"    "data": '(quit)}
+              {"display": "quit"            "data": '(quit-all)}
               {"display": "messages"        "data": '(messages)}
               {"display": "command history" "data": '(history)}
               {"display": "help"            "data": '(popup-help)}]

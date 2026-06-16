@@ -181,6 +181,69 @@ fn split_then_close_returns_to_single_window() {
 }
 
 #[test]
+fn quit_exits_when_last_buffer_is_clean() {
+    let mut s = test_state();
+    assert_eq!(s.bufs.file_buf_count(), 1);
+    s.apply(&[Rc::new(Action::Quit { force: false })]);
+    assert!(s.quit_requested(), "quitting the last clean buffer exits");
+}
+
+#[test]
+fn quit_closes_buffer_when_more_than_one() {
+    let mut s = test_state();
+    s.create_buf(true, None); // now two file buffers, the new one focused
+    assert_eq!(s.bufs.file_buf_count(), 2);
+    s.apply(&[Rc::new(Action::Quit { force: false })]);
+    assert!(!s.quit_requested(), "still other buffers open -> no exit");
+    assert_eq!(
+        s.bufs.file_buf_count(),
+        1,
+        "the focused buffer is closed, not the editor"
+    );
+}
+
+#[test]
+fn quit_refused_when_focused_buffer_is_modified() {
+    let mut s = test_state();
+    let id = s.surface.windows.focused_buf();
+    s.bufs[id].insert_char('x');
+    assert!(s.bufs[id].is_modified());
+    s.apply(&[Rc::new(Action::Quit { force: false })]);
+    assert!(!s.quit_requested(), "unsaved changes block a plain :q");
+    assert!(
+        s.message_history()
+            .any(|m| m.contains("no write since last change")),
+        "the user is told why the quit was refused"
+    );
+}
+
+#[test]
+fn quit_force_discards_unsaved_changes() {
+    let mut s = test_state();
+    let id = s.surface.windows.focused_buf();
+    s.bufs[id].insert_char('x');
+    s.apply(&[Rc::new(Action::Quit { force: true })]);
+    assert!(s.quit_requested(), ":q! exits despite unsaved changes");
+}
+
+#[test]
+fn quit_all_refused_when_any_buffer_modified() {
+    let mut s = test_state();
+    let first = s.surface.windows.focused_buf();
+    s.create_buf(true, None); // a second, clean, focused buffer
+    s.bufs[first].insert_char('x'); // dirty a *non-focused* buffer
+
+    s.apply(&[Rc::new(Action::QuitAll { force: false })]);
+    assert!(
+        !s.quit_requested(),
+        ":qa is refused while any buffer is unsaved"
+    );
+
+    s.apply(&[Rc::new(Action::QuitAll { force: true })]);
+    assert!(s.quit_requested(), ":qa! exits despite unsaved changes");
+}
+
+#[test]
 fn default_precompute_produces_expected_frame() {
     let mut s = test_state();
     let (frame, err) = s.precompute_frame();

@@ -119,6 +119,13 @@ pub struct Buffer {
     /// caches compare it to decide whether precomputed per-buffer data is
     /// still valid.
     pub(crate) edit_gen: u64,
+    /// True when the rope has been mutated since it was last written to (or
+    /// loaded from) disk — the "unsaved changes" flag that `:q`/`:qa` guard
+    /// on. Set by [`Self::invalidate_wrap_cache`] (the single rope-mutation
+    /// funnel), cleared by [`crate::io::write`] and [`Self::mark_saved`].
+    /// Unlike [`Self::edit_gen`] it is *not* touched by highlighter swaps, so
+    /// a freshly opened file stays "unmodified" after its grammar attaches.
+    pub(crate) dirty: bool,
 }
 
 impl Buffer {
@@ -173,6 +180,19 @@ impl Buffer {
     pub(crate) fn invalidate_wrap_cache(&mut self) {
         self.wrap_cache = None;
         self.edit_gen += 1;
+        self.dirty = true;
+    }
+
+    /// True when the buffer has unsaved changes relative to its backing file.
+    /// A fresh, empty scratch buffer is unmodified; the first edit flips it.
+    pub fn is_modified(&self) -> bool {
+        self.dirty
+    }
+
+    /// Clear the unsaved-changes flag — the buffer's contents now match disk.
+    /// Called by [`crate::io::write`] on a successful save.
+    pub fn mark_saved(&mut self) {
+        self.dirty = false;
     }
 
     /// Render-relevant text generation: changes whenever the rope (or the
@@ -436,6 +456,7 @@ impl Clone for Buffer {
             highlight: self.highlight.clone(),
             lsp: None,
             edit_gen: self.edit_gen,
+            dirty: self.dirty,
         }
     }
 }
@@ -1741,5 +1762,27 @@ mod tests {
         let mut s = mk("a\nb");
         assert!(!s.shift_selection(false));
         assert_eq!(s.buf.to_string(), "a\nb");
+    }
+
+    #[test]
+    fn modified_flag_tracks_edits_and_save() {
+        let mut s = mk("hello");
+        assert!(!s.is_modified(), "freshly loaded buffer is unmodified");
+        s.insert_char('!');
+        assert!(s.is_modified(), "an edit marks the buffer modified");
+        s.mark_saved();
+        assert!(!s.is_modified(), "mark_saved clears the flag");
+        s.delete_char();
+        assert!(s.is_modified(), "a later edit re-marks it modified");
+    }
+
+    #[test]
+    fn highlighter_swap_does_not_mark_modified() {
+        let mut s = mk("fn main() {}");
+        assert!(!s.is_modified());
+        // Installing/removing a highlighter bumps edit_gen but must not be
+        // mistaken for an unsaved text change.
+        s.set_highlighter(None);
+        assert!(!s.is_modified());
     }
 }

@@ -26,7 +26,7 @@ use std::rc::Rc;
 use rizz_actions::Action;
 use rizz_core::EditingMode;
 use rizz_search::SearchDir;
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{debug, instrument, trace, warn};
 
 use crate::buffer_list::CycleDir;
 
@@ -59,10 +59,8 @@ impl State {
     fn apply_one(&mut self, action: &Action) {
         match action {
             Action::Noop => {}
-            Action::Quit => {
-                info!("Action::Quit -> set quit flag");
-                self.quit = true;
-            }
+            Action::Quit { force } => self.quit_current(*force),
+            Action::QuitAll { force } => self.quit_all(*force),
             Action::SetMode(m) => {
                 debug!(mode = ?m, "Action::SetMode");
                 self.set_mode(*m);

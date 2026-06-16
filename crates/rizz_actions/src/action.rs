@@ -27,7 +27,19 @@ use crate::lsp::{
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Action {
     Noop,
-    Quit,
+    /// Vim `:q` / `:q!` — close the focused buffer, or exit the editor when
+    /// it is the last file buffer. With `force=false` the action is refused
+    /// (notify only) when the focused buffer has unsaved changes; `force=true`
+    /// discards them.
+    Quit {
+        force: bool,
+    },
+    /// Vim `:qa` / `:qa!` — exit the editor outright. With `force=false` the
+    /// action is refused when *any* file buffer has unsaved changes;
+    /// `force=true` discards them.
+    QuitAll {
+        force: bool,
+    },
     SetMode(EditingMode),
 
     InsertChar(char),

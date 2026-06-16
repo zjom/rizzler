@@ -197,7 +197,9 @@ mod tests {
     fn every_builtin_has_a_doc_whose_signature_names_it() {
         // Aliases share their target's doc (which names the target, not the
         // alias), so check primary entries only.
-        let aliases = ["q", "bc", "bd", "bn", "bp", "e", "w", "%", "ls", "readdir"];
+        let aliases = [
+            "q", "q!", "qa", "qa!", "bc", "bd", "bn", "bp", "e", "w", "%", "ls", "readdir",
+        ];
         let mut s = test_state();
         for name in builtin_names() {
             if aliases.contains(&name) {

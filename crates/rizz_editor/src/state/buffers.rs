@@ -239,6 +239,58 @@ impl State {
         info!(?buf, "deleted buffer");
     }
 
+    /// Vim `:q` / `:q!`. Close the focused buffer; when it is the last file
+    /// buffer, exit the editor instead. With `force=false` a buffer carrying
+    /// unsaved changes is left alone and the user is told to save (or pass
+    /// `!`); `force=true` discards the changes.
+    #[instrument(skip(self))]
+    pub(super) fn quit_current(&mut self, force: bool) {
+        let buf = self.surface.windows.focused_buf();
+        if !force && self.bufs[buf].is_modified() {
+            self.notify_unsaved(buf);
+            return;
+        }
+        if self.bufs.file_buf_count() > 1 {
+            self.delete_buf(buf);
+        } else {
+            info!("quit_current: last file buffer -> set quit flag");
+            self.quit = true;
+        }
+    }
+
+    /// Vim `:qa` / `:qa!`. Exit the editor. With `force=false` the quit is
+    /// refused when *any* file buffer has unsaved changes; `force=true`
+    /// discards them all.
+    #[instrument(skip(self))]
+    pub(super) fn quit_all(&mut self, force: bool) {
+        if !force {
+            let dirty = self
+                .bufs
+                .file_ids()
+                .iter()
+                .copied()
+                .find(|&id| self.bufs[id].is_modified());
+            if let Some(id) = dirty {
+                self.notify_unsaved(id);
+                return;
+            }
+        }
+        info!("quit_all: set quit flag");
+        self.quit = true;
+    }
+
+    /// Tell the user a buffer has unsaved changes and how to override.
+    fn notify_unsaved(&mut self, buf: BufferId) {
+        let msg = match self.bufs[buf].fs_path() {
+            Some(p) => format!(
+                "no write since last change for {} (add ! to override)",
+                p.display()
+            ),
+            None => "no write since last change (add ! to override)".to_string(),
+        };
+        self.notify_via_lisp(&msg);
+    }
+
     pub(super) fn window_split(&mut self, dir: SplitDir) {
         let new_buf = self.bufs.push_file(Buffer::new());
         self.surface.windows.split(dir, new_buf);

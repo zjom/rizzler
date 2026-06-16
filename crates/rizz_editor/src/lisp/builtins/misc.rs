@@ -27,7 +27,7 @@ pub(super) fn register(b: &mut Builtins) {
         |_, _| {
             let s = with_editor_mut(|st| {
                 st.last_key()
-                    .map(|k| k.code.to_string())
+                    .map(|k| k.to_string())
                     .unwrap_or_else(|| "None".to_string())
             });
             Ok(Rc::new(Value::Str(s.into())))

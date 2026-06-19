@@ -1,7 +1,6 @@
 //! Minibuffer / command-line builtins: submit, cancel, evaluate, history,
 //! and tab-completion against the lisp env.
 
-use std::ops::Deref;
 use std::rc::Rc;
 
 use im::Vector;

@@ -8,6 +8,7 @@
   - [ ] more prebuilt widgets for common things
 - [ ] lspconfig
 - [ ] add (non-lsp) formatter support
+- [ ] linting
 - [ ] editor options and buffer options
   - [ ] shiftwidth/ expandtab/ tab-width config
   - [ ] line wrap
@@ -15,14 +16,10 @@
 - [ ] add support for package manager installation of lsps, formatters, linters (look at what mason.nvim does)
 - [ ] sed
 - [ ] multicursor editing
+- [ ] package manager for rizz plugins
 
 # Improvements
 
-- [x] quit enhancements
-  - [x] to close current buffer (unless last one)
-  - [x] quit-all to exit
-  - [x] quit-force to exit without flushing to disk
-  - [x] prevent quit when buffer has changes not flushed
 - [ ] add more known tree-sitter languages to grammars.toml
 - [ ] add more known lsps to lsp.toml
 - [ ] support more default tree-sitter highlights
@@ -30,6 +27,7 @@
 - [ ] buffers cycle should by access order instead of creation order
 - [ ] better tracing/ error handling/ reporting
 - [ ] split default init.rz into multiple files and seed folder instead of single file.
+- [ ] `quit` should act as `buffer-delete` when there are multiple buffers.
 
 # Bugs
 
@@ -37,4 +35,3 @@
   - open vertical split
   - type line longer than buffer width
   - cursor reaches into other buffer
-

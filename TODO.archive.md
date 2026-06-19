@@ -10,6 +10,11 @@
 - [x] documentation for builtins
 - [x] `o`/`O`/`enter` should be whitespace aware. put you on col of start of prev line
 - [x] improve latency of lsp completion menu
+- [x] (2026-06-18) quit enhancements
+  - [x] to close current buffer (unless last one)
+  - [x] quit-all to exit
+  - [x] quit-force to exit without flushing to disk
+  - [x] prevent quit when buffer has changes not flushed
 
 # Bugs
 

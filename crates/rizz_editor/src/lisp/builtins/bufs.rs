@@ -6,7 +6,7 @@ use super::super::helpers::{Builtins, apply, as_str, unit};
 
 pub(super) fn register(b: &mut Builtins) {
     b.be_doc(
-        "buf-create",
+        "buffer-create",
         0,
         |_, _| {
             apply(Action::BufCreate {
@@ -15,39 +15,39 @@ pub(super) fn register(b: &mut Builtins) {
             })?;
             Ok(unit())
         },
-        "(buf-create)\n\nCreates a fresh empty buffer and focuses it. Aliased as (bc).\nSee also: (edit PATH), (buf-delete).",
+        "(buffer-create)\n\nCreates a fresh empty buffer and focuses it. Aliased as (bc).\nSee also: (edit PATH), (buffer-delete).",
     );
-    b.alias("bc", "buf-create");
+    b.alias("bc", "buffer-create");
     b.be_doc(
-        "buf-delete",
+        "buffer-delete",
         0,
         |_, _| {
             apply(Action::BufDelete)?;
             Ok(unit())
         },
-        "(buf-delete)\n\nCloses the focused buffer, discarding it from the buffer list. Aliased\nas (bd).\nSee also: (buf-create), (write).",
+        "(buffer-delete)\n\nCloses the focused buffer, discarding it from the buffer list. Aliased\nas (bd).\nSee also: (buffer-create), (write).",
     );
-    b.alias("bd", "buf-delete");
+    b.alias("bd", "buffer-delete");
     b.be_doc(
-        "buf-next",
+        "buffer-next",
         0,
         |_, _| {
             apply(Action::BufNext)?;
             Ok(unit())
         },
-        "(buf-next)\n\nFocuses the next buffer in the buffer list, wrapping around. Aliased as\n(bn).\nSee also: (buf-prev).",
+        "(buffer-next)\n\nFocuses the next buffer in the buffer list, wrapping around. Aliased as\n(bn).\nSee also: (buffer-prev).",
     );
-    b.alias("bn", "buf-next");
+    b.alias("bn", "buffer-next");
     b.be_doc(
-        "buf-prev",
+        "buffer-prev",
         0,
         |_, _| {
             apply(Action::BufPrev)?;
             Ok(unit())
         },
-        "(buf-prev)\n\nFocuses the previous buffer in the buffer list, wrapping around.\nAliased as (bp).\nSee also: (buf-next).",
+        "(buffer-prev)\n\nFocuses the previous buffer in the buffer list, wrapping around.\nAliased as (bp).\nSee also: (buffer-next).",
     );
-    b.alias("bp", "buf-prev");
+    b.alias("bp", "buffer-prev");
     b.be_doc(
         "edit",
         1,

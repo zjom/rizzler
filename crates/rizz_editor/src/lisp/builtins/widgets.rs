@@ -451,18 +451,18 @@ See also: (w-vstack CHILDREN)."#,
 
 Returns widget: a view that renders buffer BUFNO into its allocated rect.
 
-BUFNO — bufno: from (buf-no), (popup-bufno NAME), or (minibuffer-bufno).
+BUFNO — bufno: from (buffer-no), (popup-bufno NAME), or (minibuffer-bufno).
 
 For the popup-specific "render the popup's own backing buffer" case,
 prefer (w-popup-self) — it names that pattern explicitly and needs no
 BUFNO argument.
 
 Example:
-  (w-buffer-view (buf-no))                  ;; the focused buffer
+  (w-buffer-view (buffer-no))                  ;; the focused buffer
   (w-buffer-view (popup-bufno 'messages))   ;; a named popup's buf
   (w-block {"face": "popup.default"}
            (w-buffer-view (minibuffer-bufno)))
-See also: (w-popup-self), (buf-no), (popup-bufno NAME)."#,
+See also: (w-popup-self), (buffer-no), (popup-bufno NAME)."#,
     );
 
     b.be_doc(

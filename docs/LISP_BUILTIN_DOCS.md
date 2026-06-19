@@ -76,7 +76,7 @@ the current env…"*; `(show 'quit)` should read the same way, not drop into a
 lowercase register. Match the host.
 
 Refer to other builtins by their call form in backtick-free prose: write
-`(popup-close)`, `(buf-no)` — they read as code and double as cross-references.
+`(popup-close)`, `(buffer-no)` — they read as code and double as cross-references.
 
 ## 3. Parameters
 
@@ -122,7 +122,7 @@ exotic)
 
 | Type          | Underlying      | Carries                                                       |
 | ------------- | --------------- | ------------------------------------------------------------- |
-| `bufno`       | int             | opaque buffer id from `(buf-no)`, `(popup-bufno …)`, etc.     |
+| `bufno`       | int             | opaque buffer id from `(buffer-no)`, `(popup-bufno …)`, etc.     |
 | `mode`        | ident           | `'normal 'insert 'visual 'visual-line 'visual-block 'command` |
 | `move-kind`   | ident           | a cursor motion, e.g. `'word-next 'line-start`                |
 | `text-object` | ident \| str    | a vim text object, e.g. `'word 'paren 'quote`                 |

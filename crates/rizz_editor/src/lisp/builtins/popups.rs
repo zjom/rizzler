@@ -139,13 +139,13 @@ See also: (popup?), (popup-show NAME WIDGET)."#,
 
 Returns bufno: the backing buffer's opaque id for the named popup, or ()
 if no popup with that name is visible. Feed it to (w-buffer-view BUFNO)
-or (buf-text-set BUFNO ...) for cross-popup queries.
+or (buffer-text-set BUFNO ...) for cross-popup queries.
 
 NAME — ident | str: the popup to look up.
 
 Example:
-  (buf-text-set (popup-bufno 'messages) new-text)
-See also: (buf-no), (minibuffer-bufno)."#,
+  (buffer-text-set (popup-bufno 'messages) new-text)
+See also: (buffer-no), (minibuffer-bufno)."#,
     );
 
     b.be_doc(
@@ -162,7 +162,7 @@ bufnos this never changes — there's exactly one minibuffer per editor.
 
 Example:
   (w-buffer-view (minibuffer-bufno))
-See also: (popup-bufno NAME), (buf-no)."#,
+See also: (popup-bufno NAME), (buffer-no)."#,
     );
 
     b.be_doc(

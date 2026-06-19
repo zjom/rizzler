@@ -10,10 +10,10 @@ use super::super::with_editor_mut;
 
 pub(super) fn register(b: &mut Builtins) {
     b.be_doc(
-        "buf-text-set",
+        "buffer-text-set",
         2,
         |args, _| {
-            let raw = as_int(&args[0], "buf-text-set")?;
+            let raw = as_int(&args[0], "buffer-text-set")?;
             let id = buf_id_from_int(raw);
             let text = args[1].display();
             let exists = with_editor_mut(|st| st.buf_exists(id));
@@ -25,41 +25,41 @@ pub(super) fn register(b: &mut Builtins) {
             with_editor_mut(|st| st.set_buffer_contents(id, &text));
             Ok(unit())
         },
-        "(buf-text-set BUFNO TEXT)\n\nReplaces the entire contents of buffer BUFNO with TEXT. Used to drive\npopup buffers from lisp (e.g. seeding a `:messages` popup).\n\nBUFNO — bufno: target buffer, from (buf-no), (popup-bufno NAME), etc.\nTEXT  — str: the new contents.\n\nErrors when no live buffer has id BUFNO.\nSee also: (buf-text), (popup-bufno NAME).",
+        "(buffer-text-set BUFNO TEXT)\n\nReplaces the entire contents of buffer BUFNO with TEXT. Used to drive\npopup buffers from lisp (e.g. seeding a `:messages` popup).\n\nBUFNO — bufno: target buffer, from (buffer-no), (popup-bufno NAME), etc.\nTEXT  — str: the new contents.\n\nErrors when no live buffer has id BUFNO.\nSee also: (buffer-text), (popup-bufno NAME).",
     );
 
     b.be_doc(
-        "buf-text",
+        "buffer-text",
         0,
         |_, _| {
             let s = with_editor_mut(|st| st.focused_buf().text());
             Ok(Rc::new(s.into()))
         },
-        "(buf-text)\n\nReturns str: the full text of the focused buffer.\nSee also: (buf-text-set BUFNO TEXT), (selected-text), (line-at N).",
+        "(buffer-text)\n\nReturns str: the full text of the focused buffer.\nSee also: (buffer-text-set BUFNO TEXT), (selected-text), (line-at N).",
     );
 
     b.be_doc(
-        "buf-nlines",
+        "buffer-nlines",
         0,
         |_, _| {
             let n = with_editor_mut(|st| st.focused_buf().len_lines() as i64);
             Ok(Rc::new(n.into()))
         },
-        "(buf-nlines)\n\nReturns int: the number of lines in the focused buffer.\nSee also: (line-at N), (cursor-line).",
+        "(buffer-nlines)\n\nReturns int: the number of lines in the focused buffer.\nSee also: (line-at N), (cursor-line).",
     );
 
     b.be_doc(
-        "buf-no",
+        "buffer-no",
         0,
         |_, _| {
             let id = with_editor_mut(|st| st.focused_buf_id());
             Ok(Rc::new(Value::Int(buf_id_to_int(id))))
         },
-        "(buf-no)\n\nReturns bufno: the opaque id of the focused buffer, for feeding\n(w-buffer-view BUFNO) or (buf-text-set BUFNO ...).\nSee also: (buf-index), (popup-bufno NAME), (minibuffer-bufno).",
+        "(buffer-no)\n\nReturns bufno: the opaque id of the focused buffer, for feeding\n(w-buffer-view BUFNO) or (buffer-text-set BUFNO ...).\nSee also: (buffer-index), (popup-bufno NAME), (minibuffer-bufno).",
     );
 
     b.be_doc(
-        "buf-index",
+        "buffer-index",
         0,
         |_, _| {
             let v = with_editor_mut(|st| {
@@ -70,11 +70,11 @@ pub(super) fn register(b: &mut Builtins) {
             });
             Ok(Rc::new(v))
         },
-        "(buf-index)\n\nReturns int: the focused buffer's 0-based position in the file buffer\nlist (its order in the bufferline), or () if it has no slot.\nSee also: (buf-no).",
+        "(buffer-index)\n\nReturns int: the focused buffer's 0-based position in the file buffer\nlist (its order in the bufferline), or () if it has no slot.\nSee also: (buffer-no).",
     );
 
     b.be_doc(
-        "buf-path",
+        "buffer-path",
         0,
         |_, _| {
             let v: Value = with_editor_mut(|st| st.focused_buf().fs_path())
@@ -83,9 +83,9 @@ pub(super) fn register(b: &mut Builtins) {
                 .unwrap_or(Value::Unit);
             Ok(Rc::new(v))
         },
-        "(buf-path)\n\nReturns str: the filesystem path backing the focused buffer, or () for\nan unsaved scratch buffer. Aliased as (%).\nSee also: (workdir), (edit PATH).",
+        "(buffer-path)\n\nReturns str: the filesystem path backing the focused buffer, or () for\nan unsaved scratch buffer. Aliased as (%).\nSee also: (workdir), (edit PATH).",
     );
-    b.alias("%", "buf-path");
+    b.alias("%", "buffer-path");
 
     b.be_doc(
         "selected-text",
@@ -94,7 +94,7 @@ pub(super) fn register(b: &mut Builtins) {
             let s = with_editor_mut(|st| st.focused_buf().selected_text());
             Ok(Rc::new(s.into()))
         },
-        "(selected-text)\n\nReturns str: the text covered by the active visual selection, or () if\nnothing is selected.\nSee also: (buf-text), (selection-size).",
+        "(selected-text)\n\nReturns str: the text covered by the active visual selection, or () if\nnothing is selected.\nSee also: (buffer-text), (selection-size).",
     );
 
     b.be_doc(
@@ -126,7 +126,7 @@ pub(super) fn register(b: &mut Builtins) {
                 with_editor_mut(|st| st.focused_buf().lines_at(idx).next().map(|s| s.to_string()));
             Ok(Rc::new(s.into()))
         },
-        "(line-at N)\n\nReturns str: the text of line N (0-indexed) in the focused buffer, or ()\nif N is past the end.\n\nN — int: line number.\nSee also: (buf-nlines), (cursor-line).",
+        "(line-at N)\n\nReturns str: the text of line N (0-indexed) in the focused buffer, or ()\nif N is past the end.\n\nN — int: line number.\nSee also: (buffer-nlines), (cursor-line).",
     );
 
     b.be_doc(

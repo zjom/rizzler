@@ -852,7 +852,7 @@
 
 (fn _gutter (n)
   (do
-    (let w (len (to-str (buf-nlines))))
+    (let w (len (to-str (buffer-nlines))))
     (if (= n ())
         (w-span "     " "vague.gutter")
         (if (= n (cursor-line))
@@ -898,9 +898,9 @@
     (w-span (str-join [" " (_mode-glyph m) " "] "")
             (_mode-face m))))
 
-(fn _seg-buf-path ()
+(fn _seg-buffer-path ()
   (do
-    (let path (buf-path))
+    (let path (buffer-path))
     (if (= path ())
         (w-span "  rizz  " "vague.signature")
         (w-span path "vague.signature"))))
@@ -917,13 +917,13 @@
   (w-span (str-join [(to-str (cursor-line)) ":" (to-str (cursor-col))] "")
           "vague.accent"))
 
-;; (buf-index) returns a 1-based file-order index suitable for display, or
+;; (buffer-index) returns a 1-based file-order index suitable for display, or
 ;; () for the minibuffer / popup-backing buffers. We fall back to "*" so
 ;; the status line still has *something* in those cases.
 (fn _seg-bufno ()
   (do
     (let m (focused-mode))
-    (let i (buf-index))
+    (let i (buffer-index))
     (let label (if (= i ()) "*" (to-str i)))
     (if (= m "command")
         (w-span label "vague.reverse")
@@ -933,7 +933,7 @@
   (w-hstack
     [(w-size 'min 1
       (w-line [(_seg-mode)
-               (_seg-buf-path)
+               (_seg-buffer-path)
                (_seg-selection-hint)]))
      (w-size 'fill 1
       (w-line [(_seg-cursor)
@@ -1405,7 +1405,7 @@
 
 (fn popup-files ()
   (_popup-files-show
-    (if (buf-path) (buf-path) (workdir))))
+    (if (buffer-path) (buffer-path) (workdir))))
 
 ;; Bind the explorer to `<c-e>`. Motion and dismiss keys are inherited
 ;; from the `'popup` layer beneath `'popup.files`, so only the explorer-

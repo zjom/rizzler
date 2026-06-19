@@ -42,7 +42,7 @@ pub(super) fn register(b: &mut Builtins) {
             let d: Value = with_editor_mut(|st| st.workdir()).as_ref().into();
             Ok(Rc::new(d))
         },
-        "(workdir)\n\nReturns str: the editor's current working directory, the root that\nrelative paths and (fs-readdir) resolve against.\nSee also: (config-dir), (buf-path).",
+        "(workdir)\n\nReturns str: the editor's current working directory, the root that\nrelative paths and (fs-readdir) resolve against.\nSee also: (config-dir), (buffer-path).",
     );
 
     b.be_doc(

@@ -306,8 +306,8 @@ mod tests {
         assert_eq!(v.display(), "quit");
     }
 
-    /// Multi-match path: `:bufn<tab>` should advance to `buf-n` (the
-    /// longest prefix shared by `buf-next` and the rest of the `buf-n*`
+    /// Multi-match path: `:buffer-n<tab>` should advance to `buffer-n` (the
+    /// longest prefix shared by `buffer-next` and the rest of the `buffer-n*`
     /// family) without picking any one — leaving the user room to narrow.
     #[test]
     fn tab_in_command_mode_advances_to_longest_common_prefix() {
@@ -318,6 +318,9 @@ mod tests {
             (KeyCode::Char('b'), KeyModifiers::NONE),
             (KeyCode::Char('u'), KeyModifiers::NONE),
             (KeyCode::Char('f'), KeyModifiers::NONE),
+            (KeyCode::Char('f'), KeyModifiers::NONE),
+            (KeyCode::Char('e'), KeyModifiers::NONE),
+            (KeyCode::Char('r'), KeyModifiers::NONE),
             (KeyCode::Char('-'), KeyModifiers::NONE),
             (KeyCode::Char('n'), KeyModifiers::NONE),
             (KeyCode::Tab, KeyModifiers::NONE),
@@ -326,7 +329,7 @@ mod tests {
                 .unwrap();
         }
         let v = s.eval_lisp("(command-prefix)").unwrap();
-        assert_eq!(v.display(), "buf-n");
+        assert_eq!(v.display(), "buffer-n");
     }
 
     /// End-to-end: `:q<tab>` should complete to `quit` once init.rz has

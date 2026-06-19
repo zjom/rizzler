@@ -17,7 +17,7 @@ use rizz_ui::{
 };
 use tracing::{error, instrument, warn};
 
-use crate::lisp::{EditorGuard, RenderPhaseGuard};
+use crate::lisp::{EditorGuard, RenderPhaseGuard, ToplevelEnvGuard};
 
 use super::State;
 
@@ -142,6 +142,11 @@ impl State {
             .expect("recursive render is not supported");
         let _editor_guard = EditorGuard::new(self);
         let _phase_guard = RenderPhaseGuard::enter();
+        // Frame callbacks invoke introspective builtins (e.g. the completion
+        // menu's `command-completions`) from inside user closures, whose
+        // captured env predates later definitions. Expose the live top-level
+        // env here too, exactly as `with_lisp` does for the keymap path.
+        let _env_guard = ToplevelEnvGuard::new(lisp.env().clone());
 
         let result = precompute::compute(precompute::PrecomputeInput {
             bufs: self.bufs.raw(),
@@ -157,6 +162,7 @@ impl State {
             cache: &mut self.render.precompute_cache,
         });
 
+        drop(_env_guard);
         drop(_phase_guard);
         drop(_editor_guard);
         self.scripting.lisp = Some(lisp);

@@ -12,7 +12,7 @@ use rizz::RizzError;
 use rizz::runtime::Value;
 use tracing::{debug, error, info, instrument, trace, warn};
 
-use crate::lisp::{EditorGuard, LispRuntime};
+use crate::lisp::{EditorGuard, LispRuntime, ToplevelEnvGuard};
 
 use super::State;
 
@@ -49,6 +49,10 @@ impl State {
             .expect("recursive eval_lisp is not supported");
         let result = {
             let _guard = EditorGuard::new(self);
+            // Expose the runtime's live top-level env to introspective builtins
+            // (command completion / submit) so they aren't limited to the
+            // lexical snapshot a calling closure captured at definition time.
+            let _env_guard = ToplevelEnvGuard::new(lisp.env().clone());
             f(&mut lisp)
         };
         self.scripting.lisp = Some(lisp);

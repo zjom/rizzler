@@ -17,7 +17,7 @@
 //!   textprops, misc, fs, grammar). Each contributes its slice of native
 //!   functions to the shared `Builtins`.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -41,6 +41,14 @@ thread_local! {
     /// Lisp builtins that would mutate buffer state error out, so a render
     /// callback can't corrupt the in-flight frame.
     static RENDER_PHASE: Cell<bool> = const { Cell::new(false) };
+    /// Snapshot of the runtime's *live* top-level env, installed for the
+    /// duration of an `eval_lisp*` call (see [`ToplevelEnvGuard`]). The env a
+    /// native fn receives is its lexical call-site env, which — when the fn is
+    /// invoked from a user closure — is the snapshot that closure captured at
+    /// definition time, missing anything bound later. Introspective builtins
+    /// (`command-completions`, `command-submit`) consult this instead so they
+    /// see every user binding regardless of where it was defined.
+    static TOPLEVEL_ENV: RefCell<Option<Env>> = const { RefCell::new(None) };
 }
 
 /// RAII guard that flips `RENDER_PHASE` to true for the duration of the
@@ -81,6 +89,34 @@ impl Drop for EditorGuard {
     fn drop(&mut self) {
         EDITOR.with(|c| c.set(self.prev));
     }
+}
+
+/// RAII guard: stashes a clone of the runtime's top-level [`Env`] in a
+/// thread-local for the lifetime of the guard, restoring the previous value on
+/// drop. Installed by `State::with_lisp` so that builtins which must see the
+/// *whole* live binding set — not the lexical snapshot a calling closure
+/// captured at definition time — can read it via [`current_toplevel_env`].
+pub struct ToplevelEnvGuard {
+    prev: Option<Env>,
+}
+
+impl ToplevelEnvGuard {
+    pub fn new(env: Env) -> Self {
+        let prev = TOPLEVEL_ENV.with(|c| c.borrow_mut().replace(env));
+        Self { prev }
+    }
+}
+
+impl Drop for ToplevelEnvGuard {
+    fn drop(&mut self) {
+        TOPLEVEL_ENV.with(|c| *c.borrow_mut() = self.prev.take());
+    }
+}
+
+/// The live top-level env captured for the current eval, or `None` outside an
+/// eval. `Env` clones are O(1) (`im::HashMap`), so this is cheap.
+pub(crate) fn current_toplevel_env() -> Option<Env> {
+    TOPLEVEL_ENV.with(|c| c.borrow().clone())
 }
 
 /// Run `f` with mutable access to the live `State`. Panics if called outside
@@ -288,6 +324,84 @@ mod tests {
         );
         assert!(names.iter().all(|n| n.starts_with("ed")));
         assert!(names.iter().all(|n| !n.starts_with('_')));
+    }
+
+    /// Type `text` into a fresh command-mode minibuffer (`:` then each char).
+    #[cfg(test)]
+    fn type_command(s: &mut State, text: &str) {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        s.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE))
+            .unwrap();
+        for ch in text.chars() {
+            s.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
+                .unwrap();
+        }
+    }
+
+    /// Regression: tab-completion must offer user fns defined *after* the
+    /// closure that calls `command-completions`. rizz closures capture an env
+    /// snapshot at definition time, so `_command-tab` (defined partway through
+    /// init.rz) would otherwise only see bindings that predate it. The builtin
+    /// consults the live top-level env instead.
+    #[test]
+    fn command_completions_sees_bindings_defined_after_caller() {
+        let mut s = test_state();
+        // Caller closure defined BEFORE the command we expect to complete.
+        s.eval_lisp("(fn early-tab () (command-completions))").unwrap();
+        s.eval_lisp("(fn zzlate-cmd () ())").unwrap();
+        type_command(&mut s, "zz");
+        let via = s.eval_lisp("(early-tab)").unwrap();
+        let names: Vec<String> = via.as_array().unwrap().iter().map(|x| x.display()).collect();
+        assert!(
+            names.contains(&"zzlate-cmd".to_string()),
+            "completion through an early closure should still see a later binding: {names:?}"
+        );
+    }
+
+    /// Regression: submitting a command must run user fns defined *after* the
+    /// closure that calls `command-submit` (`_menu-command-submit` in init.rz).
+    /// `zzmark` flips a ref; the submit only takes effect if it resolved
+    /// against the live top-level env rather than the caller's stale snapshot.
+    #[test]
+    fn command_submit_runs_bindings_defined_after_caller() {
+        let mut s = test_state();
+        s.eval_lisp("(let marker (ref 0))").unwrap();
+        s.eval_lisp("(fn early-submit () (command-submit))").unwrap();
+        s.eval_lisp("(fn zzmark () (set! marker 99))").unwrap();
+        type_command(&mut s, "zzmark");
+        s.eval_lisp("(early-submit)").unwrap();
+        let v = s.eval_lisp("(deref marker)").unwrap();
+        assert_eq!(*v, Value::Int(99), "submitted command had no effect");
+    }
+
+    /// Regression: the completion *menu* is built during `precompute_frame`
+    /// (the render path), which checks the runtime out separately from
+    /// `with_lisp`. The live top-level env must be exposed there too, or
+    /// `command-completions` invoked from the menu's closures falls back to a
+    /// stale snapshot and user fns never appear in the dropdown — even though
+    /// `<tab>` and submit (the keymap path) work.
+    #[test]
+    fn completion_menu_during_render_sees_late_bindings() {
+        let mut s = test_state();
+        // Sink + a probe closure mirroring init.rz's `_menu-cands`: calls
+        // command-completions and stashes the result. Defined BEFORE the
+        // command we expect to surface.
+        s.eval_lisp("(let seen (ref []))").unwrap();
+        s.eval_lisp("(fn _probe-cands () (set! seen (command-completions)))")
+            .unwrap();
+        s.eval_lisp("(fn _probe-frame () (do (_probe-cands) (w-empty)))")
+            .unwrap();
+        s.eval_lisp("(set-frame _probe-frame)").unwrap();
+        s.eval_lisp("(fn zzlate-cmd () ())").unwrap();
+        type_command(&mut s, "zz");
+        let (_, err) = s.precompute_frame();
+        assert!(err.is_none(), "frame error: {err:?}");
+        let v = s.eval_lisp("(deref seen)").unwrap();
+        let names: Vec<String> = v.as_array().unwrap().iter().map(|x| x.display()).collect();
+        assert!(
+            names.contains(&"zzlate-cmd".to_string()),
+            "render-phase completion should see a later binding: {names:?}"
+        );
     }
 
     #[test]

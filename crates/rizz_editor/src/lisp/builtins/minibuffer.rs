@@ -4,11 +4,11 @@
 use std::rc::Rc;
 
 use im::Vector;
-use rizz::runtime::Value;
+use rizz::runtime::{Env, Value};
 use rizz_actions::Action;
 
 use super::super::helpers::{Builtins, apply, as_str, notify_via_env, unit, wrap_shell_style};
-use super::super::with_editor_mut;
+use super::super::{current_toplevel_env, with_editor_mut};
 
 pub(super) fn register(b: &mut Builtins) {
     b.bi_doc(
@@ -18,7 +18,13 @@ pub(super) fn register(b: &mut Builtins) {
             let cmd = with_editor_mut(|st| st.take_minibuffer_command());
             with_editor_mut(|st| st.record_cmd(&cmd));
             let src = wrap_shell_style(&cmd);
-            match rizz::parse_and_run_with_env(src.as_bytes(), env) {
+            // Run against the live top-level env, not the lexical env captured
+            // by the closure that called us (`_menu-command-submit`): that
+            // snapshot predates user fns defined later in init.rz, so a typed
+            // `popup-help` would otherwise resolve to nothing.
+            let live = current_toplevel_env();
+            let run_env: &Env = live.as_ref().unwrap_or(env);
+            match rizz::parse_and_run_with_env(src.as_bytes(), run_env) {
                 Ok((v, new_env)) => {
                     if !v.is_unit() {
                         notify_via_env(&v.display(), &new_env);
@@ -148,7 +154,13 @@ pub(super) fn register(b: &mut Builtins) {
         0,
         |_, env| {
             let prefix = with_editor_mut(|st| st.minibuffer_completion_prefix());
-            let mut names: Vec<Rc<str>> = env.into_iter().filter(|( name, _ )| {
+            // Complete against the live top-level env so user fns defined
+            // anywhere in init.rz (or interactively) are visible — not just the
+            // lexical snapshot the calling closure (`_command-tab` / `_menu-cands`)
+            // captured at definition time.
+            let live = current_toplevel_env();
+            let src_env: &Env = live.as_ref().unwrap_or(env);
+            let mut names: Vec<Rc<str>> = src_env.into_iter().filter(|( name, _ )| {
                 name.starts_with(prefix.as_str()) && !name.starts_with('_')
             }).map(|(name,_)| Rc::clone(name)).collect();
             names.sort();
